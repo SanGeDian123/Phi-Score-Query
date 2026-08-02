@@ -1,0 +1,96 @@
+{
+	admin off
+	log {
+		output file {$APP_LOG_DIR}/caddy-runtime.log {
+			roll_size 20MiB
+			roll_keep 5
+			roll_keep_for 168h
+		}
+		format json
+	}
+}
+
+api.plc-liangpi-cup.xyz {
+	encode zstd gzip
+
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		Cache-Control "no-store"
+		Link "<https://github.com/SanGeDian123/Phi-Score-Query/tree/pre-0.9.7.1/backend-source>; rel=source"
+		X-Source-Code "https://github.com/SanGeDian123/Phi-Score-Query/tree/pre-0.9.7.1/backend-source"
+	}
+
+	log {
+		output file {$APP_LOG_DIR}/access.log {
+			roll_size 20MiB
+			roll_keep 7
+			roll_keep_for 168h
+		}
+		format json
+	}
+
+	@source path /source
+	handle @source {
+		redir https://github.com/SanGeDian123/Phi-Score-Query/tree/pre-0.9.7.1/backend-source 302
+	}
+
+	@sessionExchange path /api/v2/auth/session/exchange /api/v2/auth/session/refresh
+	handle @sessionExchange {
+		request_body {
+			max_size 128KB
+		}
+		reverse_proxy 127.0.0.1:3939 {
+			header_up X-Exchange-Secret {$APP_SESSION_EXCHANGE_SHARED_SECRET}
+			header_up -X-OpenApi-Token
+		}
+	}
+
+	@illustrations path /_ill/*
+	handle @illustrations {
+		header Cache-Control "public, max-age=604800, immutable"
+		reverse_proxy 127.0.0.1:3939 {
+			header_up -X-Exchange-Secret
+			header_up -X-OpenApi-Token
+		}
+	}
+
+	handle_path /app-update/* {
+		root * {$APP_UPDATE_DIR}
+		file_server
+	}
+
+	handle_path /avatar/* {
+		header Cache-Control "public, max-age=604800, immutable"
+		root * {$APP_AVATAR_DIR}
+		file_server
+	}
+
+	@allowed path \
+ /health \
+ /api/v2/auth/qrcode \
+ /api/v2/auth/qrcode/*/status \
+ /api/v2/auth/session/logout \
+ /api/v2/songs/search \
+ /api/v2/songs/catalog \
+ /api/v2/leaderboard/rks/top \
+ /api/v2/leaderboard/rks/by-rank \
+ /api/v2/leaderboard/rks/me \
+ /api/v2/save \
+ /api/v2/image/bn
+	handle @allowed {
+		request_body {
+			max_size 1MB
+		}
+		reverse_proxy 127.0.0.1:3939 {
+			header_up -X-Exchange-Secret
+			header_up -X-OpenApi-Token
+		}
+	}
+
+	handle {
+		respond "Not Found" 404
+	}
+}

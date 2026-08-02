@@ -1,0 +1,291 @@
+# Phi-Backend 配置文件
+
+[server]
+# 服务器监听地址
+host = "0.0.0.0"
+# 服务器监听端口
+port = 3939
+
+[api]
+# API 路由前缀
+prefix = "/api/v2"
+
+[cors]
+# 是否启用 CORS（默认关闭）
+enabled = false
+# 允许的 Origin 列表，支持 "*" 表示任意
+# 注意：allow_credentials=true 时必须显式列出 Origin，不能使用 "*"
+# 启用 CORS 时请至少配置 allowed_origins
+allowed_origins = []
+# 允许的方法列表，支持 "*" 表示任意
+allowed_methods = []
+# 允许的请求头列表，支持 "*" 表示任意
+allowed_headers = []
+# 暴露的响应头列表，支持 "*" 表示任意
+expose_headers = []
+# 是否允许携带凭证（Cookie/Authorization）
+allow_credentials = false
+# 预检缓存时间（秒，可选）
+max_age_secs = 600
+
+[resources]
+# 资源文件夹路径（相对于项目根目录）
+base_path = "./resources"
+# Phigros 曲绘仓库 URL
+illustration_repo = "https://github.com/Catrong/phi-plugin-ill"
+# 曲绘文件夹名
+illustration_folder = "ill"
+# 曲绘外部资源基地址（HTTP）：当无法/不希望从 Git 克隆曲绘时，可配置此项让服务按需回源（同源代理由 /_ill 提供）
+# illustration_external_base_url = "https://somnia.xtower.site"
+# 曲绘外链目录模式：legacy=illustration/illustrationLowRes；lilith=ill/illLow（默认 legacy）
+# external_illustration_dir_mode = "legacy"
+# 曲绘外链后缀：png/webp/avif/jpg/jpeg（默认 png）
+# external_illustration_ext = "png"
+# 启动时是否自动同步曲绘仓库
+illustration_repo_auto_sync = true
+# info 数据目录（包含 difficulty.csv）
+info_path = "./info"
+# info 文件远程基地址（若本地文件落后，启动时自动从远端拉取）
+# info_base_url = "https://r-0semi.xtower.site/info"
+
+# CDN 签名URL防盗链配置（腾讯云CDN Token鉴权）
+# [resources.illustration_signing]
+# 是否启用签名URL（默认关闭）
+# enabled = true
+# 鉴权模式：TypeA / TypeB / TypeC / TypeD（默认 TypeD）
+# mode = "TypeD"
+# 主鉴权密钥（建议通过环境变量 APP_RESOURCES_ILLUSTRATION_SIGNING_KEY 覆盖）
+# key = ""
+# 备鉴权密钥（密钥轮换时使用，校验时主密钥优先，备密钥兜底）
+# backup_key = ""
+# 有效期（秒），需与CDN侧配置保持一致（默认 300 = 5分钟）
+# ttl_secs = 300
+# 鉴权加密串参数名称，TypeA/TypeD 使用（默认 "token"）
+# token_param = "token"
+# 时间戳参数名称，TypeD 使用（默认 "t"）
+# timestamp_param = "t"
+
+[logging]
+# 日志级别: trace, debug, info, warn, error
+level = "info"
+# 日志输出格式: full, compact, pretty, json
+format = "full"
+
+[branding]
+# 右下角自定义文字（留空则不显示）
+footer_text = "Powered by lilith.xtower.site"
+
+[stats]
+# 是否启用统计
+enabled = true
+# 存储类型
+storage = "sqlite"
+# SQLite 路径
+sqlite_path = "./resources/usage_stats.db"
+# 启用 WAL
+sqlite_wal = true
+# 批量大小
+batch_size = 100
+# 刷新间隔（毫秒）
+flush_interval_ms = 1000
+# 热数据保留天数
+retention_hot_days = 180
+# 每日聚合/归档时间（本地时区）
+daily_aggregate_time = "04:00"
+[stats.archive]
+parquet = true
+dir = "./resources/stats/v1/events"
+compress = "zstd"
+
+[session]
+# 是否启用会话令牌接口
+enabled = true
+# JWT 签发方
+jwt_issuer = "phi-backend"
+# JWT 受众
+jwt_audience = "phi-clients"
+# JWT HS256 密钥（生产环境请通过 APP_SESSION_JWT_SECRET 覆盖）
+jwt_secret = ""
+# access token 有效期（秒）
+access_ttl_secs = 900
+# logout all 时间门缓冲（秒）
+revoke_all_grace_secs = 10
+# 黑名单与时间门记录保留时长（秒，默认 10 天）
+revoke_ttl_secs = 864000
+# Next.js 服务端调用 exchange 的共享密钥（建议通过 APP_SESSION_EXCHANGE_SHARED_SECRET 覆盖）
+exchange_shared_secret = ""
+
+[watermark]
+# 显式水印：在卡片上展示 U 标记
+explicit_badge = true
+# 隐式水印：PNG 首像素写入可追踪标记
+implicit_pixel = true
+# 静态解除口令（留空表示关闭）
+unlock_static = ""
+# 是否启用动态口令（打印当前窗口口令在日志中）
+unlock_dynamic = true
+# 动态口令盐值
+dynamic_salt = "phi"
+# 动态口令有效期（秒）
+dynamic_ttl_secs = 600
+# 动态口令可选密钥（与盐值共同参与hash）
+dynamic_secret = ""
+# 动态口令长度（从SHA-256十六进制哈希前缀截取）
+dynamic_length = 32
+
+[shutdown]
+# 优雅退出超时时间（秒）
+timeout_secs = 10
+# 是否启用强制退出
+force_quit = true
+# 强制退出前的等待时间（秒）
+force_delay_secs = 10
+
+[shutdown.watchdog]
+# 是否启用systemd看门狗（仅在Linux下生效）
+enabled = true
+# 看门狗超时时间（秒）
+timeout_secs = 60
+# 心跳间隔时间（秒）
+interval_secs = 10
+
+# 图片渲染与缓存（性能调优）
+[image]
+# 栅格化速度优先（可能略降画质）
+optimize_speed = false
+# 启用 BN/单曲图片缓存
+cache_enabled = true
+# 缓存容量（字节）
+cache_max_bytes = 104857600
+# 缓存 TTL/TTI（秒）
+cache_ttl_secs = 60
+cache_tti_secs = 30
+# 并发渲染许可数（0 = 自动 = CPU 核心数）
+max_parallel = 0
+# 用户自报成绩 BN：scores 条数硬上限（0=不限制，不建议）
+max_user_scores = 500
+
+# 图片内容签名（嵌入 SVG 的 HMAC 签名，供前端与第三方验证真伪）
+[image.signing]
+# 是否启用图片签名（默认关闭）
+enabled = false
+# HMAC-SHA256 签名密钥（建议通过 APP_IMAGE_SIGNING_KEY 环境变量覆盖）
+key = ""
+# 签名有效窗口期（秒），0=不限制（默认 0）
+ttl_secs = 0
+# 是否公开验证端点 GET/POST /api/v2/verify（默认 false）
+public_verify = false
+
+# /save 资源上限
+[save]
+# 下载存档最大字节数（默认 64MB）
+max_download_bytes = 67108864
+# 解压输出最大字节数（默认 64MB）
+max_decompress_bytes = 67108864
+# 单个 zip entry 最大字节数（默认 32MB）
+max_zip_entry_bytes = 33554432
+# zip entry 最大数量（默认 16）
+max_zip_entries = 16
+# 是否启用 /save 解析结果缓存
+cache_enabled = true
+# /save 缓存最大条目数
+cache_max_entries = 512
+# /save 缓存 TTL/TTI（秒）
+cache_ttl_secs = 120
+cache_tti_secs = 60
+# PBKDF2 rounds 约束范围
+pbkdf2_rounds_min = 1000
+pbkdf2_rounds_max = 100000
+
+# TapTap API 配置
+[taptap.cn]
+# 大陆版 - 设备码请求端点 (保持不变)
+device_code_endpoint = "https://www.taptap.com/oauth2/v1/device/code"
+# 大陆版 - Token交换端点 (保持不变)
+token_endpoint = "https://www.taptap.cn/oauth2/v1/token"
+# 大陆版 - 用户基本信息端点 (保持不变)
+user_info_endpoint = "https://open.tapapis.cn/account/basic-info/v1"
+# 大陆版 - LeanCloud API Base URL (保持不变)
+leancloud_base_url = "https://rak3ffdi.cloud.tds1.tapapis.cn/1.1"
+# 大陆版 - LeanCloud App ID (保持不变)
+leancloud_app_id = "rAK3FfdieFob2Nn8Am"
+# 大陆版 - LeanCloud App Key (保持不变)
+leancloud_app_key = "Qr9AEqtuoSVS3zeD6iVbM4ZC0AtkJcQ89tywVyi0"
+
+[taptap.global]
+# 国际版 - 设备码请求端点 (.io 是国际版标准域名)
+device_code_endpoint = "https://www.taptap.io/oauth2/v1/device/code"
+# 国际版 - Token交换端点
+token_endpoint = "https://www.taptap.io/oauth2/v1/token"
+# 国际版 - 用户基本信息端点
+user_info_endpoint = "https://open.tapapis.io/account/basic-info/v1"
+# 国际版 - LeanCloud API Base URL 
+leancloud_base_url = "https://kviehlel.cloud.ap-sg.tapapis.com/1.1"
+# 国际版 - LeanCloud App ID 
+leancloud_app_id = "kviehleldgxsagpozb"
+# 国际版 - LeanCloud App Key 
+leancloud_app_key = "tG9CTm0LDD736k9HMM9lBZrbeBGRmUkjSfNLDNib"
+
+[taptap]
+# 默认版本：cn 或 global
+default_version = "cn"
+
+[open_platform]
+# 是否启用开放平台能力
+enabled = false
+# 开放平台 SQLite 路径
+sqlite_path = "./resources/open_platform.db"
+# 开放平台 SQLite 启用 WAL
+sqlite_wal = true
+
+[open_platform.github]
+# GitHub OAuth 应用凭证（建议通过环境变量覆盖）
+client_id = ""
+client_secret = ""
+# 回调地址（需与 GitHub OAuth App 配置一致）
+redirect_uri = "http://localhost:3939/api/v2/auth/github/callback"
+# scope 建议最小化
+scope = "read:user user:email"
+# GitHub OAuth 授权/换 token 地址
+authorize_url = "https://github.com/login/oauth/authorize"
+token_url = "https://github.com/login/oauth/access_token"
+# GitHub API 基地址
+api_base_url = "https://api.github.com"
+# 登录成功后跳转控制台地址
+post_login_redirect = "/open-platform"
+# OAuth state 有效期（秒）
+state_ttl_secs = 600
+# OAuth HTTP 超时与重试
+http_timeout_secs = 10
+http_retry_count = 2
+
+[open_platform.session]
+# 开发者会话 JWT 配置（建议通过 APP_OPEN_PLATFORM_SESSION_JWT_SECRET 设置密钥）
+jwt_issuer = "phi-open-platform"
+jwt_audience = "phi-open-platform-console"
+jwt_secret = ""
+# 会话有效期（秒）
+ttl_secs = 86400
+# 会话 Cookie 名称
+cookie_name = "op_session"
+# 生产环境建议开启 true（需 HTTPS）
+cookie_secure = false
+
+[open_platform.api_key]
+# API Key 前缀（区分 live / test）
+live_prefix = "pgr_live_"
+test_prefix = "pgr_test_"
+# 生产环境建议留空并通过 APP_OPEN_PLATFORM_API_KEY_HASH_SECRET 注入
+hash_secret = ""
+# 生成 token 后缀的随机字节数
+random_bytes = 24
+# 轮换旧 key 的过渡期（秒）
+rotate_grace_secs = 86400
+# 每分钟限流阈值（按 key_id + client_ip）
+rate_limit_per_minute = 120
+# 新建 key 的默认 scopes
+# - public.read: /open/songs/search, /open/leaderboard/rks/top, /open/leaderboard/rks/by-rank
+# - profile.read: /open/save, /open/rks/history
+# 如果希望新建 key 默认可调用个人数据接口，可加入 profile.read
+# 示例: default_scopes = ["public.read", "profile.read"]
+default_scopes = ["public.read"]

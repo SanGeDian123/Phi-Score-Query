@@ -1,0 +1,138 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="{{ page.width }}" height="{{ page.height }}"
+     viewBox="0 0 {{ page.width }} {{ page.height }}">
+  <defs>
+    <clipPath id="avatar-clip">
+      <rect x="54" y="55" width="250" height="140" rx="18" ry="18" />
+    </clipPath>
+    <style>
+      .text { font-family: '{{ fonts.main }}', sans-serif; fill: {{ colors.text }}; }
+      .muted { fill: {{ colors.text_secondary }}; }
+      .section-title { font-size: 20px; font-weight: 700; letter-spacing: 1px; }
+      .song { font-size: 17px; font-weight: 700; }
+      .score { font-size: 25px; font-weight: 800; }
+      .detail { font-size: 15px; }
+      .rank { font-size: 15px; font-weight: 700; text-anchor: end; }
+      .footer { font-family: '{{ fonts.main }}', sans-serif; fill: {{ colors.text_secondary }}; font-size: 15px; }
+    </style>
+  </defs>
+
+  <rect width="100%" height="100%" fill="{{ colors.bg_grad_0 }}" />
+
+  <rect x="32" y="30" width="{{ page.width - 64 }}" height="192" rx="24" ry="24"
+        fill="{{ colors.card_bg }}" stroke="{{ colors.card_stroke }}" stroke-width="1" />
+
+  <rect x="54" y="55" width="250" height="140" rx="18" ry="18"
+        fill="{{ colors.bg_grad_1 }}" />
+  {% if header.avatar_href_xml %}
+    <image href="{{ header.avatar_href_xml }}" x="54" y="55" width="250" height="140"
+           preserveAspectRatio="xMidYMid slice" clip-path="url(#avatar-clip)" />
+  {% else %}
+    <text x="179" y="132" class="text muted" font-size="18" text-anchor="middle">PLAYER</text>
+  {% endif %}
+
+  <text x="336" y="83" class="text muted" font-size="18" font-weight="700">{{ header.title_xml }}</text>
+  <text x="336" y="130" class="text" font-size="38" font-weight="800">{{ header.player_name_xml }}</text>
+  <text x="336" y="172" class="text" font-size="24" font-weight="700">{{ header.real_rks_text_xml }}</text>
+
+  <line x1="760" y1="58" x2="760" y2="194" stroke="{{ colors.card_stroke }}" stroke-width="1" />
+  <text x="802" y="87" class="text" font-size="22" font-weight="700">{{ header.data_text_xml }}</text>
+  <text x="802" y="132" class="text" font-size="22" font-weight="700">{{ header.challenge_text_xml }}</text>
+  <text x="802" y="176" class="text muted" font-size="18">{{ header.updated_text_xml }}</text>
+
+  {% if ap.cards | length > 0 %}
+  <g id="p3-section" transform="translate(0, {{ ap.section_y }})">
+    <text x="{{ layout.card_gap }}" y="30" class="text section-title">P3</text>
+    <line x1="72" y1="24" x2="{{ page.width - layout.card_gap }}" y2="24"
+          stroke="{{ colors.card_stroke }}" stroke-width="1" />
+    {% for c in ap.cards %}
+      <g transform="translate({{ c.x }}, {{ c.y }})">
+        <rect width="{{ c.w }}" height="{{ c.h }}" rx="18" ry="18"
+              fill="{{ colors.card_bg }}" stroke="{{ colors.card_stroke }}" stroke-width="1.5" />
+        <defs>
+          <clipPath id="{{ c.clip_id }}">
+            <rect x="{{ c.cover.x }}" y="{{ c.cover.y }}" width="{{ c.cover.w }}" height="{{ c.cover.h }}"
+                  rx="12" ry="12" />
+          </clipPath>
+        </defs>
+        {% if c.cover.href_xml %}
+          <image href="{{ c.cover.href_xml }}" x="{{ c.cover.x }}" y="{{ c.cover.y }}"
+                 width="{{ c.cover.w }}" height="{{ c.cover.h }}"
+                 preserveAspectRatio="xMidYMid slice" clip-path="url(#{{ c.clip_id }})" />
+        {% endif %}
+        <rect x="{{ c.cover.x + 7 }}" y="{{ c.cover.y + 7 }}" width="34" height="20" rx="7"
+              fill="{{ colors.card_bg }}" fill-opacity="0.9" />
+        <text x="{{ c.cover.x + 24 }}" y="{{ c.cover.y + 21 }}" class="text muted"
+              font-size="12" font-weight="800" text-anchor="middle">P{{ loop.index }}</text>
+        {% if c.badge.diff.text == "EZ" %}
+          <rect x="{{ c.badge.diff.x }}" y="{{ c.badge.diff.y }}" width="{{ c.badge.diff.w }}" height="{{ c.badge.diff.h }}" rx="5" fill="#9CC9A4" />
+        {% elif c.badge.diff.text == "HD" %}
+          <rect x="{{ c.badge.diff.x }}" y="{{ c.badge.diff.y }}" width="{{ c.badge.diff.w }}" height="{{ c.badge.diff.h }}" rx="5" fill="#9DCBE8" />
+        {% elif c.badge.diff.text == "IN" %}
+          <rect x="{{ c.badge.diff.x }}" y="{{ c.badge.diff.y }}" width="{{ c.badge.diff.w }}" height="{{ c.badge.diff.h }}" rx="5" fill="#D98B8B" />
+        {% else %}
+          <rect x="{{ c.badge.diff.x }}" y="{{ c.badge.diff.y }}" width="{{ c.badge.diff.w }}" height="{{ c.badge.diff.h }}" rx="5" fill="#A7A9AD" />
+        {% endif %}
+        <text x="{{ c.badge.diff.tx }}" y="{{ c.badge.diff.ty }}" font-family="'{{ fonts.main }}', sans-serif"
+              font-size="12" font-weight="800" text-anchor="middle" fill="#25302A">{{ c.badge.diff.text }}</text>
+        {% for line in c.text.song_name_lines_xml %}
+          <text x="{{ c.text.song_x }}" y="{{ c.text.song_y + loop.index0 * 22 }}" class="text song">{{ line }}</text>
+        {% endfor %}
+        <text x="{{ c.text.score_x }}" y="{{ c.text.score_y }}" class="text score">{{ c.text.score_text }}</text>
+        <text x="{{ c.text.acc_x }}" y="{{ c.text.acc_y }}" class="text muted detail">{{ c.text.acc_text_xml }}</text>
+        <text x="{{ c.text.level_x }}" y="{{ c.text.level_y }}" class="text muted detail">{{ c.text.level_text_xml }}</text>
+      </g>
+    {% endfor %}
+  </g>
+  {% endif %}
+
+  <g id="b27-section">
+    <text x="{{ layout.card_gap }}" y="{{ main_section_y + 30 }}" class="text section-title">B27</text>
+    <line x1="82" y1="{{ main_section_y + 24 }}" x2="{{ page.width - layout.card_gap }}" y2="{{ main_section_y + 24 }}"
+          stroke="{{ colors.card_stroke }}" stroke-width="1" />
+    {% for c in cards %}
+      <g transform="translate({{ c.x }}, {{ c.y }})">
+        <rect width="{{ c.w }}" height="{{ c.h }}" rx="18" ry="18"
+              fill="{{ colors.card_bg }}" stroke="{{ colors.card_stroke }}" stroke-width="1" />
+        <defs>
+          <clipPath id="{{ c.clip_id }}">
+            <rect x="{{ c.cover.x }}" y="{{ c.cover.y }}" width="{{ c.cover.w }}" height="{{ c.cover.h }}"
+                  rx="12" ry="12" />
+          </clipPath>
+        </defs>
+        {% if c.cover.href_xml %}
+          <image href="{{ c.cover.href_xml }}" x="{{ c.cover.x }}" y="{{ c.cover.y }}"
+                 width="{{ c.cover.w }}" height="{{ c.cover.h }}"
+                 preserveAspectRatio="xMidYMid slice" clip-path="url(#{{ c.clip_id }})" />
+        {% endif %}
+        <rect x="{{ c.cover.x + 7 }}" y="{{ c.cover.y + 7 }}" width="34" height="20" rx="7"
+              fill="{{ colors.card_bg }}" fill-opacity="0.9" />
+        <text x="{{ c.cover.x + 24 }}" y="{{ c.cover.y + 21 }}" class="text muted"
+              font-size="12" font-weight="800" text-anchor="middle">B{{ loop.index }}</text>
+        {% if c.badge.diff.text == "EZ" %}
+          <rect x="{{ c.badge.diff.x }}" y="{{ c.badge.diff.y }}" width="{{ c.badge.diff.w }}" height="{{ c.badge.diff.h }}" rx="5" fill="#9CC9A4" />
+        {% elif c.badge.diff.text == "HD" %}
+          <rect x="{{ c.badge.diff.x }}" y="{{ c.badge.diff.y }}" width="{{ c.badge.diff.w }}" height="{{ c.badge.diff.h }}" rx="5" fill="#9DCBE8" />
+        {% elif c.badge.diff.text == "IN" %}
+          <rect x="{{ c.badge.diff.x }}" y="{{ c.badge.diff.y }}" width="{{ c.badge.diff.w }}" height="{{ c.badge.diff.h }}" rx="5" fill="#D98B8B" />
+        {% else %}
+          <rect x="{{ c.badge.diff.x }}" y="{{ c.badge.diff.y }}" width="{{ c.badge.diff.w }}" height="{{ c.badge.diff.h }}" rx="5" fill="#A7A9AD" />
+        {% endif %}
+        <text x="{{ c.badge.diff.tx }}" y="{{ c.badge.diff.ty }}" font-family="'{{ fonts.main }}', sans-serif"
+              font-size="12" font-weight="800" text-anchor="middle" fill="#25302A">{{ c.badge.diff.text }}</text>
+        {% for line in c.text.song_name_lines_xml %}
+          <text x="{{ c.text.song_x }}" y="{{ c.text.song_y + loop.index0 * 22 }}" class="text song">{{ line }}</text>
+        {% endfor %}
+        <text x="{{ c.text.score_x }}" y="{{ c.text.score_y }}" class="text score">{{ c.text.score_text }}</text>
+        <text x="{{ c.text.acc_x }}" y="{{ c.text.acc_y }}" class="text muted detail">{{ c.text.acc_text_xml }}</text>
+        <text x="{{ c.text.level_x }}" y="{{ c.text.level_y }}" class="text muted detail">{{ c.text.level_text_xml }}</text>
+      </g>
+    {% endfor %}
+  </g>
+
+  <text x="{{ layout.footer_padding }}" y="{{ footer.y }}" class="footer" text-anchor="start">{{ footer.generated_text_xml }}</text>
+  {% if footer.custom_text_xml %}
+    <text x="{{ page.width - layout.footer_padding }}" y="{{ footer.y }}" class="footer" text-anchor="end">{{ footer.custom_text_xml }}</text>
+  {% endif %}
+</svg>

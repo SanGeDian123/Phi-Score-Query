@@ -1,0 +1,86 @@
+# Rust构建目录
+/target/
+
+# IDE和编辑器
+.vscode/
+.claude/
+.idea/
+*.swp
+*.swo
+*~
+.codex
+.spec-workflow
+.DS_Store
+Thumbs.db
+
+# 日志文件
+*.log
+logs/
+
+# 数据库文件
+*.db
+*.db-shm
+*.db-wal
+resources/usage_stats.db*
+resources/ill
+# 曲绘仓库及派生大文件（默认文件夹：phi-plugin-ill）
+/resources/phi-plugin-ill/
+# 兼容自定义文件夹名下的典型子目录
+/resources/**/ill/
+/resources/**/illLow/
+/resources/**/illBlur/
+
+# 统计数据
+resources/stats/
+
+# 配置覆盖（敏感信息）
+config.toml
+.env
+.env.local
+.env.production
+
+# 临时文件
+tmp/
+temp/
+*.tmp
+*.temp
+
+# 缓存
+.cache/
+cargo_cache/
+
+# 测试输出
+/tests/output/
+/tests/temp/
+
+# 备份文件
+*.bak
+*.backup
+
+# 压缩文件
+*.zip
+*.tar.gz
+*.rar
+
+# 系统文件
+*.pid
+# Windows 保留设备名（避免 git add 失败）
+nul
+NUL
+nul.*
+NUL.*
+null
+
+# SDK 生成与前端构建产物
+/sdk/ts/node_modules/
+/sdk/ts/dist/
+# 可由示例导出再生成，无需纳入版本控制
+/sdk/openapi.json
+
+# 锁文件（如需固定工作区可保留，此处忽略以减少噪音）
+# /sdk/ts/pnpm-lock.yaml
+
+/verification.md
+/docs/
+2026-02-13
+phi-backend.exe

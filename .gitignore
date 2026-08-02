@@ -1,0 +1,37 @@
+*.iml
+.gradle/
+.kotlin/
+.idea/
+local.properties
+build/
+app/build/
+captures/
+.externalNativeBuild/
+.cxx/
+server/dist/
+server/runtime/
+server/secrets.env
+server/*.zip
+server/*.sha256
+artifacts/
+*.jks
+*.keystore
+keystore.properties
+signing/
+*.apk
+*.aab
+*.log
+
+# Local-only or third-party runtime assets
+challenge/
+server/avatar/
+server/avatar-public/
+server/release-assets/
+
+# Backend build/runtime state
+backend-source/target/
+backend-source/config.toml
+backend-source/.env
+backend-source/.env.*
+backend-source/resources/*.db
+backend-source/resources/*.db-*

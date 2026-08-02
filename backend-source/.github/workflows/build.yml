@@ -1,0 +1,122 @@
+name: Build
+
+on:
+  push:
+    branches: [ "master", "feat" ]
+  pull_request:
+    branches: [ "master", "feat" ]
+  workflow_dispatch:
+
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+
+    - name: handler 边界检查
+      shell: pwsh
+      run: ./scripts/check-stage2-feature-boundary.ps1
+
+    - name: 跨 feature 检查
+      shell: pwsh
+      run: ./scripts/check-stage2-no-cross-feature.ps1
+
+    - name: 恢复Cargo缓存
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: quality-gate-ubuntu
+
+    - name: 安装 Rust 工具链
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: stable
+        components: rustfmt, clippy
+
+    - name: 检查格式
+      run: cargo fmt --all -- --check
+
+    - name: 运行 Clippy
+      run: cargo clippy --all-targets --all-features -- -D warnings -W clippy::pedantic
+
+    - name: 运行测试
+      run: cargo test --all-targets --all-features
+
+  # 任务一：构建和创建发布产物（master / feat 分支触发编译）
+  build-release:
+    if: |
+      (github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/feat')) ||
+      (github.event_name == 'pull_request' && (github.base_ref == 'master' || github.base_ref == 'feat')) ||
+      github.event_name == 'workflow_dispatch'
+    needs: quality-gate
+    strategy:
+      matrix:
+        include:
+          # Windows x86_64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          # Linux x86_64 (glibc)
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          # Linux x86_64 (musl 静态链接)
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          # Linux aarch64 (glibc)
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+          # macOS Apple Silicon
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          # macOS Intel
+          - target: x86_64-apple-darwin
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    env:
+      EXECUTABLE_NAME: phi-backend
+      
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+      
+    - name: 恢复Cargo缓存
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: build-release-${{ runner.os }}-${{ matrix.target }}
+      
+    - name: 安装 Rust 工具链
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: stable
+        targets: ${{ matrix.target }}
+    
+    # 使用预装好的 muslrust 容器进行 musl 构建，避免系统依赖问题
+    - name: 使用 muslrust 容器构建 (Linux musl)
+      if: matrix.target == 'x86_64-unknown-linux-musl'
+      run: |
+        docker run --rm -v "$PWD:/volume" -w /volume clux/muslrust:stable \
+          cargo build --profile release-dist --target x86_64-unknown-linux-musl
+    
+    # Linux aarch64 仅安装交叉编译工具并指定 linker
+    - name: 安装交叉编译工具和依赖 (Linux aarch64)
+      if: matrix.target == 'aarch64-unknown-linux-gnu'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+        # 设置环境变量
+        echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+        echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+        echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
+    
+    - name: 编译项目
+      if: matrix.target != 'x86_64-unknown-linux-musl'
+      run: cargo build --profile release-dist --target ${{ matrix.target }}
+    - name: 上传构建产物
+      uses: actions/upload-artifact@v4
+      with:
+        name: phi-backend-${{ matrix.target }}
+        # 这里的多行路径写法是正确的，它会尝试上传两个路径，
+        # 并优雅地忽略不存在的那个（例如在Linux上忽略.exe）
+        path: |
+          target/${{ matrix.target }}/release-dist/${{ env.EXECUTABLE_NAME }}
+          target/${{ matrix.target }}/release-dist/${{ env.EXECUTABLE_NAME }}.exe

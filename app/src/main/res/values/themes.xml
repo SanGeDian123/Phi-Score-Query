@@ -1,0 +1,10 @@
+<resources>
+    <style name="Theme.PhigrosScore" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">@font/source_han_sans_saira_hybrid</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:statusBarColor">#F7F8FA</item>
+        <item name="android:navigationBarColor">#F7F8FA</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:colorAccent">#76E7C7</item>
+    </style>
+</resources>

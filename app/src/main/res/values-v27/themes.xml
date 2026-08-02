@@ -1,0 +1,5 @@
+<resources>
+    <style name="Theme.PhigrosScore" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+</resources>
