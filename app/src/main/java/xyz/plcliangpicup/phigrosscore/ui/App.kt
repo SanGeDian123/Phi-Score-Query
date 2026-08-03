@@ -165,6 +165,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -241,6 +242,15 @@ private const val PROJECT_REPOSITORY_URL = "https://github.com/SanGeDian123/Phi-
 private const val BACKEND_REPOSITORY_URL = "https://github.com/Sczr0/Next-Phi-Backend"
 
 private val changelogEntries = listOf(
+    ChangelogEntry(
+        "Pre-0.9.7.2",
+        "排行榜体验优化",
+        listOf(
+            "排行榜最多显示前 1000 名公开玩家，并固定排名序号为单行显示。",
+            "排行榜滚动后可通过顶部向上箭头回到开头，点击当前玩家信息栏可跳转到本人排名。",
+            "更新日志和新版本弹窗中的本版本功能均统一用一句话概述。",
+        ),
+    ),
     ChangelogEntry(
         "Pre-0.9.7.1",
         "公开测试",
@@ -1068,36 +1078,71 @@ private fun LeaderboardPage(state: AppUiState, onRefresh: () -> Unit) {
                 onRefresh,
                 "读取排行榜",
             )
-            else -> LazyColumn(
-                contentPadding = PaddingValues(start = 18.dp, end = 18.dp, bottom = 32.dp),
-                verticalArrangement = Arrangement.spacedBy(9.dp),
-            ) {
-                item(key = "leaderboard-me") {
-                    CurrentPlayerRankCard(leaderboard.playerProfile, leaderboard.me)
+            else -> {
+                val listState = rememberLazyListState()
+                val coroutineScope = rememberCoroutineScope()
+                val showScrollToTop by remember {
+                    derivedStateOf {
+                        listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0
+                    }
                 }
-                item(key = "leaderboard-title") {
-                    Text(
-                        "RANKLIST",
-                        color = AppAccent,
-                        fontWeight = FontWeight.Black,
-                        fontSize = 13.sp,
-                        modifier = Modifier.padding(top = 10.dp, bottom = 2.dp),
-                    )
-                }
-                if (leaderboard.entries.isEmpty()) {
-                    item(key = "leaderboard-empty") {
-                        Text(
-                            "还没有可公开显示的排行榜记录。玩家刷新存档后会自动加入。",
-                            color = AppTextMuted,
-                            modifier = Modifier.fillMaxWidth().padding(24.dp),
-                            textAlign = TextAlign.Center,
-                        )
+                val ownEntryIndex = leaderboard.entries.indexOfFirst { it.rank == leaderboard.me.rank }
+                val scrollToOwn: (() -> Unit)? = if (ownEntryIndex >= 0) {
+                    {
+                        coroutineScope.launch { listState.animateScrollToItem(2 + ownEntryIndex) }
                     }
                 } else {
-                    itemsIndexed(
-                        leaderboard.entries,
-                        key = { _, entry -> "rank-${entry.rank}-${entry.user}" },
-                    ) { _, entry -> LeaderboardRow(entry) }
+                    null
+                }
+
+                Box(Modifier.fillMaxWidth().weight(1f)) {
+                    LazyColumn(
+                        state = listState,
+                        contentPadding = PaddingValues(start = 18.dp, end = 18.dp, bottom = 32.dp),
+                        verticalArrangement = Arrangement.spacedBy(9.dp),
+                    ) {
+                        item(key = "leaderboard-me") {
+                            CurrentPlayerRankCard(leaderboard.playerProfile, leaderboard.me, scrollToOwn)
+                        }
+                        item(key = "leaderboard-title") {
+                            Text(
+                                "RANKLIST",
+                                color = AppAccent,
+                                fontWeight = FontWeight.Black,
+                                fontSize = 13.sp,
+                                modifier = Modifier.padding(top = 10.dp, bottom = 2.dp),
+                            )
+                        }
+                        if (leaderboard.entries.isEmpty()) {
+                            item(key = "leaderboard-empty") {
+                                Text(
+                                    "还没有可公开显示的排行榜记录。玩家刷新存档后会自动加入。",
+                                    color = AppTextMuted,
+                                    modifier = Modifier.fillMaxWidth().padding(24.dp),
+                                    textAlign = TextAlign.Center,
+                                )
+                            }
+                        } else {
+                            itemsIndexed(
+                                leaderboard.entries,
+                                key = { _, entry -> "rank-${entry.rank}-${entry.user}" },
+                            ) { _, entry -> LeaderboardRow(entry) }
+                        }
+                    }
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = showScrollToTop,
+                        modifier = Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 18.dp),
+                        enter = fadeIn(tween(180)) + slideInVertically(tween(180)) { -it / 2 },
+                        exit = fadeOut(tween(140)),
+                    ) {
+                        androidx.compose.material3.SmallFloatingActionButton(
+                            onClick = { coroutineScope.launch { listState.animateScrollToItem(0) } },
+                            containerColor = AppAccent,
+                            contentColor = Color.White,
+                        ) {
+                            Icon(Icons.Default.KeyboardArrowUp, "回到排行榜顶部")
+                        }
+                    }
                 }
             }
         }
@@ -1108,11 +1153,14 @@ private fun LeaderboardPage(state: AppUiState, onRefresh: () -> Unit) {
 private fun CurrentPlayerRankCard(
     profile: xyz.plcliangpicup.phigrosscore.data.PlayerProfile?,
     me: xyz.plcliangpicup.phigrosscore.data.LeaderboardMe,
+    onClick: (() -> Unit)? = null,
 ) {
     Card(
         colors = CardDefaults.cardColors(containerColor = AppSurfaceRaised),
         shape = RoundedCornerShape(14.dp),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(onClick?.let { Modifier.clickable(onClick = it) } ?: Modifier),
     ) {
         Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             PlayerAvatar(profile?.avatar, profile?.nickname.orEmpty(), 62.dp)
@@ -1122,7 +1170,12 @@ private fun CurrentPlayerRankCard(
                     Text("课题模式 $it", color = AppAccent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
                 Text(
-                    if (me.rank > 0) "超过 ${"%.2f".format(me.percentile)}% 的公开玩家" else "刷新存档后生成排名",
+                    when {
+                        onClick != null -> "点击跳转到本人排名"
+                        me.rank > 1000 -> "当前排名不在前 1000 名"
+                        me.rank > 0 -> "超过 ${"%.2f".format(me.percentile)}% 的公开玩家"
+                        else -> "刷新存档后生成排名"
+                    },
                     color = AppTextMuted,
                     fontSize = 11.sp,
                 )
@@ -1143,11 +1196,18 @@ private fun LeaderboardRow(entry: LeaderboardEntry) {
     Card(colors = CardDefaults.cardColors(containerColor = AppSurface), shape = RoundedCornerShape(11.dp)) {
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
-                Modifier.size(43.dp).clip(RoundedCornerShape(9.dp))
+                Modifier.width(60.dp).height(43.dp).clip(RoundedCornerShape(9.dp))
                     .background(if (entry.rank <= 3) AppAccent.copy(alpha = .18f) else AppSurfaceRaised),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("#${entry.rank}", color = if (entry.rank <= 3) AppAccent else AppTextMuted, fontWeight = FontWeight.Black)
+                Text(
+                    "#${entry.rank}",
+                    color = if (entry.rank <= 3) AppAccent else AppTextMuted,
+                    fontWeight = FontWeight.Black,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Clip,
+                )
             }
             Spacer(Modifier.width(10.dp))
             PlayerAvatar(entry.avatar, displayName, 48.dp)

@@ -140,7 +140,7 @@ class PhiApiClient(
 
     suspend fun fetchLeaderboard(accessToken: String): LeaderboardResponse = executeJson(
         Request.Builder()
-            .url(url("api/v2/leaderboard/rks/top?limit=200&lite=true"))
+            .url(url("api/v2/leaderboard/rks/top?limit=1000&lite=true"))
             .header("Authorization", "Bearer $accessToken")
             .get()
             .build(),
