@@ -29,9 +29,11 @@ class AppRepository(
         encodeDefaults = true
     }
     private val api = PhiApiClient(baseUrl, json)
+    private val localQrClient = TapTapLocalQrClient(json)
     private val sessionStore = SecureSessionStore(context)
     private val cacheStore = CacheStore(context, json)
     private val songCatalog = SongCatalog(context)
+    private val songScoreImageRenderer = SongScoreImageRenderer(appContext)
     private val preferences = context.getSharedPreferences("app_preferences", Context.MODE_PRIVATE)
     private val refreshMutex = Mutex()
 
@@ -171,6 +173,26 @@ class AppRepository(
 
     suspend fun createQr(): QrCodeCreateResponse = api.createQrCode()
 
+    suspend fun createLocalQr(): LocalQrCode = localQrClient.create()
+
+    suspend fun awaitLocalQrConfirmation(
+        qr: LocalQrCode,
+        onStatus: suspend (String) -> Unit,
+    ) {
+        while (true) {
+            when (val result = localQrClient.poll(qr)) {
+                LocalQrPollResult.Pending -> onStatus("等待 TapTap 扫码")
+                LocalQrPollResult.Scanned -> onStatus("已扫码，请在 TapTap 中确认")
+                is LocalQrPollResult.Confirmed -> {
+                    onStatus("正在建立安全会话")
+                    loginWithSessionToken(result.sessionToken)
+                    return
+                }
+            }
+            delay(qr.intervalSeconds.coerceIn(2L, 10L) * 1_000L)
+        }
+    }
+
     suspend fun awaitQrConfirmation(
         qr: QrCodeCreateResponse,
         onStatus: suspend (String) -> Unit,
@@ -252,11 +274,20 @@ class AppRepository(
     suspend fun renderB30(
         style: B30ImageStyle,
         isDarkTheme: Boolean,
-        width: Int = 1600,
+        width: Int = 1440,
     ): File = authenticatedCall { token ->
         cacheStore.saveImage(
             api.renderB30(token, width.coerceIn(900, 2400), style, isDarkTheme),
         )
+    }
+
+    fun cachedSongImage(songId: String): File = songScoreImageRenderer.cachedFile(songId)
+
+    suspend fun renderSongScoreImage(song: SongScoreResult): File =
+        songScoreImageRenderer.render(song)
+
+    suspend fun deleteCachedSongImages() {
+        songScoreImageRenderer.clear()
     }
 
     suspend fun deleteCachedB30Image() {
@@ -267,11 +298,13 @@ class AppRepository(
         sessionStore.read()?.let { stored -> runCatching { api.logout(stored.accessToken) } }
         sessionStore.clear()
         cacheStore.clear()
+        songScoreImageRenderer.clear()
         songCatalog.resetToBundled()
     }
 
     suspend fun clearCache() {
         cacheStore.clear()
+        songScoreImageRenderer.clear()
         songCatalog.resetToBundled()
         appContext.imageLoader.memoryCache?.clear()
         appContext.imageLoader.diskCache?.clear()

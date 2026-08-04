@@ -21,6 +21,7 @@ import xyz.plcliangpicup.phigrosscore.data.B30Snapshot
 import xyz.plcliangpicup.phigrosscore.data.ConstantTableEntry
 import xyz.plcliangpicup.phigrosscore.data.LoginProgress
 import xyz.plcliangpicup.phigrosscore.data.LeaderboardSnapshot
+import xyz.plcliangpicup.phigrosscore.data.QrCodeCreateResponse
 import xyz.plcliangpicup.phigrosscore.data.SongScoreResult
 import java.io.File
 
@@ -44,6 +45,10 @@ data class AppUiState(
     val songQuery: String = "",
     val songResults: List<SongScoreResult> = emptyList(),
     val hasSearchedSongs: Boolean = false,
+    val songImageSongId: String? = null,
+    val songImageFile: File? = null,
+    val isGeneratingSongImage: Boolean = false,
+    val songImageGenerationElapsedSeconds: Int = 0,
     val constantTableEntries: List<ConstantTableEntry> = emptyList(),
     val leaderboard: LeaderboardSnapshot? = null,
     val isLeaderboardLoading: Boolean = false,
@@ -81,6 +86,8 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
     private var updateDownloadJob: Job? = null
     private var firstLoginImageJob: Job? = null
     private var imageTimerJob: Job? = null
+    private var songImageJob: Job? = null
+    private var songImageTimerJob: Job? = null
     private var generateImageAfterNextRefresh = false
 
     init {
@@ -306,22 +313,22 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
         qrJob = viewModelScope.launch {
             _state.update { it.copy(loginProgress = LoginProgress.CreatingQr, message = null) }
             try {
-                val qr = repository.createQr()
-                val svg = repository.decodeQrSvg(qr.qrcodeBase64)
-                _state.update {
-                    it.copy(
-                        loginProgress = LoginProgress.WaitingForScan(
-                            qrId = qr.qrId,
-                            qrSvg = svg,
-                            verificationUrl = qr.verificationUrl,
-                            status = "等待 TapTap 扫码",
-                        ),
-                    )
-                }
-                repository.awaitQrConfirmation(qr) { status ->
-                    _state.update { old ->
-                        val progress = old.loginProgress as? LoginProgress.WaitingForScan
-                        old.copy(loginProgress = progress?.copy(status = status) ?: old.loginProgress)
+                try {
+                    val localQr = repository.createLocalQr()
+                    performQrLogin(localQr.display) { onStatus ->
+                        repository.awaitLocalQrConfirmation(localQr, onStatus)
+                    }
+                } catch (localError: Throwable) {
+                    if (localError is CancellationException) throw localError
+                    _state.update {
+                        it.copy(
+                            loginProgress = LoginProgress.CreatingQr,
+                            message = "本地二维码不可用，正在切换服务器二维码",
+                        )
+                    }
+                    val serverQr = repository.createQr()
+                    performQrLogin(serverQr) { onStatus ->
+                        repository.awaitQrConfirmation(serverQr, onStatus)
                     }
                 }
                 _state.update {
@@ -338,6 +345,29 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
                 _state.update {
                     it.copy(loginProgress = LoginProgress.Failed(readableError(error)))
                 }
+            }
+        }
+    }
+
+    private suspend fun performQrLogin(
+        qr: QrCodeCreateResponse,
+        awaitConfirmation: suspend (suspend (String) -> Unit) -> Unit,
+    ) {
+        val svg = repository.decodeQrSvg(qr.qrcodeBase64)
+        _state.update {
+            it.copy(
+                loginProgress = LoginProgress.WaitingForScan(
+                    qrId = qr.qrId,
+                    qrSvg = svg,
+                    verificationUrl = qr.verificationUrl,
+                    status = "等待 TapTap 扫码",
+                ),
+            )
+        }
+        awaitConfirmation { status ->
+            _state.update { old ->
+                val progress = old.loginProgress as? LoginProgress.WaitingForScan
+                old.copy(loginProgress = progress?.copy(status = status) ?: old.loginProgress)
             }
         }
     }
@@ -403,10 +433,10 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
     fun generateImage() {
         if (_state.value.isGeneratingB30Image) return
         viewModelScope.launch {
-            val hadExistingImage = repository.cachedImage.exists()
-            beginImageGeneration(clearDisplayedImage = hadExistingImage)
+            // Keep the last successful image visible while the next one is rendered.
+            // This avoids a blank page and also preserves the old image on failure.
+            beginImageGeneration(clearDisplayedImage = false)
             try {
-                if (hadExistingImage) repository.deleteCachedB30Image()
                 val state = _state.value
                 val file = repository.renderB30(state.b30ImageStyle, state.isDarkTheme)
                 _state.update { it.copy(imageFile = file, isOffline = false) }
@@ -427,10 +457,8 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
     private fun generateFirstLoginImage() {
         if (!generateImageAfterNextRefresh || firstLoginImageJob?.isActive == true) return
         firstLoginImageJob = viewModelScope.launch {
-            val hadExistingImage = repository.cachedImage.exists()
-            beginImageGeneration(clearDisplayedImage = hadExistingImage)
+            beginImageGeneration(clearDisplayedImage = false)
             try {
-                if (hadExistingImage) repository.deleteCachedB30Image()
                 val state = _state.value
                 val file = repository.renderB30(state.b30ImageStyle, state.isDarkTheme)
                 repository.markFirstLoginB30ImageGenerated()
@@ -513,6 +541,70 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
     fun constantSongDetail(songId: String): SongScoreResult? =
         repository.songDetail(songId, _state.value.snapshot)
 
+    fun ensureSongImage(song: SongScoreResult) {
+        val cached = repository.cachedSongImage(song.songId).takeIf(File::exists)
+        val current = _state.value
+        if (current.songImageSongId == song.songId && (current.isGeneratingSongImage || current.songImageFile?.exists() == true)) {
+            return
+        }
+        _state.update {
+            it.copy(
+                songImageSongId = song.songId,
+                songImageFile = cached,
+                isGeneratingSongImage = false,
+                songImageGenerationElapsedSeconds = 0,
+            )
+        }
+        if (cached == null) generateSongImage(song)
+    }
+
+    fun generateSongImage(song: SongScoreResult) {
+        if (songImageJob?.isActive == true && _state.value.songImageSongId == song.songId) return
+        songImageJob?.cancel()
+        songImageJob = viewModelScope.launch {
+            _state.update {
+                it.copy(
+                    songImageSongId = song.songId,
+                    isGeneratingSongImage = true,
+                    songImageGenerationElapsedSeconds = 0,
+                    message = null,
+                )
+            }
+            val startedAt = SystemClock.elapsedRealtime()
+            songImageTimerJob?.cancel()
+            songImageTimerJob = viewModelScope.launch {
+                while (isActive) {
+                    val elapsed = ((SystemClock.elapsedRealtime() - startedAt) / 1_000L).toInt()
+                    _state.update { it.copy(songImageGenerationElapsedSeconds = elapsed) }
+                    delay(250)
+                }
+            }
+            try {
+                val file = repository.renderSongScoreImage(song)
+                _state.update {
+                    it.copy(
+                        songImageSongId = song.songId,
+                        songImageFile = file,
+                        isGeneratingSongImage = false,
+                        isOffline = false,
+                    )
+                }
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                _state.update {
+                    it.copy(
+                        songImageFile = repository.cachedSongImage(song.songId).takeIf(File::exists),
+                        message = readableError(error),
+                    )
+                }
+            } finally {
+                songImageTimerJob?.cancel()
+                songImageTimerJob = null
+                _state.update { it.copy(isGeneratingSongImage = false) }
+            }
+        }
+    }
+
     fun clearCache() {
         viewModelScope.launch {
             repository.clearCache()
@@ -520,6 +612,9 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
                 it.copy(
                     snapshot = null,
                     imageFile = null,
+                    songImageSongId = null,
+                    songImageFile = null,
+                    isGeneratingSongImage = false,
                     songResults = emptyList(),
                     hasSearchedSongs = false,
                     constantTableEntries = repository.constantTableEntries(),
@@ -534,6 +629,8 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
         qrJob?.cancel()
         firstLoginImageJob?.cancel()
         imageTimerJob?.cancel()
+        songImageJob?.cancel()
+        songImageTimerJob?.cancel()
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true) }
             repository.logout()

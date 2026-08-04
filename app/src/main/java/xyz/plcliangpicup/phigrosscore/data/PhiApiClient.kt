@@ -173,6 +173,9 @@ class PhiApiClient(
                 .header("Authorization", "Bearer $accessToken")
                 .post(requestBody.toRequestBody(jsonMediaType))
                 .build(),
+            // A render timeout must not immediately start a second full render;
+            // the server-side image cache will be used by the user's next tap.
+            retryNetwork = false,
         )
     }
 

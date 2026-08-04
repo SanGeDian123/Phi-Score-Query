@@ -243,6 +243,15 @@ private const val BACKEND_REPOSITORY_URL = "https://github.com/Sczr0/Next-Phi-Ba
 
 private val changelogEntries = listOf(
     ChangelogEntry(
+        "Pre-0.9.7.3",
+        "单曲成绩图与体验优化",
+        listOf(
+            "单曲详情新增严格按设计图生成的单曲成绩图，首次进入自动生成并支持更新、保存、分享和放大查看。",
+            "单曲页返回会回到上一层，二维码登录优先在本地完成，B30 生图保留旧图并减少重复请求。",
+            "关于页新增作者板块并将开源信息放在其下方。",
+        ),
+    ),
+    ChangelogEntry(
         "Pre-0.9.7.2",
         "排行榜体验优化",
         listOf(
@@ -586,6 +595,8 @@ fun PhigrosScoreApp(viewModel: AppViewModel) {
                 onRefreshLeaderboard = viewModel::refreshLeaderboard,
                 onSearchSong = viewModel::searchSong,
                 onOpenConstantSong = viewModel::constantSongDetail,
+                onEnsureSongImage = viewModel::ensureSongImage,
+                onGenerateSongImage = viewModel::generateSongImage,
                 onGenerateImage = viewModel::generateImage,
                 onClearCache = viewModel::clearCache,
                 onThemeChange = viewModel::setDarkTheme,
@@ -848,6 +859,8 @@ private fun MainShell(
     onRefreshLeaderboard: () -> Unit,
     onSearchSong: (String) -> Unit,
     onOpenConstantSong: (String) -> SongScoreResult?,
+    onEnsureSongImage: (SongScoreResult) -> Unit,
+    onGenerateSongImage: (SongScoreResult) -> Unit,
     onGenerateImage: () -> Unit,
     onClearCache: () -> Unit,
     onThemeChange: (Boolean) -> Unit,
@@ -914,6 +927,8 @@ private fun MainShell(
                     onRefreshLeaderboard = onRefreshLeaderboard,
                     onSearchSong = onSearchSong,
                     onOpenConstantSong = onOpenConstantSong,
+                    onEnsureSongImage = onEnsureSongImage,
+                    onGenerateSongImage = onGenerateSongImage,
                     onGenerateImage = onGenerateImage,
                     onClearCache = onClearCache,
                     onThemeChange = onThemeChange,
@@ -962,6 +977,8 @@ private fun PageContent(
     onRefreshLeaderboard: () -> Unit,
     onSearchSong: (String) -> Unit,
     onOpenConstantSong: (String) -> SongScoreResult?,
+    onEnsureSongImage: (SongScoreResult) -> Unit,
+    onGenerateSongImage: (SongScoreResult) -> Unit,
     onGenerateImage: () -> Unit,
     onClearCache: () -> Unit,
     onThemeChange: (Boolean) -> Unit,
@@ -987,8 +1004,18 @@ private fun PageContent(
             when (page) {
                 AppPage.HOME -> HomePage(state, onRefresh, onOpenImage = { onPage(AppPage.IMAGE) })
                 AppPage.B30 -> B30Page(state, onRefresh)
-                AppPage.SONG -> SingleSongPage(state, onSearchSong)
-                AppPage.CONSTANT_TABLE -> ConstantTablePage(state, onOpenConstantSong)
+                AppPage.SONG -> SingleSongPage(
+                    state = state,
+                    onSearch = onSearchSong,
+                    onEnsureSongImage = onEnsureSongImage,
+                    onGenerateSongImage = onGenerateSongImage,
+                )
+                AppPage.CONSTANT_TABLE -> ConstantTablePage(
+                    state = state,
+                    onOpenSong = onOpenConstantSong,
+                    onEnsureSongImage = onEnsureSongImage,
+                    onGenerateSongImage = onGenerateSongImage,
+                )
                 AppPage.LEADERBOARD -> LeaderboardPage(state, onRefreshLeaderboard)
                 AppPage.IMAGE -> ImagePage(state, onGenerateImage)
                 AppPage.SETTINGS -> SettingsPage(
@@ -2138,6 +2165,8 @@ private fun SnapshotRankingRow(position: Int, item: ScoreSnapshotEntry, showPush
 private fun ConstantTablePage(
     state: AppUiState,
     onOpenSong: (String) -> SongScoreResult?,
+    onEnsureSongImage: (SongScoreResult) -> Unit,
+    onGenerateSongImage: (SongScoreResult) -> Unit,
 ) {
     var selectedLevel by rememberSaveable { mutableStateOf<Int?>(null) }
     var selectedSong by remember { mutableStateOf<SongScoreResult?>(null) }
@@ -2151,6 +2180,11 @@ private fun ConstantTablePage(
         SongDetailPage(
             song = song,
             onBack = { selectedSong = null },
+            songImageFile = state.songImageFile.takeIf { state.songImageSongId == song.songId },
+            isGeneratingSongImage = state.isGeneratingSongImage && state.songImageSongId == song.songId,
+            songImageGenerationElapsedSeconds = state.songImageGenerationElapsedSeconds,
+            onEnsureSongImage = { onEnsureSongImage(song) },
+            onGenerateSongImage = { onGenerateSongImage(song) },
             backDescription = "返回定数表",
         )
         return
@@ -2394,11 +2428,25 @@ private fun ConstantChartCard(
 }
 
 @Composable
-private fun SingleSongPage(state: AppUiState, onSearch: (String) -> Unit) {
+private fun SingleSongPage(
+    state: AppUiState,
+    onSearch: (String) -> Unit,
+    onEnsureSongImage: (SongScoreResult) -> Unit,
+    onGenerateSongImage: (SongScoreResult) -> Unit,
+) {
     var query by remember(state.songQuery) { mutableStateOf(state.songQuery) }
     var selectedSong by remember { mutableStateOf<SongScoreResult?>(null) }
     selectedSong?.let { song ->
-        SongDetailPage(song = song, onBack = { selectedSong = null })
+        BackHandler { selectedSong = null }
+        SongDetailPage(
+            song = song,
+            onBack = { selectedSong = null },
+            songImageFile = state.songImageFile.takeIf { state.songImageSongId == song.songId },
+            isGeneratingSongImage = state.isGeneratingSongImage && state.songImageSongId == song.songId,
+            songImageGenerationElapsedSeconds = state.songImageGenerationElapsedSeconds,
+            onEnsureSongImage = { onEnsureSongImage(song) },
+            onGenerateSongImage = { onGenerateSongImage(song) },
+        )
         return
     }
     Column(Modifier.fillMaxSize()) {
@@ -2547,9 +2595,15 @@ private fun SongScoreCard(song: SongScoreResult, onClick: () -> Unit) {
 private fun SongDetailPage(
     song: SongScoreResult,
     onBack: () -> Unit,
+    songImageFile: File?,
+    isGeneratingSongImage: Boolean,
+    songImageGenerationElapsedSeconds: Int,
+    onEnsureSongImage: () -> Unit,
+    onGenerateSongImage: () -> Unit,
     backDescription: String = "返回单曲成绩",
 ) {
     var useFallbackArtwork by remember(song.songId) { mutableStateOf(false) }
+    LaunchedEffect(song.songId) { onEnsureSongImage() }
     Box(Modifier.fillMaxSize()) {
         AsyncImage(
             model = if (useFallbackArtwork) {
@@ -2604,6 +2658,12 @@ private fun SongDetailPage(
                 Text(song.songName, fontSize = 27.sp, fontWeight = FontWeight.Black)
                 Text(song.songId, color = AppTextMuted, fontSize = 11.sp)
                 SongMetadataCard(song)
+                SongScoreImageCard(
+                    image = songImageFile,
+                    isGenerating = isGeneratingSongImage,
+                    elapsedSeconds = songImageGenerationElapsedSeconds,
+                    onGenerate = onGenerateSongImage,
+                )
                 Text("谱面信息", color = AppAccent, fontSize = 15.sp, fontWeight = FontWeight.Black)
                 song.charts.forEach { chart ->
                     val record = song.records.firstOrNull {
@@ -2617,6 +2677,142 @@ private fun SongDetailPage(
                 Spacer(Modifier.height(20.dp))
             }
         }
+    }
+}
+
+@Composable
+private fun SongScoreImageCard(
+    image: File?,
+    isGenerating: Boolean,
+    elapsedSeconds: Int,
+    onGenerate: () -> Unit,
+) {
+    val context = LocalContext.current
+    var showActions by remember { mutableStateOf(false) }
+    var showZoomedImage by remember(image?.absolutePath, image?.lastModified()) { mutableStateOf(false) }
+    val saveScope = rememberCoroutineScope()
+    val saveCurrentImage: () -> Unit = {
+        image?.takeIf(File::exists)?.let { source ->
+            saveScope.launch {
+                val result = withContext(Dispatchers.IO) {
+                    runCatching { saveB30ImageToGallery(context, source, "Phi-Song-${System.currentTimeMillis()}.png") }
+                }
+                Toast.makeText(
+                    context,
+                    if (result.isSuccess) "已保存到相册" else "保存失败，请稍后重试",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+    }
+    val galleryPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) saveCurrentImage()
+        else Toast.makeText(context, "需要存储权限才能保存到相册", Toast.LENGTH_SHORT).show()
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("单曲成绩图", color = AppAccent, fontSize = 15.sp, fontWeight = FontWeight.Black)
+        when {
+            image?.exists() == true -> {
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(image)
+                        .memoryCacheKey("song-score-${image.lastModified()}-${image.length()}")
+                        .build(),
+                    contentDescription = "单曲成绩图",
+                    contentScale = ContentScale.FillWidth,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(13.dp))
+                        .background(AppSurface)
+                        .clickable { showZoomedImage = true },
+                )
+                if (isGenerating) {
+                    Text(
+                        "正在更新单曲成绩图 · 已用时 ${formatGenerationElapsed(elapsedSeconds)}",
+                        color = AppTextMuted,
+                        fontSize = 11.sp,
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = TextAlign.Center,
+                    )
+                }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Button(onClick = onGenerate, enabled = !isGenerating, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Default.Refresh, null)
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (isGenerating) "正在更新" else "更新图片")
+                    }
+                    OutlinedButton(onClick = { showActions = true }, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Default.Share, null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("保存或分享")
+                    }
+                }
+            }
+            isGenerating -> Card(
+                colors = CardDefaults.cardColors(containerColor = AppSurface),
+                shape = RoundedCornerShape(13.dp),
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().padding(18.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                    Text(
+                        "正在生成单曲成绩图 · 已用时 ${formatGenerationElapsed(elapsedSeconds)}",
+                        modifier = Modifier.padding(start = 12.dp),
+                    )
+                }
+            }
+            else -> EmptyState(
+                "尚未生成单曲成绩图",
+                "首次进入曲目详情时会自动生成，也可以手动生成。",
+                onGenerate,
+                "生成单曲成绩图",
+            )
+        }
+    }
+    if (showActions && image?.exists() == true) {
+        AlertDialog(
+            onDismissRequest = { showActions = false },
+            title = { Text("保存或分享单曲成绩图") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showActions = false
+                        if (
+                            Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
+                            ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
+                            PackageManager.PERMISSION_GRANTED
+                        ) {
+                            galleryPermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                        } else {
+                            saveCurrentImage()
+                        }
+                    },
+                ) { Text("保存到相册") }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showActions = false
+                        shareImage(context, image, "分享单曲成绩图")
+                    },
+                ) { Text("系统分享") }
+            },
+        )
+    }
+    if (showZoomedImage && image?.exists() == true) {
+        ZoomableB30ImageDialog(
+            image = image,
+            onDismiss = { showZoomedImage = false },
+            contentDescription = "放大的单曲成绩图",
+        )
     }
 }
 
@@ -2845,7 +3041,11 @@ private fun ImagePage(state: AppUiState, onGenerateImage: () -> Unit) {
 }
 
 @Composable
-private fun ZoomableB30ImageDialog(image: File, onDismiss: () -> Unit) {
+private fun ZoomableB30ImageDialog(
+    image: File,
+    onDismiss: () -> Unit,
+    contentDescription: String = "放大的 B30 成绩图",
+) {
     var scale by remember(image.absolutePath, image.lastModified()) { mutableFloatStateOf(1f) }
     var offsetX by remember(image.absolutePath, image.lastModified()) { mutableFloatStateOf(0f) }
     var offsetY by remember(image.absolutePath, image.lastModified()) { mutableFloatStateOf(0f) }
@@ -2859,7 +3059,7 @@ private fun ZoomableB30ImageDialog(image: File, onDismiss: () -> Unit) {
                     .data(image)
                     .memoryCacheKey("b30-zoom-${image.lastModified()}-${image.length()}")
                     .build(),
-                contentDescription = "放大的 B30 成绩图",
+                contentDescription = contentDescription,
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.fillMaxSize()
                     .pointerInput(image.absolutePath, image.lastModified()) {
@@ -3295,11 +3495,39 @@ private fun AboutSheet(onDismiss: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text("关于", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
-            Text(
-                "Phi Score Query ${BuildConfig.VERSION_NAME} · 公开测试版",
-                color = AppAccent,
-                fontWeight = FontWeight.Bold,
-            )
+            Card(
+                colors = CardDefaults.cardColors(containerColor = AppBackground),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Image(
+                        painter = painterResource(R.drawable.author_avatar),
+                        contentDescription = "作者头像",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .size(82.dp)
+                            .clip(RoundedCornerShape(22.dp))
+                            .border(1.dp, AppAccent.copy(alpha = .65f), RoundedCornerShape(22.dp)),
+                    )
+                    Column(
+                        Modifier.padding(start = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
+                        Text(
+                            "Phi Score Query - ${BuildConfig.VERSION_NAME}",
+                            fontSize = 19.sp,
+                            fontWeight = FontWeight.Black,
+                        )
+                        Text("• Developed by ...", color = AppTextMuted, fontSize = 13.sp)
+                        Text("• Special thanks to 塔弦：致I", color = AppTextMuted, fontSize = 13.sp)
+                    }
+                }
+            }
+            Text("开源信息", color = AppAccent, fontWeight = FontWeight.Black, fontSize = 15.sp)
             Text(
                 "非官方 Phigros 成绩查询工具，与 Pigeon Games 或 TapTap 无隶属关系。客户端代码采用 Apache-2.0 许可证；本项目使用并修改的后端代码沿用 GNU AGPL v3。",
                 color = AppTextMuted,
@@ -3485,19 +3713,26 @@ internal fun String?.validAvatarName(): String? = this
         value.isNotEmpty() && value != "..." && value.none(Char::isISOControl)
     }
 
-private fun shareImage(context: Context, file: File) {
+private fun shareImage(
+    context: Context,
+    file: File,
+    chooserTitle: String = "分享 B30 成绩图",
+) {
     val uri: Uri = FileProvider.getUriForFile(context, "${BuildConfig.APPLICATION_ID}.files", file)
     val intent = Intent(Intent.ACTION_SEND).apply {
         type = "image/png"
         putExtra(Intent.EXTRA_STREAM, uri)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
-    context.startActivity(Intent.createChooser(intent, "分享 B30 图片"))
+    context.startActivity(Intent.createChooser(intent, chooserTitle))
 }
 
 @Suppress("DEPRECATION")
-private fun saveB30ImageToGallery(context: Context, source: File) {
-    val fileName = "Phi-B30-${System.currentTimeMillis()}.png"
+private fun saveB30ImageToGallery(
+    context: Context,
+    source: File,
+    fileName: String = "Phi-B30-${System.currentTimeMillis()}.png",
+) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         val resolver = context.contentResolver
         val values = ContentValues().apply {
