@@ -13,6 +13,7 @@ import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
 import android.graphics.drawable.BitmapDrawable
+import androidx.core.content.res.ResourcesCompat
 import androidx.core.graphics.createBitmap
 import coil.imageLoader
 import coil.request.ImageRequest
@@ -20,6 +21,7 @@ import coil.request.SuccessResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import xyz.plcliangpicup.phigrosscore.BuildConfig
+import xyz.plcliangpicup.phigrosscore.R
 import java.io.File
 import java.io.FileOutputStream
 import java.util.Locale
@@ -28,6 +30,8 @@ import java.util.Locale
 class SongScoreImageRenderer(context: Context) {
     private val appContext = context.applicationContext
     private val imageLoader = appContext.imageLoader
+    private val appTypeface = ResourcesCompat.getFont(appContext, R.font.source_han_sans_saira_hybrid)
+        ?: Typeface.DEFAULT
     private val chapterAssetNames = lazy {
         appContext.assets.list(CHAPTER_ASSET_DIR).orEmpty().toList()
     }
@@ -42,22 +46,22 @@ class SongScoreImageRenderer(context: Context) {
             urls = listOf(illustrationUrl(song.songId), fallbackIllustrationUrl(song.songId)),
             cacheKey = "song-score-art-${song.songId}",
             width = 1_280,
-            height = 860,
-        )
-        val blurredArtwork = loadBitmap(
-            urls = listOf(blurredIllustrationUrl(song.songId), fallbackBlurredIllustrationUrl(song.songId)),
-            cacheKey = "song-score-blur-${song.songId}",
-            width = 480,
-            height = 260,
+            height = 720,
         )
         val chapterArtwork = loadChapterArtwork(song.chapter)
 
         val image = createBitmap(IMAGE_WIDTH, IMAGE_HEIGHT)
         val canvas = Canvas(image)
-        drawBackground(canvas, blurredArtwork ?: artwork, needsBlur = blurredArtwork == null)
+        drawBackground(canvas, artwork)
+        canvas.save()
+        canvas.translate(IMAGE_WIDTH / 2f, IMAGE_HEIGHT / 2f)
+        canvas.scale(CONTENT_SCALE, CONTENT_SCALE)
+        canvas.translate(-CONTENT_CENTER_X, -CONTENT_CENTER_Y)
         drawDesignHeader(canvas, song, chapterArtwork)
         drawDesignArtwork(canvas, artwork)
         drawDesignDifficultyRows(canvas, song)
+        canvas.restore()
+        chapterArtwork?.recycle()
         drawWatermark(canvas)
 
         val target = cachedFile(song.songId)
@@ -124,12 +128,12 @@ class SongScoreImageRenderer(context: Context) {
         }
     }
 
-    private fun drawBackground(canvas: Canvas, source: Bitmap?, needsBlur: Boolean) {
+    private fun drawBackground(canvas: Canvas, source: Bitmap?) {
         canvas.drawColor(Color.rgb(22, 26, 37))
         if (source != null) {
-            val background = if (needsBlur) blurBitmap(source, 360, 172) else source
+            val background = blurBitmap(source, 360, 172)
             drawCover(canvas, background, RectF(0f, 0f, IMAGE_WIDTH.toFloat(), IMAGE_HEIGHT.toFloat()))
-            if (needsBlur) background.recycle()
+            background.recycle()
         }
         canvas.drawColor(Color.argb(150, 255, 255, 255), PorterDuff.Mode.SRC_OVER)
         canvas.drawRect(
@@ -154,7 +158,7 @@ class SongScoreImageRenderer(context: Context) {
     private fun drawDesignHeader(canvas: Canvas, song: SongScoreResult, chapterArtwork: Bitmap?) {
         val titlePath = Path().apply {
             moveTo(125f, 354f)
-            lineTo(941f, 354f)
+            lineTo(927f, 354f)
             lineTo(904f, 442f)
             lineTo(104f, 442f)
             close()
@@ -182,13 +186,12 @@ class SongScoreImageRenderer(context: Context) {
         drawTextFit(canvas, songName, 140f, 393f, 665f, textPaint(Color.WHITE, 32f, bold = true))
         val artist = song.composer.ifBlank { "Artist" }
         drawTextFit(canvas, artist, 140f, 425f, 665f, textPaint(Color.WHITE, 22f))
-        drawTextFit(
+        drawTextCenteredFit(
             canvas,
             song.chapter.ifBlank { "Chapter Name" },
-            930f,
-            340f,
-            365f,
-            textPaint(Color.WHITE, 29f).apply { textAlign = Paint.Align.RIGHT },
+            RectF(445f, 303f, 921f, 355f),
+            textPaint(Color.WHITE, 29f),
+            minTextSize = 18f,
         )
     }
 
@@ -214,6 +217,7 @@ class SongScoreImageRenderer(context: Context) {
         val left = 1_012f
         val right = 1_745f
         val height = 89f
+        val columns = floatArrayOf(left, 1_094f, 1_203f, 1_332f, 1_537f, 1_665f, right)
         val rows = listOf(300f, 438f, 583f, 722f)
         val difficulties = listOf("EZ", "HD", "IN", "AT")
         rows.forEachIndexed { index, top ->
@@ -233,23 +237,30 @@ class SongScoreImageRenderer(context: Context) {
                 },
             )
 
-            val valuePaint = textPaint(Color.BLACK, 39f)
-            canvas.drawText(difficulty, 1_037f, top + 59f, textPaint(Color.BLACK, 42f))
-            canvas.drawLine(1_110f, top + 14f, 1_110f, top + height - 14f, separatorPaint())
-
             val constant = record?.chartConstant ?: chart?.chartConstant
-            constant?.let {
-                canvas.drawText("%.1f".format(Locale.US, it), 1_133f, top + 59f, valuePaint)
-                canvas.drawLine(1_225f, top + 14f, 1_225f, top + height - 14f, separatorPaint())
+            val values = listOf(
+                difficulty,
+                constant?.let { "%.1f".format(Locale.US, it) }.orEmpty(),
+                chart?.noteCount?.let { "%,d".format(Locale.US, it) }.orEmpty(),
+                record?.let { "%,d".format(Locale.US, it.score) }.orEmpty(),
+                record?.let { "%.2f%%".format(Locale.US, it.accuracy) }.orEmpty(),
+                record?.let { "%.2f".format(Locale.US, it.rankingScore) }.orEmpty(),
+            )
+            val sizes = floatArrayOf(40f, 35f, 35f, 35f, 23f, 24f)
+            columns.drop(1).dropLast(1).forEach { x ->
+                canvas.drawLine(x, top + 15f, x, top + height - 15f, separatorPaint())
             }
-            chart?.noteCount?.let {
-                canvas.drawText("%,d".format(Locale.US, it), 1_248f, top + 59f, valuePaint)
-                canvas.drawLine(1_337f, top + 14f, 1_337f, top + height - 14f, separatorPaint())
-            }
-            record?.let {
-                canvas.drawText("%,d".format(Locale.US, it.score), 1_363f, top + 59f, valuePaint)
-                canvas.drawText("%.2f%%".format(Locale.US, it.accuracy), 1_592f, top + 59f, textPaint(Color.BLACK, 24f))
-                canvas.drawText("%.2f".format(Locale.US, it.rankingScore), 1_704f, top + 59f, textPaint(Color.BLACK, 27f))
+            values.forEachIndexed { columnIndex, value ->
+                if (value.isNotEmpty()) {
+                    drawTextCenteredFit(
+                        canvas = canvas,
+                        value = value,
+                        bounds = RectF(columns[columnIndex], top, columns[columnIndex + 1], top + height),
+                        paint = textPaint(Color.BLACK, sizes[columnIndex]),
+                        minTextSize = 17f,
+                        horizontalPadding = if (columnIndex == 0 || columnIndex == values.lastIndex) 7f else 10f,
+                    )
+                }
             }
         }
     }
@@ -278,36 +289,86 @@ class SongScoreImageRenderer(context: Context) {
 
     private fun blurBitmap(source: Bitmap, width: Int, height: Int): Bitmap {
         val small = createBitmap(width, height)
-        Canvas(small).drawBitmap(source, null, RectF(0f, 0f, width.toFloat(), height.toFloat()), Paint(Paint.FILTER_BITMAP_FLAG))
+        Canvas(small).drawBitmap(
+            source,
+            null,
+            RectF(0f, 0f, width.toFloat(), height.toFloat()),
+            Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG),
+        )
         val pixels = IntArray(width * height)
         small.getPixels(pixels, 0, width, 0, 0, width, height)
+        val temporary = IntArray(pixels.size)
         repeat(2) {
-            val copy = pixels.copyOf()
-            for (y in 0 until height) {
-                for (x in 0 until width) {
-                    var red = 0
-                    var green = 0
-                    var blue = 0
-                    var alpha = 0
-                    var count = 0
-                    for (dy in -3..3) {
-                        val py = (y + dy).coerceIn(0, height - 1)
-                        for (dx in -3..3) {
-                            val px = (x + dx).coerceIn(0, width - 1)
-                            val color = copy[py * width + px]
-                            red += Color.red(color)
-                            green += Color.green(color)
-                            blue += Color.blue(color)
-                            alpha += Color.alpha(color)
-                            count++
-                        }
-                    }
-                    pixels[y * width + x] = Color.argb(alpha / count, red / count, green / count, blue / count)
-                }
-            }
+            boxBlurHorizontal(pixels, temporary, width, height, BLUR_RADIUS)
+            boxBlurVertical(temporary, pixels, width, height, BLUR_RADIUS)
         }
         small.setPixels(pixels, 0, width, 0, 0, width, height)
         return small
+    }
+
+    private fun boxBlurHorizontal(
+        input: IntArray,
+        output: IntArray,
+        width: Int,
+        height: Int,
+        radius: Int,
+    ) {
+        val divisor = radius * 2 + 1
+        for (y in 0 until height) {
+            val row = y * width
+            var alpha = 0
+            var red = 0
+            var green = 0
+            var blue = 0
+            for (offset in -radius..radius) {
+                val color = input[row + offset.coerceIn(0, width - 1)]
+                alpha += Color.alpha(color)
+                red += Color.red(color)
+                green += Color.green(color)
+                blue += Color.blue(color)
+            }
+            for (x in 0 until width) {
+                output[row + x] = Color.argb(alpha / divisor, red / divisor, green / divisor, blue / divisor)
+                val leaving = input[row + (x - radius).coerceIn(0, width - 1)]
+                val entering = input[row + (x + radius + 1).coerceIn(0, width - 1)]
+                alpha += Color.alpha(entering) - Color.alpha(leaving)
+                red += Color.red(entering) - Color.red(leaving)
+                green += Color.green(entering) - Color.green(leaving)
+                blue += Color.blue(entering) - Color.blue(leaving)
+            }
+        }
+    }
+
+    private fun boxBlurVertical(
+        input: IntArray,
+        output: IntArray,
+        width: Int,
+        height: Int,
+        radius: Int,
+    ) {
+        val divisor = radius * 2 + 1
+        for (x in 0 until width) {
+            var alpha = 0
+            var red = 0
+            var green = 0
+            var blue = 0
+            for (offset in -radius..radius) {
+                val color = input[offset.coerceIn(0, height - 1) * width + x]
+                alpha += Color.alpha(color)
+                red += Color.red(color)
+                green += Color.green(color)
+                blue += Color.blue(color)
+            }
+            for (y in 0 until height) {
+                output[y * width + x] = Color.argb(alpha / divisor, red / divisor, green / divisor, blue / divisor)
+                val leaving = input[(y - radius).coerceIn(0, height - 1) * width + x]
+                val entering = input[(y + radius + 1).coerceIn(0, height - 1) * width + x]
+                alpha += Color.alpha(entering) - Color.alpha(leaving)
+                red += Color.red(entering) - Color.red(leaving)
+                green += Color.green(entering) - Color.green(leaving)
+                blue += Color.blue(entering) - Color.blue(leaving)
+            }
+        }
     }
 
     private fun separatorPaint() = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -318,17 +379,43 @@ class SongScoreImageRenderer(context: Context) {
     private fun textPaint(color: Int, size: Float, bold: Boolean = false) = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         this.color = color
         textSize = size
-        typeface = Typeface.create("sans-serif", if (bold) Typeface.BOLD else Typeface.NORMAL)
+        typeface = if (bold) Typeface.create(appTypeface, Typeface.BOLD) else appTypeface
     }
 
     private fun drawTextFit(canvas: Canvas, value: String, x: Float, y: Float, maxWidth: Float, paint: Paint) {
-        if (paint.measureText(value) <= maxWidth) {
-            canvas.drawText(value, x, y, paint)
-            return
+        while (paint.measureText(value) > maxWidth && paint.textSize > 15f) {
+            paint.textSize -= 1f
         }
+        canvas.drawText(ellipsizeToWidth(value, maxWidth, paint), x, y, paint)
+    }
+
+    private fun drawTextCenteredFit(
+        canvas: Canvas,
+        value: String,
+        bounds: RectF,
+        paint: Paint,
+        minTextSize: Float,
+        horizontalPadding: Float = 12f,
+    ) {
+        val availableWidth = (bounds.width() - horizontalPadding * 2f).coerceAtLeast(1f)
+        while (paint.measureText(value) > availableWidth && paint.textSize > minTextSize) {
+            paint.textSize = (paint.textSize - 1f).coerceAtLeast(minTextSize)
+        }
+        val displayed = ellipsizeToWidth(value, availableWidth, paint)
+        val metrics = paint.fontMetrics
+        val baseline = bounds.centerY() - (metrics.ascent + metrics.descent) / 2f
+        val saveCount = canvas.save()
+        canvas.clipRect(bounds)
+        paint.textAlign = Paint.Align.CENTER
+        canvas.drawText(displayed, bounds.centerX(), baseline, paint)
+        canvas.restoreToCount(saveCount)
+    }
+
+    private fun ellipsizeToWidth(value: String, maxWidth: Float, paint: Paint): String {
+        if (paint.measureText(value) <= maxWidth) return value
         var text = value
         while (text.length > 1 && paint.measureText("$text…") > maxWidth) text = text.dropLast(1)
-        canvas.drawText("$text…", x, y, paint)
+        return "$text…"
     }
 
     private fun normalize(value: String): String = value.lowercase().filter(Char::isLetterOrDigit)
@@ -342,18 +429,16 @@ class SongScoreImageRenderer(context: Context) {
     private fun illustrationUrl(songId: String): String =
         "${BuildConfig.API_BASE_URL.trimEnd('/')}/_ill/ill/${android.net.Uri.encode(songId)}.png"
 
-    private fun blurredIllustrationUrl(songId: String): String =
-        "${BuildConfig.API_BASE_URL.trimEnd('/')}/_ill/illBlur/${android.net.Uri.encode(songId)}.png"
-
     private fun fallbackIllustrationUrl(songId: String): String =
         "https://raw.githubusercontent.com/Catrong/phi-plugin-ill/main/ill/${android.net.Uri.encode(songId)}.png"
-
-    private fun fallbackBlurredIllustrationUrl(songId: String): String =
-        "https://raw.githubusercontent.com/Catrong/phi-plugin-ill/main/illBlur/${android.net.Uri.encode(songId)}.png"
 
     private companion object {
         const val IMAGE_WIDTH = 2_025
         const val IMAGE_HEIGHT = 963
+        const val CONTENT_SCALE = 1.12f
+        const val CONTENT_CENTER_X = 924.5f
+        const val CONTENT_CENTER_Y = 555.5f
+        const val BLUR_RADIUS = 5
         const val SONG_IMAGE_DIR = "song-images"
         const val CHAPTER_ASSET_DIR = "chapter_backgrounds"
     }
