@@ -64,7 +64,7 @@ try {
 
     & $publishScript `
         -ApkPath $apkSource `
-        -VersionCode 29 `
+        -VersionCode 30 `
         -VersionName 'Pre-0.9.7.3' `
         -PublishedAt '2026-08-04' `
         -InstallRoot $installRoot `
@@ -73,7 +73,7 @@ try {
     $latest = Read-Utf8Json $latestTarget
     $expectedHash = [string] $manifest.files.$apkName
     $actualHash = (Get-FileHash -LiteralPath $publishedApk -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ([int] $latest.versionCode -ne 29 -or [string] $latest.versionName -ne 'Pre-0.9.7.3') {
+    if ([int] $latest.versionCode -ne 30 -or [string] $latest.versionName -ne 'Pre-0.9.7.3') {
         throw 'Published manifest version mismatch.'
     }
     if ([string] $latest.sha256 -ne $expectedHash -or $actualHash -ne $expectedHash) {
