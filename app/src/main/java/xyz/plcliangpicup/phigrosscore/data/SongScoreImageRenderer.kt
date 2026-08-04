@@ -135,7 +135,7 @@ class SongScoreImageRenderer(context: Context) {
             drawCover(canvas, background, RectF(0f, 0f, IMAGE_WIDTH.toFloat(), IMAGE_HEIGHT.toFloat()))
             background.recycle()
         }
-        canvas.drawColor(Color.argb(150, 255, 255, 255), PorterDuff.Mode.SRC_OVER)
+        canvas.drawColor(Color.argb(105, 255, 255, 255), PorterDuff.Mode.SRC_OVER)
         canvas.drawRect(
             0f,
             0f,
