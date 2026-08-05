@@ -2,6 +2,7 @@ package xyz.plcliangpicup.phigrosscore.data
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
@@ -35,36 +36,56 @@ class SongScoreImageRenderer(context: Context) {
     private val chapterAssetNames = lazy {
         appContext.assets.list(CHAPTER_ASSET_DIR).orEmpty().toList()
     }
+    private val gradeIcons by lazy {
+        mapOf(
+            "AP" to BitmapFactory.decodeResource(appContext.resources, R.drawable.grade_ap),
+            "FC" to BitmapFactory.decodeResource(appContext.resources, R.drawable.grade_fc),
+            "V" to BitmapFactory.decodeResource(appContext.resources, R.drawable.grade_v),
+            "S" to BitmapFactory.decodeResource(appContext.resources, R.drawable.grade_s),
+            "A" to BitmapFactory.decodeResource(appContext.resources, R.drawable.grade_a),
+            "B" to BitmapFactory.decodeResource(appContext.resources, R.drawable.grade_b),
+            "C" to BitmapFactory.decodeResource(appContext.resources, R.drawable.grade_c),
+            "F" to BitmapFactory.decodeResource(appContext.resources, R.drawable.grade_f),
+        )
+    }
 
-    fun cachedFile(songId: String): File = File(
+    fun cachedFile(songId: String, style: SongScoreImageStyle): File = File(
         File(appContext.filesDir, SONG_IMAGE_DIR),
-        "${stableKey(songId)}.png",
+        "song-$CACHE_RENDER_VERSION-${style.preferenceValue}-${stableKey(songId)}.png",
     )
 
-    suspend fun render(song: SongScoreResult): File = withContext(Dispatchers.IO) {
+    suspend fun render(song: SongScoreResult, style: SongScoreImageStyle): File = withContext(Dispatchers.IO) {
         val artwork = loadBitmap(
             urls = listOf(illustrationUrl(song.songId), fallbackIllustrationUrl(song.songId)),
             cacheKey = "song-score-art-${song.songId}",
-            width = 1_280,
-            height = 720,
+            width = if (style == SongScoreImageStyle.DEFAULT) MODERN_IMAGE_WIDTH else 1_280,
+            height = if (style == SongScoreImageStyle.DEFAULT) MODERN_IMAGE_HEIGHT else 720,
         )
-        val chapterArtwork = loadChapterArtwork(song.chapter)
+        val chapterArtwork = if (style == SongScoreImageStyle.LEGACY) loadChapterArtwork(song.chapter) else null
 
-        val image = createBitmap(IMAGE_WIDTH, IMAGE_HEIGHT)
+        val image = if (style == SongScoreImageStyle.DEFAULT) {
+            createBitmap(MODERN_IMAGE_WIDTH, MODERN_IMAGE_HEIGHT)
+        } else {
+            createBitmap(IMAGE_WIDTH, IMAGE_HEIGHT)
+        }
         val canvas = Canvas(image)
-        drawBackground(canvas, artwork)
-        canvas.save()
-        canvas.translate(IMAGE_WIDTH / 2f, IMAGE_HEIGHT / 2f)
-        canvas.scale(CONTENT_SCALE, CONTENT_SCALE)
-        canvas.translate(-CONTENT_CENTER_X, -CONTENT_CENTER_Y)
-        drawDesignHeader(canvas, song, chapterArtwork)
-        drawDesignArtwork(canvas, artwork)
-        drawDesignDifficultyRows(canvas, song)
-        canvas.restore()
+        if (style == SongScoreImageStyle.DEFAULT) {
+            drawModernDesign(canvas, song, artwork)
+        } else {
+            drawBackground(canvas, artwork)
+            canvas.save()
+            canvas.translate(IMAGE_WIDTH / 2f, IMAGE_HEIGHT / 2f)
+            canvas.scale(CONTENT_SCALE, CONTENT_SCALE)
+            canvas.translate(-CONTENT_CENTER_X, -CONTENT_CENTER_Y)
+            drawDesignHeader(canvas, song, chapterArtwork)
+            drawDesignArtwork(canvas, artwork)
+            drawDesignDifficultyRows(canvas, song)
+            canvas.restore()
+            drawWatermark(canvas)
+        }
         chapterArtwork?.recycle()
-        drawWatermark(canvas)
 
-        val target = cachedFile(song.songId)
+        val target = cachedFile(song.songId, style)
         target.parentFile?.mkdirs()
         val temporary = File(target.parentFile, "${target.name}.tmp")
         FileOutputStream(temporary).use { output ->
@@ -105,6 +126,276 @@ class SongScoreImageRenderer(context: Context) {
             if (drawable != null) return drawable.bitmap
         }
         return null
+    }
+
+    private fun drawModernDesign(canvas: Canvas, song: SongScoreResult, artwork: Bitmap?) {
+        canvas.drawColor(Color.rgb(25, 25, 28))
+        if (artwork != null) {
+            drawCover(
+                canvas,
+                artwork,
+                RectF(0f, 0f, MODERN_IMAGE_WIDTH.toFloat(), MODERN_IMAGE_HEIGHT.toFloat()),
+            )
+        }
+        canvas.drawColor(Color.argb(MODERN_OVERLAY_ALPHA, 24, 24, 27), PorterDuff.Mode.SRC_OVER)
+
+        drawModernArtwork(canvas, artwork)
+        drawModernSongInfo(canvas, song)
+        drawModernScoreCards(canvas, song)
+        canvas.drawText(
+            "Phi Score Query · ${BuildConfig.VERSION_NAME}",
+            2_490f,
+            1_425f,
+            textPaint(Color.argb(185, 255, 255, 255), 19f).apply { textAlign = Paint.Align.RIGHT },
+        )
+    }
+
+    private fun drawModernArtwork(canvas: Canvas, artwork: Bitmap?) {
+        val destination = RectF(72f, 188f, 1_287f, 872f)
+        val artworkPath = Path().apply { addRoundRect(destination, 72f, 72f, Path.Direction.CW) }
+        canvas.save()
+        canvas.clipPath(artworkPath)
+        if (artwork != null) {
+            drawCover(canvas, artwork, destination)
+        } else {
+            canvas.drawRect(destination, Paint().apply { color = Color.rgb(45, 45, 48) })
+        }
+        canvas.restore()
+        canvas.drawRoundRect(
+            destination,
+            72f,
+            72f,
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeWidth = MODERN_BORDER_WIDTH
+                color = Color.BLACK
+            },
+        )
+    }
+
+    private fun drawModernSongInfo(canvas: Canvas, song: SongScoreResult) {
+        drawTextFit(
+            canvas,
+            song.songName.ifBlank { "Song Name" },
+            94f,
+            990f,
+            1_170f,
+            textPaint(Color.WHITE, 82f),
+        )
+        drawTextFit(
+            canvas,
+            song.composer.ifBlank { "Artist" },
+            94f,
+            1_073f,
+            1_170f,
+            textPaint(Color.WHITE, 47f),
+        )
+
+        val difficulties = buildList {
+            addAll(listOf("EZ", "HD", "IN"))
+            val hasAt = song.charts.any { it.difficulty.equals("AT", ignoreCase = true) } ||
+                song.records.any { it.difficulty.equals("AT", ignoreCase = true) }
+            if (hasAt) add("AT")
+        }
+        val left = 72f
+        val right = 1_287f
+        val gap = 27f
+        val width = (right - left - gap * (difficulties.size - 1)) / difficulties.size
+        difficulties.forEachIndexed { index, difficulty ->
+            val chart = song.charts.firstOrNull { it.difficulty.equals(difficulty, ignoreCase = true) }
+            val record = song.records.firstOrNull { it.difficulty.equals(difficulty, ignoreCase = true) }
+            val constant = record?.chartConstant ?: chart?.chartConstant
+            val card = RectF(
+                left + index * (width + gap),
+                1_110f,
+                left + index * (width + gap) + width,
+                1_252f,
+            )
+            canvas.drawRoundRect(card, 29f, 29f, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.argb(188, 17, 18, 20)
+            })
+            canvas.drawText(
+                difficulty,
+                card.left + 22f,
+                card.top + 43f,
+                textPaint(difficultyColor(difficulty), 34f),
+            )
+            drawTextCenteredFit(
+                canvas,
+                constant?.let { "%.1f".format(Locale.US, it) } ?: "--",
+                RectF(card.left, card.top + 42f, card.right, card.bottom),
+                textPaint(Color.WHITE, 54f),
+                minTextSize = 38f,
+            )
+        }
+    }
+
+    private fun drawModernScoreCards(canvas: Canvas, song: SongScoreResult) {
+        val difficulties = buildList {
+            addAll(listOf("EZ", "HD", "IN"))
+            val hasAt = song.charts.any { it.difficulty.equals("AT", ignoreCase = true) } ||
+                song.records.any { it.difficulty.equals("AT", ignoreCase = true) }
+            if (hasAt) add("AT")
+        }
+        val cardLeft = 1_355f
+        val cardRight = 2_488f
+        val cardHeight = 307f
+        val rowStep = 353f
+        difficulties.forEachIndexed { index, difficulty ->
+            val top = 36f + index * rowStep
+            val bounds = RectF(cardLeft, top, cardRight, top + cardHeight)
+            canvas.drawRoundRect(bounds, 43f, 43f, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.argb(205, 13, 15, 18)
+            })
+            canvas.drawRoundRect(bounds, 43f, 43f, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeWidth = MODERN_BORDER_WIDTH
+                color = Color.BLACK
+            })
+            canvas.drawText(
+                difficulty,
+                bounds.left + 34f,
+                bounds.top + 59f,
+                textPaint(difficultyColor(difficulty), 43f),
+            )
+
+            val record = song.records.firstOrNull { it.difficulty.equals(difficulty, ignoreCase = true) }
+            val chart = song.charts.firstOrNull { it.difficulty.equals(difficulty, ignoreCase = true) }
+            if (record == null) {
+                drawTextCenteredFit(
+                    canvas,
+                    "NO DATA",
+                    bounds,
+                    textPaint(Color.WHITE, 116f),
+                    minTextSize = 82f,
+                    horizontalPadding = 90f,
+                )
+            } else {
+                drawModernScoreData(canvas, bounds, record, chart)
+            }
+        }
+    }
+
+    private fun drawModernScoreData(
+        canvas: Canvas,
+        bounds: RectF,
+        record: SongDifficultyScore,
+        chart: SongChartInfo?,
+    ) {
+        drawTextFit(
+            canvas,
+            record.score.toString(),
+            bounds.left + 34f,
+            bounds.top + 211f,
+            425f,
+            textPaint(Color.WHITE, 91f),
+        )
+
+        val isAllPerfect = record.score >= 1_000_000 || record.accuracy >= 100.0
+        val currentAccuracy = "%.2f%%".format(Locale.US, record.accuracy)
+        val targetAccuracy = record.pushAcc?.takeIf { !isAllPerfect && it > record.accuracy + 0.0001 }
+        if (isAllPerfect) {
+            drawTextCenteredFit(
+                canvas,
+                currentAccuracy,
+                RectF(bounds.left + 440f, bounds.top + 125f, bounds.left + 665f, bounds.top + 245f),
+                textPaint(MODERN_GOLD, 37f),
+                minTextSize = 27f,
+                horizontalPadding = 5f,
+            )
+        } else if (targetAccuracy != null) {
+            drawTextCenteredFit(
+                canvas,
+                currentAccuracy,
+                RectF(bounds.left + 440f, bounds.top + 116f, bounds.left + 665f, bounds.top + 172f),
+                textPaint(Color.WHITE, 29f),
+                minTextSize = 23f,
+                horizontalPadding = 5f,
+            )
+            drawTextCenteredFit(
+                canvas,
+                "→ %.2f%%".format(Locale.US, targetAccuracy),
+                RectF(bounds.left + 430f, bounds.top + 170f, bounds.left + 675f, bounds.top + 238f),
+                textPaint(MODERN_GOLD, 34f),
+                minTextSize = 26f,
+                horizontalPadding = 5f,
+            )
+        } else {
+            drawTextCenteredFit(
+                canvas,
+                currentAccuracy,
+                RectF(bounds.left + 440f, bounds.top + 125f, bounds.left + 665f, bounds.top + 245f),
+                textPaint(Color.WHITE, 34f),
+                minTextSize = 26f,
+                horizontalPadding = 5f,
+            )
+        }
+
+        val grade = gradeFor(record)
+        gradeIcons[grade]?.let { icon ->
+            drawBitmapFit(
+                canvas,
+                icon,
+                RectF(bounds.left + 675f, bounds.top + 103f, bounds.left + 875f, bounds.top + 255f),
+            )
+        }
+
+        val constant = record.chartConstant ?: chart?.chartConstant
+        drawTextCenteredFit(
+            canvas,
+            constant?.let { "%.2f".format(Locale.US, it) } ?: "--",
+            RectF(bounds.left + 900f, bounds.top + 87f, bounds.right - 20f, bounds.top + 150f),
+            textPaint(Color.WHITE, 39f),
+            minTextSize = 29f,
+            horizontalPadding = 4f,
+        )
+        drawTextCenteredFit(
+            canvas,
+            "↓",
+            RectF(bounds.left + 900f, bounds.top + 145f, bounds.right - 20f, bounds.top + 195f),
+            textPaint(Color.WHITE, 35f),
+            minTextSize = 28f,
+            horizontalPadding = 4f,
+        )
+        drawTextCenteredFit(
+            canvas,
+            "%.2f".format(Locale.US, record.rankingScore),
+            RectF(bounds.left + 900f, bounds.top + 190f, bounds.right - 20f, bounds.top + 257f),
+            textPaint(Color.WHITE, 39f),
+            minTextSize = 29f,
+            horizontalPadding = 4f,
+        )
+    }
+
+    private fun gradeFor(record: SongDifficultyScore): String = when {
+        record.score >= 1_000_000 || record.accuracy >= 100.0 -> "AP"
+        record.isFullCombo -> "FC"
+        record.score >= 960_000 -> "V"
+        record.score >= 920_000 -> "S"
+        record.score >= 880_000 -> "A"
+        record.score >= 820_000 -> "B"
+        record.score >= 700_000 -> "C"
+        else -> "F"
+    }
+
+    private fun difficultyColor(difficulty: String): Int = when (difficulty.uppercase(Locale.US)) {
+        "EZ" -> Color.rgb(0, 203, 103)
+        "HD" -> Color.rgb(0, 188, 239)
+        "IN" -> Color.rgb(255, 22, 22)
+        else -> Color.rgb(150, 150, 150)
+    }
+
+    private fun drawBitmapFit(canvas: Canvas, bitmap: Bitmap, bounds: RectF) {
+        val scale = minOf(bounds.width() / bitmap.width, bounds.height() / bitmap.height)
+        val width = bitmap.width * scale
+        val height = bitmap.height * scale
+        val destination = RectF(
+            bounds.centerX() - width / 2f,
+            bounds.centerY() - height / 2f,
+            bounds.centerX() + width / 2f,
+            bounds.centerY() + height / 2f,
+        )
+        canvas.drawBitmap(bitmap, null, destination, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
     }
 
     private fun loadChapterArtwork(chapter: String): Bitmap? {
@@ -433,6 +724,12 @@ class SongScoreImageRenderer(context: Context) {
         "https://raw.githubusercontent.com/Catrong/phi-plugin-ill/main/ill/${android.net.Uri.encode(songId)}.png"
 
     private companion object {
+        const val CACHE_RENDER_VERSION = "v2"
+        const val MODERN_IMAGE_WIDTH = 2_560
+        const val MODERN_IMAGE_HEIGHT = 1_440
+        const val MODERN_OVERLAY_ALPHA = 154
+        const val MODERN_BORDER_WIDTH = 3f
+        val MODERN_GOLD: Int = Color.rgb(255, 191, 0)
         const val IMAGE_WIDTH = 2_025
         const val IMAGE_HEIGHT = 963
         const val CONTENT_SCALE = 1.12f

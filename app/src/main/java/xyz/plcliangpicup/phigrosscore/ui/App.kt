@@ -46,6 +46,7 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -66,6 +67,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -97,6 +99,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Leaderboard
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Refresh
@@ -193,6 +196,7 @@ import xyz.plcliangpicup.phigrosscore.data.LeaderboardEntry
 import xyz.plcliangpicup.phigrosscore.data.ScoreSnapshotEntry
 import xyz.plcliangpicup.phigrosscore.data.SongDifficultyScore
 import xyz.plcliangpicup.phigrosscore.data.SongScoreResult
+import xyz.plcliangpicup.phigrosscore.data.SongScoreImageStyle
 import xyz.plcliangpicup.phigrosscore.data.calculateP30Rks
 import xyz.plcliangpicup.phigrosscore.data.selectBestCharts
 import xyz.plcliangpicup.phigrosscore.data.selectPerfectCharts
@@ -235,6 +239,7 @@ private val navItems = listOf(
     NavItem(AppPage.CONSTANT_TABLE, "定数表", Icons.Default.FormatListNumbered),
     NavItem(AppPage.LEADERBOARD, "排行榜", Icons.Default.Leaderboard),
     NavItem(AppPage.IMAGE, "图片", Icons.Default.Image),
+    NavItem(AppPage.MORE, "更多", Icons.Default.MoreHoriz),
     NavItem(AppPage.SETTINGS, "设置", Icons.Default.Settings),
 )
 
@@ -242,6 +247,15 @@ private const val PROJECT_REPOSITORY_URL = "https://github.com/SanGeDian123/Phi-
 private const val BACKEND_REPOSITORY_URL = "https://github.com/Sczr0/Next-Phi-Backend"
 
 private val changelogEntries = listOf(
+    ChangelogEntry(
+        "Pre-0.9.7.4",
+        "单曲成绩图与动画优化",
+        listOf(
+            "新增并默认启用全新单曲成绩图样式，原样式更名为 Legacy 且可在设置页切换，升级后的旧图片缓存会自动失效。",
+            "左侧导航新增“更多”页面，并以合适的 16:9 比例展示页面装修中的占位内容。",
+            "B30、Best N 与 P30 展开后的谱面成绩统一使用定数表同款自上而下依次展开动画。",
+        ),
+    ),
     ChangelogEntry(
         "Pre-0.9.7.3",
         "单曲成绩图与体验优化",
@@ -605,6 +619,7 @@ fun PhigrosScoreApp(viewModel: AppViewModel) {
                 onNavigationHandleVisibilityChange = viewModel::setShowNavigationHandle,
                 onNavigationHandlePositionChange = viewModel::setNavigationHandlePosition,
                 onB30ImageStyleChange = viewModel::setB30ImageStyle,
+                onSongScoreImageStyleChange = viewModel::setSongScoreImageStyle,
                 onCheckUpdate = { viewModel.checkAppUpdate(silent = false) },
                 onRevealSessionToken = viewModel::revealSessionToken,
                 onHideSessionToken = viewModel::hideSessionToken,
@@ -869,6 +884,7 @@ private fun MainShell(
     onNavigationHandleVisibilityChange: (Boolean) -> Unit,
     onNavigationHandlePositionChange: (Float) -> Unit,
     onB30ImageStyleChange: (B30ImageStyle) -> Unit,
+    onSongScoreImageStyleChange: (SongScoreImageStyle) -> Unit,
     onCheckUpdate: () -> Unit,
     onRevealSessionToken: () -> Unit,
     onHideSessionToken: () -> Unit,
@@ -936,6 +952,7 @@ private fun MainShell(
                     onAutoUpdateChange = onAutoUpdateChange,
                     onNavigationHandleVisibilityChange = onNavigationHandleVisibilityChange,
                     onB30ImageStyleChange = onB30ImageStyleChange,
+                    onSongScoreImageStyleChange = onSongScoreImageStyleChange,
                     onCheckUpdate = onCheckUpdate,
                     onRevealSessionToken = onRevealSessionToken,
                     onHideSessionToken = onHideSessionToken,
@@ -986,6 +1003,7 @@ private fun PageContent(
     onAutoUpdateChange: (Boolean) -> Unit,
     onNavigationHandleVisibilityChange: (Boolean) -> Unit,
     onB30ImageStyleChange: (B30ImageStyle) -> Unit,
+    onSongScoreImageStyleChange: (SongScoreImageStyle) -> Unit,
     onCheckUpdate: () -> Unit,
     onRevealSessionToken: () -> Unit,
     onHideSessionToken: () -> Unit,
@@ -1018,6 +1036,7 @@ private fun PageContent(
                 )
                 AppPage.LEADERBOARD -> LeaderboardPage(state, onRefreshLeaderboard)
                 AppPage.IMAGE -> ImagePage(state, onGenerateImage)
+                AppPage.MORE -> MorePage()
                 AppPage.SETTINGS -> SettingsPage(
                     state = state,
                     onClearCache = onClearCache,
@@ -1026,6 +1045,7 @@ private fun PageContent(
                     onAutoUpdateChange = onAutoUpdateChange,
                     onNavigationHandleVisibilityChange = onNavigationHandleVisibilityChange,
                     onB30ImageStyleChange = onB30ImageStyleChange,
+                    onSongScoreImageStyleChange = onSongScoreImageStyleChange,
                     onCheckUpdate = onCheckUpdate,
                     onRevealSessionToken = onRevealSessionToken,
                     onHideSessionToken = onHideSessionToken,
@@ -1901,15 +1921,23 @@ private fun B30Page(state: AppUiState, onRefresh: () -> Unit) {
                         itemsIndexed(
                             b30PItems,
                             key = { _, item -> "b30-p3-${item.songId}-${item.difficulty}" },
-                        ) { _, item ->
-                            B30Row(item)
+                        ) { index, item ->
+                            AnimatedConstantTableRow(
+                                animationKey = if (b30Expanded) 1 else 0,
+                                rowIndex = index,
+                                rowKey = "b30-p3-${item.songId}-${item.difficulty}",
+                            ) { B30Row(item) }
                         }
                         item(key = "b30-best-label") { SectionLabel("Best 27") }
                         itemsIndexed(
                             b30BestItems,
                             key = { _, item -> "b30-best-${item.songId}-${item.difficulty}" },
-                        ) { _, item ->
-                            B30Row(item)
+                        ) { index, item ->
+                            AnimatedConstantTableRow(
+                                animationKey = if (b30Expanded) 1 else 0,
+                                rowIndex = b30PItems.size + index,
+                                rowKey = "b30-best-${item.songId}-${item.difficulty}",
+                            ) { B30Row(item) }
                         }
                     }
 
@@ -1953,7 +1981,11 @@ private fun B30Page(state: AppUiState, onRefresh: () -> Unit) {
                             bestCharts,
                             key = { index, item -> "best-$index-${item.songId}-${item.difficulty}" },
                         ) { index, item ->
-                            SnapshotRankingRow(index + 1, item, showPushTarget = true)
+                            AnimatedConstantTableRow(
+                                animationKey = if (bestNExpanded) 1 else 0,
+                                rowIndex = index,
+                                rowKey = "best-$index-${item.songId}-${item.difficulty}",
+                            ) { SnapshotRankingRow(index + 1, item, showPushTarget = true) }
                         }
                     }
 
@@ -1982,14 +2014,22 @@ private fun B30Page(state: AppUiState, onRefresh: () -> Unit) {
                                 perfectCharts.take(27),
                                 key = { index, item -> "p30-$index-${item.songId}-${item.difficulty}" },
                             ) { index, item ->
-                                SnapshotRankingRow(index + 1, item)
+                                AnimatedConstantTableRow(
+                                    animationKey = if (p30Expanded) 1 else 0,
+                                    rowIndex = index,
+                                    rowKey = "p30-$index-${item.songId}-${item.difficulty}",
+                                ) { SnapshotRankingRow(index + 1, item) }
                             }
                             if (perfectCharts.size > 27) item(key = "p30-overflow") { OverflowDivider() }
                             itemsIndexed(
                                 perfectCharts.drop(27),
                                 key = { index, item -> "p30-overflow-$index-${item.songId}-${item.difficulty}" },
                             ) { index, item ->
-                                SnapshotRankingRow(index + 28, item)
+                                AnimatedConstantTableRow(
+                                    animationKey = if (p30Expanded) 1 else 0,
+                                    rowIndex = index + 27,
+                                    rowKey = "p30-overflow-$index-${item.songId}-${item.difficulty}",
+                                ) { SnapshotRankingRow(index + 28, item) }
                             }
                         }
                     }
@@ -3099,6 +3139,42 @@ private fun ZoomableB30ImageDialog(
 }
 
 @Composable
+private fun MorePage() {
+    Column(Modifier.fillMaxSize()) {
+        PageHeader("更多")
+        Box(
+            Modifier.fillMaxWidth().weight(1f).padding(horizontal = 20.dp, vertical = 18.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(
+                Modifier.fillMaxWidth().widthIn(max = 900.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Image(
+                    painter = painterResource(R.drawable.more_under_construction),
+                    contentDescription = "页面装修中",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(16f / 9f)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Color.White),
+                )
+                Spacer(Modifier.height(22.dp))
+                Text("页面装修中...", fontSize = 23.sp, fontWeight = FontWeight.Black)
+                Spacer(Modifier.height(7.dp))
+                Text(
+                    "本页面暂未开放，具体开放时间待定。",
+                    color = AppTextMuted,
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun SettingsPage(
     state: AppUiState,
     onClearCache: () -> Unit,
@@ -3107,6 +3183,7 @@ private fun SettingsPage(
     onAutoUpdateChange: (Boolean) -> Unit,
     onNavigationHandleVisibilityChange: (Boolean) -> Unit,
     onB30ImageStyleChange: (B30ImageStyle) -> Unit,
+    onSongScoreImageStyleChange: (SongScoreImageStyle) -> Unit,
     onCheckUpdate: () -> Unit,
     onRevealSessionToken: () -> Unit,
     onHideSessionToken: () -> Unit,
@@ -3122,6 +3199,7 @@ private fun SettingsPage(
             SettingCard(Icons.Default.CheckCircle, "版本", BuildConfig.VERSION_NAME)
             ThemeSetting(state.isDarkTheme, onThemeChange)
             B30ImageStyleSetting(state.b30ImageStyle, onB30ImageStyleChange)
+            SongScoreImageStyleSetting(state.songScoreImageStyle, onSongScoreImageStyleChange)
             AutoRefreshSetting(state.autoRefreshOnLaunch, onAutoRefreshChange)
             AppUpdateSetting(
                 enabled = state.autoCheckAppUpdates,
@@ -3313,6 +3391,37 @@ private fun B30ImageStyleSetting(
                     icon = Icons.Default.Image,
                     selected = style == B30ImageStyle.MINIMAL,
                     onClick = { onStyleChange(B30ImageStyle.MINIMAL) },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SongScoreImageStyleSetting(
+    style: SongScoreImageStyle,
+    onStyleChange: (SongScoreImageStyle) -> Unit,
+) {
+    Card(colors = CardDefaults.cardColors(containerColor = AppSurface), shape = RoundedCornerShape(10.dp)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp)) {
+            Text("单曲成绩图样式", fontWeight = FontWeight.Bold)
+            Row(
+                Modifier.fillMaxWidth().padding(top = 13.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                ThemeChoice(
+                    label = "默认",
+                    icon = Icons.Default.Image,
+                    selected = style == SongScoreImageStyle.DEFAULT,
+                    onClick = { onStyleChange(SongScoreImageStyle.DEFAULT) },
+                    modifier = Modifier.weight(1f),
+                )
+                ThemeChoice(
+                    label = "Legacy",
+                    icon = Icons.Default.History,
+                    selected = style == SongScoreImageStyle.LEGACY,
+                    onClick = { onStyleChange(SongScoreImageStyle.LEGACY) },
                     modifier = Modifier.weight(1f),
                 )
             }

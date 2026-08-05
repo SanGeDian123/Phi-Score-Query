@@ -20,8 +20,8 @@ android {
         applicationId = "xyz.plcliangpicup.phigrosscore"
         minSdk = 26
         targetSdk = 36
-        versionCode = 31
-        versionName = "Pre-0.9.7.3"
+        versionCode = 32
+        versionName = "Pre-0.9.7.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true

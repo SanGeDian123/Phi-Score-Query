@@ -20,6 +20,13 @@ class ModelsTest {
     }
 
     @Test
+    fun `single song image style defaults to new design and preserves legacy selection`() {
+        assertEquals(SongScoreImageStyle.DEFAULT, SongScoreImageStyle.fromPreference(null))
+        assertEquals(SongScoreImageStyle.DEFAULT, SongScoreImageStyle.fromPreference("unknown"))
+        assertEquals(SongScoreImageStyle.LEGACY, SongScoreImageStyle.fromPreference("legacy"))
+    }
+
+    @Test
     fun `push acc hint accepts tagged backend object`() {
         val record = decodeRecord("""{"type":"already_phi"}""")
 

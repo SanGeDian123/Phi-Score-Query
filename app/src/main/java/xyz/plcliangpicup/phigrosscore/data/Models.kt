@@ -29,6 +29,16 @@ enum class B30ImageStyle(val preferenceValue: String) {
     }
 }
 
+enum class SongScoreImageStyle(val preferenceValue: String) {
+    DEFAULT("default"),
+    LEGACY("legacy");
+
+    companion object {
+        fun fromPreference(value: String?): SongScoreImageStyle =
+            entries.firstOrNull { it.preferenceValue == value } ?: DEFAULT
+    }
+}
+
 @Serializable
 data class SessionExchangeResponse(
     val accessToken: String,

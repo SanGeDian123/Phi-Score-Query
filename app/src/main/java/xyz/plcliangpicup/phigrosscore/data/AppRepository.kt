@@ -45,6 +45,8 @@ class AppRepository(
     val showNavigationHandle: Boolean get() = preferences.getBoolean("show_navigation_handle", true)
     val b30ImageStyle: B30ImageStyle
         get() = B30ImageStyle.fromPreference(preferences.getString("b30_image_style", null))
+    val songScoreImageStyle: SongScoreImageStyle
+        get() = SongScoreImageStyle.fromPreference(preferences.getString("song_score_image_style", null))
     val navigationHandlePosition: Float get() = preferences.getFloat("navigation_handle_position", 0.5f)
         .coerceIn(0f, 1f)
     val shouldGenerateFirstLoginB30Image: Boolean
@@ -122,6 +124,10 @@ class AppRepository(
 
     fun setB30ImageStyle(style: B30ImageStyle) {
         preferences.edit().putString("b30_image_style", style.preferenceValue).apply()
+    }
+
+    fun setSongScoreImageStyle(style: SongScoreImageStyle) {
+        preferences.edit().putString("song_score_image_style", style.preferenceValue).apply()
     }
 
     fun setNavigationHandlePosition(position: Float) {
@@ -281,10 +287,11 @@ class AppRepository(
         )
     }
 
-    fun cachedSongImage(songId: String): File = songScoreImageRenderer.cachedFile(songId)
+    fun cachedSongImage(songId: String, style: SongScoreImageStyle): File =
+        songScoreImageRenderer.cachedFile(songId, style)
 
-    suspend fun renderSongScoreImage(song: SongScoreResult): File =
-        songScoreImageRenderer.render(song)
+    suspend fun renderSongScoreImage(song: SongScoreResult, style: SongScoreImageStyle): File =
+        songScoreImageRenderer.render(song, style)
 
     suspend fun deleteCachedSongImages() {
         songScoreImageRenderer.clear()

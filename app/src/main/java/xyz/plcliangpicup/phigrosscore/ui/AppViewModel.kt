@@ -23,9 +23,10 @@ import xyz.plcliangpicup.phigrosscore.data.LoginProgress
 import xyz.plcliangpicup.phigrosscore.data.LeaderboardSnapshot
 import xyz.plcliangpicup.phigrosscore.data.QrCodeCreateResponse
 import xyz.plcliangpicup.phigrosscore.data.SongScoreResult
+import xyz.plcliangpicup.phigrosscore.data.SongScoreImageStyle
 import java.io.File
 
-enum class AppPage { HOME, B30, SONG, CONSTANT_TABLE, LEADERBOARD, IMAGE, SETTINGS }
+enum class AppPage { HOME, B30, SONG, CONSTANT_TABLE, LEADERBOARD, IMAGE, MORE, SETTINGS }
 
 data class AppUiState(
     val isLoggedIn: Boolean = false,
@@ -34,6 +35,7 @@ data class AppUiState(
     val autoCheckAppUpdates: Boolean = true,
     val showNavigationHandle: Boolean = true,
     val b30ImageStyle: B30ImageStyle = B30ImageStyle.CLASSIC,
+    val songScoreImageStyle: SongScoreImageStyle = SongScoreImageStyle.DEFAULT,
     val navigationHandlePosition: Float = 0.5f,
     val hasStoredSessionToken: Boolean = false,
     val revealedSessionToken: String? = null,
@@ -74,6 +76,7 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
             autoCheckAppUpdates = repository.autoCheckAppUpdates,
             showNavigationHandle = repository.showNavigationHandle,
             b30ImageStyle = repository.b30ImageStyle,
+            songScoreImageStyle = repository.songScoreImageStyle,
             navigationHandlePosition = repository.navigationHandlePosition,
             hasStoredSessionToken = repository.hasStoredSessionToken,
             showNavigationGuide = repository.shouldShowNavigationGuide,
@@ -177,6 +180,23 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
             _state.update {
                 it.copy(message = "已切换 B30 成绩图样式，请重新生成图片")
             }
+        }
+    }
+
+    fun setSongScoreImageStyle(style: SongScoreImageStyle) {
+        if (_state.value.songScoreImageStyle == style) return
+        if (_state.value.isGeneratingSongImage) {
+            _state.update { it.copy(message = "单曲成绩图正在生成，请稍后再切换样式") }
+            return
+        }
+        repository.setSongScoreImageStyle(style)
+        _state.update {
+            it.copy(
+                songScoreImageStyle = style,
+                songImageSongId = null,
+                songImageFile = null,
+                message = "已切换单曲成绩图样式，进入曲目后将按需生成",
+            )
         }
     }
 
@@ -542,7 +562,8 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
         repository.songDetail(songId, _state.value.snapshot)
 
     fun ensureSongImage(song: SongScoreResult) {
-        val cached = repository.cachedSongImage(song.songId).takeIf(File::exists)
+        val style = _state.value.songScoreImageStyle
+        val cached = repository.cachedSongImage(song.songId, style).takeIf(File::exists)
         val current = _state.value
         if (current.songImageSongId == song.songId && (current.isGeneratingSongImage || current.songImageFile?.exists() == true)) {
             return
@@ -562,6 +583,7 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
         if (songImageJob?.isActive == true && _state.value.songImageSongId == song.songId) return
         songImageJob?.cancel()
         songImageJob = viewModelScope.launch {
+            val style = _state.value.songScoreImageStyle
             _state.update {
                 it.copy(
                     songImageSongId = song.songId,
@@ -580,7 +602,7 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
                 }
             }
             try {
-                val file = repository.renderSongScoreImage(song)
+                val file = repository.renderSongScoreImage(song, style)
                 _state.update {
                     it.copy(
                         songImageSongId = song.songId,
@@ -593,7 +615,7 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
                 if (error is CancellationException) throw error
                 _state.update {
                     it.copy(
-                        songImageFile = repository.cachedSongImage(song.songId).takeIf(File::exists),
+                        songImageFile = repository.cachedSongImage(song.songId, style).takeIf(File::exists),
                         message = readableError(error),
                     )
                 }
