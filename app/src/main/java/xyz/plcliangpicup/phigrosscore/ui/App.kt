@@ -38,6 +38,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -155,14 +156,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -3140,6 +3147,20 @@ private fun ZoomableB30ImageDialog(
 
 @Composable
 private fun MorePage() {
+    val illustration = ImageBitmap.imageResource(R.drawable.more_under_construction)
+    val lineColor = MaterialTheme.colorScheme.onBackground
+    val lineColorFilter = remember(lineColor) {
+        ColorFilter.colorMatrix(
+            ColorMatrix(
+                floatArrayOf(
+                    0f, 0f, 0f, 0f, lineColor.red * 255f,
+                    0f, 0f, 0f, 0f, lineColor.green * 255f,
+                    0f, 0f, 0f, 0f, lineColor.blue * 255f,
+                    -.299f, -.587f, -.114f, 0f, 255f,
+                ),
+            ),
+        )
+    }
     Column(Modifier.fillMaxSize()) {
         PageHeader("更多")
         Box(
@@ -3150,16 +3171,20 @@ private fun MorePage() {
                 Modifier.fillMaxWidth().widthIn(max = 900.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Image(
-                    painter = painterResource(R.drawable.more_under_construction),
-                    contentDescription = "页面装修中",
-                    contentScale = ContentScale.Fit,
+                Canvas(
                     modifier = Modifier
                         .fillMaxWidth()
                         .aspectRatio(16f / 9f)
                         .clip(RoundedCornerShape(18.dp))
-                        .background(Color.White),
-                )
+                        .background(AppBackground),
+                ) {
+                    drawImage(
+                        image = illustration,
+                        dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()),
+                        colorFilter = lineColorFilter,
+                        filterQuality = FilterQuality.Medium,
+                    )
+                }
                 Spacer(Modifier.height(22.dp))
                 Text("页面装修中...", fontSize = 23.sp, fontWeight = FontWeight.Black)
                 Spacer(Modifier.height(7.dp))

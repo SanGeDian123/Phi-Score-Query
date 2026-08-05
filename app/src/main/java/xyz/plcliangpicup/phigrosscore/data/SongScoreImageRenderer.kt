@@ -255,8 +255,8 @@ class SongScoreImageRenderer(context: Context) {
             canvas.drawText(
                 difficulty,
                 bounds.left + 34f,
-                bounds.top + 59f,
-                textPaint(difficultyColor(difficulty), 43f),
+                bounds.top + 64f,
+                textPaint(difficultyColor(difficulty), 48f),
             )
 
             val record = song.records.firstOrNull { it.difficulty.equals(difficulty, ignoreCase = true) }
@@ -286,9 +286,9 @@ class SongScoreImageRenderer(context: Context) {
             canvas,
             record.score.toString(),
             bounds.left + 34f,
-            bounds.top + 211f,
-            425f,
-            textPaint(Color.WHITE, 91f),
+            bounds.top + 220f,
+            420f,
+            textPaint(Color.WHITE, 103f),
         )
 
         val isAllPerfect = record.score >= 1_000_000 || record.accuracy >= 100.0
@@ -299,8 +299,8 @@ class SongScoreImageRenderer(context: Context) {
                 canvas,
                 currentAccuracy,
                 RectF(bounds.left + 440f, bounds.top + 125f, bounds.left + 665f, bounds.top + 245f),
-                textPaint(MODERN_GOLD, 37f),
-                minTextSize = 27f,
+                textPaint(MODERN_GOLD, 42f),
+                minTextSize = 31f,
                 horizontalPadding = 5f,
             )
         } else if (targetAccuracy != null) {
@@ -308,16 +308,16 @@ class SongScoreImageRenderer(context: Context) {
                 canvas,
                 currentAccuracy,
                 RectF(bounds.left + 440f, bounds.top + 116f, bounds.left + 665f, bounds.top + 172f),
-                textPaint(Color.WHITE, 29f),
-                minTextSize = 23f,
+                textPaint(Color.WHITE, 34f),
+                minTextSize = 27f,
                 horizontalPadding = 5f,
             )
             drawTextCenteredFit(
                 canvas,
                 "→ %.2f%%".format(Locale.US, targetAccuracy),
                 RectF(bounds.left + 430f, bounds.top + 170f, bounds.left + 675f, bounds.top + 238f),
-                textPaint(MODERN_GOLD, 34f),
-                minTextSize = 26f,
+                textPaint(MODERN_GOLD, 39f),
+                minTextSize = 30f,
                 horizontalPadding = 5f,
             )
         } else {
@@ -325,8 +325,8 @@ class SongScoreImageRenderer(context: Context) {
                 canvas,
                 currentAccuracy,
                 RectF(bounds.left + 440f, bounds.top + 125f, bounds.left + 665f, bounds.top + 245f),
-                textPaint(Color.WHITE, 34f),
-                minTextSize = 26f,
+                textPaint(Color.WHITE, 39f),
+                minTextSize = 30f,
                 horizontalPadding = 5f,
             )
         }
@@ -345,24 +345,24 @@ class SongScoreImageRenderer(context: Context) {
             canvas,
             constant?.let { "%.2f".format(Locale.US, it) } ?: "--",
             RectF(bounds.left + 900f, bounds.top + 87f, bounds.right - 20f, bounds.top + 150f),
-            textPaint(Color.WHITE, 39f),
-            minTextSize = 29f,
+            textPaint(Color.WHITE, 44f),
+            minTextSize = 33f,
             horizontalPadding = 4f,
         )
         drawTextCenteredFit(
             canvas,
             "↓",
             RectF(bounds.left + 900f, bounds.top + 145f, bounds.right - 20f, bounds.top + 195f),
-            textPaint(Color.WHITE, 35f),
-            minTextSize = 28f,
+            textPaint(Color.WHITE, 40f),
+            minTextSize = 32f,
             horizontalPadding = 4f,
         )
         drawTextCenteredFit(
             canvas,
             "%.2f".format(Locale.US, record.rankingScore),
             RectF(bounds.left + 900f, bounds.top + 190f, bounds.right - 20f, bounds.top + 257f),
-            textPaint(Color.WHITE, 39f),
-            minTextSize = 29f,
+            textPaint(Color.WHITE, 44f),
+            minTextSize = 33f,
             horizontalPadding = 4f,
         )
     }
@@ -724,7 +724,7 @@ class SongScoreImageRenderer(context: Context) {
         "https://raw.githubusercontent.com/Catrong/phi-plugin-ill/main/ill/${android.net.Uri.encode(songId)}.png"
 
     private companion object {
-        const val CACHE_RENDER_VERSION = "v2"
+        const val CACHE_RENDER_VERSION = "v3"
         const val MODERN_IMAGE_WIDTH = 2_560
         const val MODERN_IMAGE_HEIGHT = 1_440
         const val MODERN_OVERLAY_ALPHA = 154
