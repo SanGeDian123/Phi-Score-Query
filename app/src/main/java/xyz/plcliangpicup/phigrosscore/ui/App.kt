@@ -37,10 +37,13 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
@@ -51,6 +54,7 @@ import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
@@ -162,14 +166,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -664,28 +674,317 @@ fun PhigrosScoreApp(viewModel: AppViewModel) {
                 onInstall = installUpdate,
             )
         }
-    }
-    if (state.showExperienceSurveyPrompt) {
-        AlertDialog(
-            onDismissRequest = viewModel::dismissExperienceSurveyPrompt,
-            icon = { Icon(Icons.Default.RateReview, null, tint = AppAccent) },
-            title = { Text("体验问卷调查") },
-            text = { Text("欢迎填写 Phi Score Query 使用体验调查问卷。") },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        viewModel.dismissExperienceSurveyPrompt()
-                        showExperienceSurvey = true
-                    },
-                ) { Text("填写问卷") }
-            },
-            dismissButton = {
-                TextButton(onClick = viewModel::dismissExperienceSurveyPrompt) { Text("暂不填写") }
+        ExperienceSurveyPrompt(
+            visible = state.showExperienceSurveyPrompt,
+            onDismiss = viewModel::dismissExperienceSurveyPrompt,
+            onConfirm = {
+                viewModel.dismissExperienceSurveyPrompt()
+                showExperienceSurvey = true
             },
         )
     }
     if (showExperienceSurvey) {
         ExperienceSurveyDialog(onDismiss = { showExperienceSurvey = false })
+    }
+}
+
+@Composable
+private fun ExperienceSurveyPrompt(
+    visible: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val paperProgress = remember { Animatable(0f) }
+    val cardProgress by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = tween(durationMillis = if (visible) 260 else 180),
+        label = "survey-card-visibility",
+    )
+    val scrimInteraction = remember { MutableInteractionSource() }
+    val cardInteraction = remember { MutableInteractionSource() }
+
+    LaunchedEffect(visible) {
+        if (visible) {
+            paperProgress.snapTo(0f)
+            delay(130)
+            paperProgress.animateTo(
+                targetValue = 1f,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    stiffness = Spring.StiffnessMediumLow,
+                ),
+            )
+        } else {
+            paperProgress.snapTo(0f)
+        }
+    }
+    BackHandler(enabled = visible, onBack = onDismiss)
+
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(tween(220)),
+        exit = fadeOut(tween(180)),
+    ) {
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = .58f))
+                .clickable(
+                    interactionSource = scrimInteraction,
+                    indication = null,
+                    onClick = onDismiss,
+                )
+                .padding(horizontal = 24.dp, vertical = 20.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            val compactLayout = maxHeight < 620.dp || maxWidth > maxHeight
+            val narrowLayout = maxWidth < 400.dp
+            val modalShape = RoundedCornerShape(if (compactLayout) 28.dp else 34.dp)
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth(.88f)
+                    .widthIn(max = if (compactLayout) 500.dp else 430.dp)
+                    .graphicsLayer {
+                        val scale = .94f + (.06f * cardProgress)
+                        scaleX = scale
+                        scaleY = scale
+                        alpha = cardProgress
+                        transformOrigin = TransformOrigin.Center
+                    }
+                    .clickable(
+                        interactionSource = cardInteraction,
+                        indication = null,
+                        onClick = {},
+                    ),
+                shape = modalShape,
+                colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+                elevation = CardDefaults.cardElevation(defaultElevation = 18.dp),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    Color(0xFFFDFBFF),
+                                    Color(0xFFF7F4FC),
+                                ),
+                            ),
+                        )
+                        .padding(
+                            start = if (compactLayout) 22.dp else 26.dp,
+                            end = if (compactLayout) 22.dp else 26.dp,
+                            top = if (compactLayout) 14.dp else 22.dp,
+                            bottom = if (compactLayout) 18.dp else 24.dp,
+                        ),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    SurveyFolderIllustration(
+                        paperProgress = paperProgress.value,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(if (compactLayout) 190.dp else 258.dp),
+                    )
+                    Spacer(Modifier.height(if (compactLayout) 8.dp else 14.dp))
+                    Text(
+                        text = "体验问卷调查",
+                        color = Color(0xFF101A2D),
+                        fontSize = if (compactLayout) 25.sp else 29.sp,
+                        fontWeight = FontWeight.Black,
+                        textAlign = TextAlign.Center,
+                    )
+                    Spacer(Modifier.height(if (compactLayout) 8.dp else 12.dp))
+                    Text(
+                        text = "点击填写 Phi Score Query 使用体验调查问卷",
+                        color = Color(0xFF52647D),
+                        fontSize = if (compactLayout || narrowLayout) 11.sp else 13.sp,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                    Spacer(Modifier.height(if (compactLayout) 16.dp else 22.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TextButton(
+                            onClick = onDismiss,
+                            modifier = Modifier.weight(1f).height(50.dp),
+                            colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFF0B5E9E)),
+                        ) {
+                            Text("暂不填写", fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                        }
+                        Button(
+                            onClick = onConfirm,
+                            modifier = Modifier.weight(1.25f).height(50.dp),
+                            shape = RoundedCornerShape(26.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF075A9D),
+                                contentColor = Color.White,
+                            ),
+                        ) {
+                            Text("填写问卷", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SurveyFolderIllustration(
+    paperProgress: Float,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier) {
+        val unit = minOf(size.width / 320f, size.height / 250f)
+        val origin = Offset(
+            x = (size.width - 320f * unit) / 2f,
+            y = (size.height - 250f * unit) / 2f,
+        )
+        val progress = paperProgress.coerceIn(0f, 1.12f)
+        val sideProgress = ((progress - .06f) / .94f).coerceIn(0f, 1.08f)
+        val centerProgress = (progress / .92f).coerceIn(0f, 1.1f)
+
+        fun point(x: Float, y: Float) = Offset(origin.x + x * unit, origin.y + y * unit)
+
+        drawRoundRect(
+            color = Color(0xFF0B4888).copy(alpha = .18f),
+            topLeft = point(47f, 111f),
+            size = Size(226f * unit, 126f * unit),
+            cornerRadius = CornerRadius(20f * unit),
+        )
+        drawRoundRect(
+            brush = Brush.linearGradient(
+                colors = listOf(Color(0xFF1598E7), Color(0xFF075AAB)),
+                start = point(48f, 100f),
+                end = point(272f, 220f),
+            ),
+            topLeft = point(47f, 101f),
+            size = Size(226f * unit, 128f * unit),
+            cornerRadius = CornerRadius(19f * unit),
+        )
+
+        drawSurveyPaper(
+            left = origin.x + 70f * unit,
+            top = origin.y + (38f + (1f - sideProgress) * 118f) * unit,
+            width = 105f * unit,
+            height = 139f * unit,
+            rotation = -11f,
+            alpha = sideProgress.coerceIn(0f, 1f),
+            unit = unit,
+        )
+        drawSurveyPaper(
+            left = origin.x + 151f * unit,
+            top = origin.y + (39f + (1f - sideProgress) * 118f) * unit,
+            width = 105f * unit,
+            height = 139f * unit,
+            rotation = 11f,
+            alpha = sideProgress.coerceIn(0f, 1f),
+            unit = unit,
+        )
+        drawSurveyPaper(
+            left = origin.x + 108f * unit,
+            top = origin.y + (21f + (1f - centerProgress) * 125f) * unit,
+            width = 106f * unit,
+            height = 146f * unit,
+            rotation = 0f,
+            alpha = centerProgress.coerceIn(0f, 1f),
+            unit = unit,
+        )
+
+        drawRoundRect(
+            color = Color(0xFF052E68).copy(alpha = .16f),
+            topLeft = point(40f, 141f),
+            size = Size(240f * unit, 104f * unit),
+            cornerRadius = CornerRadius(20f * unit),
+        )
+        drawRoundRect(
+            brush = Brush.linearGradient(
+                colors = listOf(Color(0xFF2B9BEA), Color(0xFF0753A5)),
+                start = point(42f, 132f),
+                end = point(280f, 235f),
+            ),
+            topLeft = point(40f, 132f),
+            size = Size(240f * unit, 104f * unit),
+            cornerRadius = CornerRadius(20f * unit),
+        )
+        drawLine(
+            color = Color.White.copy(alpha = .24f),
+            start = point(57f, 134f),
+            end = point(263f, 134f),
+            strokeWidth = 1.5f * unit,
+            cap = StrokeCap.Round,
+        )
+    }
+}
+
+private fun DrawScope.drawSurveyPaper(
+    left: Float,
+    top: Float,
+    width: Float,
+    height: Float,
+    rotation: Float,
+    alpha: Float,
+    unit: Float,
+) {
+    if (alpha <= 0f) return
+    val pivot = Offset(left + width / 2f, top + height / 2f)
+    rotate(degrees = rotation, pivot = pivot) {
+        drawRoundRect(
+            color = Color(0xFF3C6A9A).copy(alpha = .09f * alpha),
+            topLeft = Offset(left + 3f * unit, top + 5f * unit),
+            size = Size(width, height),
+            cornerRadius = CornerRadius(10f * unit),
+        )
+        drawRoundRect(
+            color = Color.White.copy(alpha = alpha),
+            topLeft = Offset(left, top),
+            size = Size(width, height),
+            cornerRadius = CornerRadius(10f * unit),
+        )
+        val markX = left + 21f * unit
+        val lineStart = left + 36f * unit
+        val lineEnd = left + width - 15f * unit
+        listOf(31f, 58f, 85f).forEachIndexed { index, row ->
+            val y = top + row * unit
+            drawCircle(
+                color = Color(0xFFD8E9FF).copy(alpha = alpha),
+                radius = 7f * unit,
+                center = Offset(markX, y),
+            )
+            if (index < 2) {
+                drawLine(
+                    color = Color(0xFF4B9AF0).copy(alpha = alpha),
+                    start = Offset(markX - 3.5f * unit, y),
+                    end = Offset(markX - .5f * unit, y + 3f * unit),
+                    strokeWidth = 2.2f * unit,
+                    cap = StrokeCap.Round,
+                )
+                drawLine(
+                    color = Color(0xFF4B9AF0).copy(alpha = alpha),
+                    start = Offset(markX - .5f * unit, y + 3f * unit),
+                    end = Offset(markX + 4.5f * unit, y - 4f * unit),
+                    strokeWidth = 2.2f * unit,
+                    cap = StrokeCap.Round,
+                )
+            }
+            drawLine(
+                color = Color(0xFFCFE1F7).copy(alpha = alpha),
+                start = Offset(lineStart, y - 2f * unit),
+                end = Offset(lineEnd, y - 2f * unit),
+                strokeWidth = 4f * unit,
+                cap = StrokeCap.Round,
+            )
+            drawLine(
+                color = Color(0xFFE3EDF9).copy(alpha = alpha),
+                start = Offset(lineStart, y + 6f * unit),
+                end = Offset(lineStart + (lineEnd - lineStart) * .68f, y + 6f * unit),
+                strokeWidth = 3f * unit,
+                cap = StrokeCap.Round,
+            )
+        }
     }
 }
 
