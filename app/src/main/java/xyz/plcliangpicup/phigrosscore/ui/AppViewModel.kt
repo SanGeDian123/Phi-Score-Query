@@ -6,6 +6,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,6 +24,7 @@ import xyz.plcliangpicup.phigrosscore.data.ConstantTableEntry
 import xyz.plcliangpicup.phigrosscore.data.LoginProgress
 import xyz.plcliangpicup.phigrosscore.data.LeaderboardSnapshot
 import xyz.plcliangpicup.phigrosscore.data.QrCodeCreateResponse
+import xyz.plcliangpicup.phigrosscore.data.RankingImageKind
 import xyz.plcliangpicup.phigrosscore.data.SongScoreResult
 import xyz.plcliangpicup.phigrosscore.data.SongScoreImageStyle
 import java.io.File
@@ -44,6 +47,7 @@ data class AppUiState(
     val page: AppPage = AppPage.HOME,
     val snapshot: B30Snapshot? = null,
     val imageFile: File? = null,
+    val p30ImageFile: File? = null,
     val songQuery: String = "",
     val songResults: List<SongScoreResult> = emptyList(),
     val hasSearchedSongs: Boolean = false,
@@ -56,6 +60,9 @@ data class AppUiState(
     val isLeaderboardLoading: Boolean = false,
     val isGeneratingB30Image: Boolean = false,
     val b30ImageGenerationElapsedSeconds: Int = 0,
+    val isGeneratingP30Image: Boolean = false,
+    val p30ImageGenerationElapsedSeconds: Int = 0,
+    val showImagePagerGuide: Boolean = true,
     val showNavigationGuide: Boolean = true,
     val showExperienceSurveyPrompt: Boolean = false,
     val loginProgress: LoginProgress = LoginProgress.Idle,
@@ -82,6 +89,7 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
             hasStoredSessionToken = repository.hasStoredSessionToken,
             showNavigationGuide = repository.shouldShowNavigationGuide,
             showExperienceSurveyPrompt = repository.shouldShowExperienceSurveyPrompt,
+            showImagePagerGuide = repository.shouldShowImagePagerGuide,
             constantTableEntries = repository.constantTableEntries(),
         ),
     )
@@ -91,9 +99,10 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
     private var updateDownloadJob: Job? = null
     private var firstLoginImageJob: Job? = null
     private var imageTimerJob: Job? = null
+    private var p30ImageTimerJob: Job? = null
     private var songImageJob: Job? = null
     private var songImageTimerJob: Job? = null
-    private var generateImageAfterNextRefresh = false
+    private var generateImagePairAfterNextRefresh = false
 
     init {
         if (repository.autoCheckAppUpdates) checkAppUpdate(silent = true)
@@ -118,7 +127,11 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
                 it.copy(
                     snapshot = cached,
                     imageFile = repository.cachedImage.takeIf(File::exists),
+                    p30ImageFile = repository.cachedP30Image.takeIf(File::exists),
                 )
+            }
+            if (repository.hasSession && repository.shouldGenerateInitialImagePair) {
+                generateInitialImagePair()
             }
             if (repository.hasSession && repository.autoRefreshOnLaunch) {
                 refreshB30(showLoading = cached == null)
@@ -141,20 +154,25 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
         _state.update { it.copy(showExperienceSurveyPrompt = false) }
     }
 
+    fun dismissImagePagerGuide() {
+        repository.markImagePagerGuideShown()
+        _state.update { it.copy(showImagePagerGuide = false) }
+    }
+
     fun dismissMessage() = _state.update { it.copy(message = null) }
 
     fun setDarkTheme(enabled: Boolean) {
         if (_state.value.isDarkTheme == enabled) return
-        if (_state.value.isGeneratingB30Image) {
+        if (_state.value.isGeneratingB30Image || _state.value.isGeneratingP30Image) {
             _state.update { it.copy(message = "成绩图正在生成，请稍后再切换主题") }
             return
         }
         repository.setDarkTheme(enabled)
-        _state.update { it.copy(isDarkTheme = enabled, imageFile = null) }
+        _state.update { it.copy(isDarkTheme = enabled, imageFile = null, p30ImageFile = null) }
         viewModelScope.launch {
             runCatching { repository.deleteCachedB30Image() }
             _state.update {
-                it.copy(message = "已切换界面主题，请重新生成对应的 B30 成绩图")
+                it.copy(message = "已切换界面主题，请重新生成 B30 与 P30 成绩图")
             }
         }
     }
@@ -176,16 +194,16 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
 
     fun setB30ImageStyle(style: B30ImageStyle) {
         if (_state.value.b30ImageStyle == style) return
-        if (_state.value.isGeneratingB30Image) {
+        if (_state.value.isGeneratingB30Image || _state.value.isGeneratingP30Image) {
             _state.update { it.copy(message = "成绩图正在生成，请稍后再切换样式") }
             return
         }
         repository.setB30ImageStyle(style)
-        _state.update { it.copy(b30ImageStyle = style, imageFile = null) }
+        _state.update { it.copy(b30ImageStyle = style, imageFile = null, p30ImageFile = null) }
         viewModelScope.launch {
             runCatching { repository.deleteCachedB30Image() }
             _state.update {
-                it.copy(message = "已切换 B30 成绩图样式，请重新生成图片")
+                it.copy(message = "已切换成绩图样式，请重新生成 B30 与 P30 图片")
             }
         }
     }
@@ -324,7 +342,7 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
                             loginProgress = LoginProgress.Idle,
                         )
                     }
-                    generateImageAfterNextRefresh = repository.shouldGenerateFirstLoginB30Image
+                    generateImagePairAfterNextRefresh = repository.shouldGenerateInitialImagePair
                     refreshB30(showLoading = true)
                 }
                 .onFailure { error ->
@@ -365,7 +383,7 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
                         loginProgress = LoginProgress.Idle,
                     )
                 }
-                generateImageAfterNextRefresh = repository.shouldGenerateFirstLoginB30Image
+                generateImagePairAfterNextRefresh = repository.shouldGenerateInitialImagePair
                 refreshB30(showLoading = true)
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
@@ -412,7 +430,7 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
                     _state.update {
                         it.copy(snapshot = snapshot, isLoading = false, isOffline = false)
                     }
-                    if (generateImageAfterNextRefresh) generateFirstLoginImage()
+                    if (generateImagePairAfterNextRefresh) generateInitialImagePair()
                 }
                 .onFailure { error ->
                     val cached = repository.cachedSnapshot()
@@ -460,70 +478,96 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
     fun generateImage() {
         if (_state.value.isGeneratingB30Image) return
         viewModelScope.launch {
-            // Keep the last successful image visible while the next one is rendered.
-            // This avoids a blank page and also preserves the old image on failure.
-            beginImageGeneration(clearDisplayedImage = false)
-            try {
-                val state = _state.value
-                val file = repository.renderB30(state.b30ImageStyle, state.isDarkTheme)
-                _state.update { it.copy(imageFile = file, isOffline = false) }
-            } catch (error: Throwable) {
-                if (error is CancellationException) throw error
-                _state.update {
+            renderRankingImage(RankingImageKind.B30, reportError = true)
+        }
+    }
+
+    fun generateP30Image() {
+        if (_state.value.isGeneratingP30Image) return
+        viewModelScope.launch {
+            renderRankingImage(RankingImageKind.P30, reportError = true)
+        }
+    }
+
+    private fun generateInitialImagePair() {
+        if (!repository.shouldGenerateInitialImagePair || firstLoginImageJob?.isActive == true) return
+        firstLoginImageJob = viewModelScope.launch {
+            val results = listOf(
+                async { renderRankingImage(RankingImageKind.B30, reportError = false) },
+                async { renderRankingImage(RankingImageKind.P30, reportError = false) },
+            ).awaitAll()
+            if (results.all { it }) {
+                repository.markInitialImagePairGenerated()
+                generateImagePairAfterNextRefresh = false
+            }
+        }
+    }
+
+    private suspend fun renderRankingImage(kind: RankingImageKind, reportError: Boolean): Boolean {
+        beginImageGeneration(kind)
+        return try {
+            val state = _state.value
+            val file = repository.renderB30(state.b30ImageStyle, state.isDarkTheme, kind = kind)
+            _state.update {
+                if (kind == RankingImageKind.B30) it.copy(imageFile = file, isOffline = false)
+                else it.copy(p30ImageFile = file, isOffline = false)
+            }
+            true
+        } catch (error: Throwable) {
+            if (error is CancellationException) throw error
+            _state.update {
+                if (kind == RankingImageKind.B30) {
                     it.copy(
                         imageFile = repository.cachedImage.takeIf(File::exists),
-                        message = readableError(error),
+                        message = if (reportError) readableError(error) else it.message,
+                    )
+                } else {
+                    it.copy(
+                        p30ImageFile = repository.cachedP30Image.takeIf(File::exists),
+                        message = if (reportError) readableError(error) else it.message,
                     )
                 }
-            } finally {
-                finishImageGeneration()
             }
+            false
+        } finally {
+            finishImageGeneration(kind)
         }
     }
 
-    private fun generateFirstLoginImage() {
-        if (!generateImageAfterNextRefresh || firstLoginImageJob?.isActive == true) return
-        firstLoginImageJob = viewModelScope.launch {
-            beginImageGeneration(clearDisplayedImage = false)
-            try {
-                val state = _state.value
-                val file = repository.renderB30(state.b30ImageStyle, state.isDarkTheme)
-                repository.markFirstLoginB30ImageGenerated()
-                generateImageAfterNextRefresh = false
-                _state.update { it.copy(imageFile = file, isOffline = false) }
-            } catch (error: Throwable) {
-                if (error is CancellationException) throw error
-                _state.update { it.copy(imageFile = repository.cachedImage.takeIf(File::exists)) }
-            } finally {
-                finishImageGeneration()
-            }
-        }
-    }
-
-    private fun beginImageGeneration(clearDisplayedImage: Boolean) {
-        imageTimerJob?.cancel()
+    private fun beginImageGeneration(kind: RankingImageKind) {
+        val timer = if (kind == RankingImageKind.B30) imageTimerJob else p30ImageTimerJob
+        timer?.cancel()
         _state.update {
-            it.copy(
-                isGeneratingB30Image = true,
-                b30ImageGenerationElapsedSeconds = 0,
-                imageFile = if (clearDisplayedImage) null else it.imageFile,
-                message = null,
-            )
+            if (kind == RankingImageKind.B30) {
+                it.copy(isGeneratingB30Image = true, b30ImageGenerationElapsedSeconds = 0, message = null)
+            } else {
+                it.copy(isGeneratingP30Image = true, p30ImageGenerationElapsedSeconds = 0, message = null)
+            }
         }
         val startedAt = SystemClock.elapsedRealtime()
-        imageTimerJob = viewModelScope.launch {
+        val timerJob = viewModelScope.launch {
             while (isActive) {
                 val elapsedSeconds = ((SystemClock.elapsedRealtime() - startedAt) / 1_000L).toInt()
-                _state.update { it.copy(b30ImageGenerationElapsedSeconds = elapsedSeconds) }
+                _state.update {
+                    if (kind == RankingImageKind.B30) it.copy(b30ImageGenerationElapsedSeconds = elapsedSeconds)
+                    else it.copy(p30ImageGenerationElapsedSeconds = elapsedSeconds)
+                }
                 delay(250)
             }
         }
+        if (kind == RankingImageKind.B30) imageTimerJob = timerJob else p30ImageTimerJob = timerJob
     }
 
-    private fun finishImageGeneration() {
-        imageTimerJob?.cancel()
-        imageTimerJob = null
-        _state.update { it.copy(isGeneratingB30Image = false) }
+    private fun finishImageGeneration(kind: RankingImageKind) {
+        if (kind == RankingImageKind.B30) {
+            imageTimerJob?.cancel()
+            imageTimerJob = null
+            _state.update { it.copy(isGeneratingB30Image = false) }
+        } else {
+            p30ImageTimerJob?.cancel()
+            p30ImageTimerJob = null
+            _state.update { it.copy(isGeneratingP30Image = false) }
+        }
     }
 
     fun searchSong(query: String) {
@@ -641,6 +685,9 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
                 it.copy(
                     snapshot = null,
                     imageFile = null,
+                    p30ImageFile = null,
+                    isGeneratingB30Image = false,
+                    isGeneratingP30Image = false,
                     songImageSongId = null,
                     songImageFile = null,
                     isGeneratingSongImage = false,
@@ -658,6 +705,7 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
         qrJob?.cancel()
         firstLoginImageJob?.cancel()
         imageTimerJob?.cancel()
+        p30ImageTimerJob?.cancel()
         songImageJob?.cancel()
         songImageTimerJob?.cancel()
         viewModelScope.launch {
@@ -672,6 +720,7 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
                 navigationHandlePosition = repository.navigationHandlePosition,
                 showNavigationGuide = repository.shouldShowNavigationGuide,
                 showExperienceSurveyPrompt = repository.shouldShowExperienceSurveyPrompt,
+                showImagePagerGuide = repository.shouldShowImagePagerGuide,
                 constantTableEntries = repository.constantTableEntries(),
                 message = "已安全退出登录",
             )

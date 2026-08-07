@@ -14,6 +14,18 @@ pub enum Theme {
     Black,
 }
 
+/// BN 图片采用的成绩筛选口径。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, utoipa::ToSchema, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+#[derive(Default)]
+pub enum BnMode {
+    /// P3 + Best 27。
+    #[default]
+    B30,
+    /// P3 + 最高 27 张 All Perfect。
+    P30,
+}
+
 /// BN 渲染请求体
 #[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -25,6 +37,9 @@ pub struct RenderBnRequest {
     #[schema(example = 30)]
     #[serde(default = "default_n")]
     pub n: u32,
+    /// 图片口径：b30（默认）或 p30。
+    #[serde(default)]
+    pub mode: BnMode,
     /// 渲染主题：white/black（默认 black）
     #[serde(default)]
     pub theme: Theme,

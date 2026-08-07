@@ -49,12 +49,15 @@ class AppRepository(
         get() = SongScoreImageStyle.fromPreference(preferences.getString("song_score_image_style", null))
     val navigationHandlePosition: Float get() = preferences.getFloat("navigation_handle_position", 0.5f)
         .coerceIn(0f, 1f)
-    val shouldGenerateFirstLoginB30Image: Boolean
-        get() = !preferences.getBoolean("first_login_b30_image_generated", false)
+    val shouldGenerateInitialImagePair: Boolean
+        get() = !preferences.getBoolean("initial_image_pair_pre0976_generated", false)
     val shouldShowNavigationGuide: Boolean get() = !preferences.getBoolean("navigation_drawer_guide_shown", false)
     val shouldShowExperienceSurveyPrompt: Boolean
         get() = !preferences.getBoolean("experience_survey_prompt_pre0975_shown", false)
     val cachedImage: File get() = cacheStore.imageFile
+    val cachedP30Image: File get() = cacheStore.p30ImageFile
+    val shouldShowImagePagerGuide: Boolean
+        get() = !preferences.getBoolean("image_pager_guide_pre0976_shown", false)
 
     fun constantTableEntries(): List<ConstantTableEntry> = songCatalog.constantTableEntries()
 
@@ -144,8 +147,12 @@ class AppRepository(
         preferences.edit().putBoolean("experience_survey_prompt_pre0975_shown", true).apply()
     }
 
-    fun markFirstLoginB30ImageGenerated() {
-        preferences.edit().putBoolean("first_login_b30_image_generated", true).apply()
+    fun markInitialImagePairGenerated() {
+        preferences.edit().putBoolean("initial_image_pair_pre0976_generated", true).apply()
+    }
+
+    fun markImagePagerGuideShown() {
+        preferences.edit().putBoolean("image_pager_guide_pre0976_shown", true).apply()
     }
 
     fun storedSessionToken(): String? = sessionStore.readSessionToken()
@@ -287,9 +294,11 @@ class AppRepository(
         style: B30ImageStyle,
         isDarkTheme: Boolean,
         width: Int = 1440,
+        kind: RankingImageKind = RankingImageKind.B30,
     ): File = authenticatedCall { token ->
         cacheStore.saveImage(
-            api.renderB30(token, width.coerceIn(900, 2400), style, isDarkTheme),
+            api.renderB30(token, width.coerceIn(900, 2400), style, isDarkTheme, kind),
+            kind,
         )
     }
 

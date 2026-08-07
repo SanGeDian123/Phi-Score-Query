@@ -10,7 +10,7 @@ pub(super) struct BnHeaderText {
 pub(super) fn build_bn_header_text(stats: &PlayerStats) -> BnHeaderText {
     let player_name = stats.player_name.as_deref().unwrap_or(DEFAULT_PLAYER_NAME);
     let real_rks = stats.real_rks.unwrap_or(0.0);
-    let player_title = format!("{player_name}({real_rks:.6})");
+    let player_title = format!("{} · {player_name}({real_rks:.6})", stats.image_title);
 
     let ap_text = stats.ap_top_3_avg.map_or_else(
         || "AP Top 3 Avg: N/A".to_string(),

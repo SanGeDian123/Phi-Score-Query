@@ -127,6 +127,7 @@ pub async fn render_bn(
             output.bn_cache_key(
                 user_hash,
                 req.n,
+                req.mode,
                 &updated_for_cache,
                 req.theme,
                 app_version.as_deref(),
@@ -225,6 +226,7 @@ pub async fn render_bn(
                 chart_constants,
                 song_catalog,
                 n,
+                mode: req.mode,
             })
         })
         .await;
@@ -243,6 +245,10 @@ pub async fn render_bn(
     tracing::info!(target: "bestn_performance", "昵称获取完成: {}, 耗时: {:?}ms", display_name, nickname_duration.as_millis());
 
     let stats = PlayerStats {
+        image_title: match req.mode {
+            crate::features::image::BnMode::B30 => "B30".to_string(),
+            crate::features::image::BnMode::P30 => "P30".to_string(),
+        },
         ap_top_3_avg,
         best_27_avg,
         real_rks: Some(exact_rks),

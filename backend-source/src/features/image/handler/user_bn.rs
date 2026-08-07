@@ -148,6 +148,7 @@ pub async fn render_bn_user(
     };
 
     let stats = PlayerStats {
+        image_title: "B30".to_string(),
         ap_top_3_avg,
         best_27_avg,
         real_rks: Some(exact_rks),

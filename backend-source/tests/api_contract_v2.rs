@@ -38,6 +38,7 @@ fn render_bn_request_serializes_as_camel_case() {
     use phi_backend::features::save::models::UnifiedSaveRequest;
 
     let req = RenderBnRequest {
+        mode: phi_backend::features::image::BnMode::B30,
         auth: UnifiedSaveRequest {
             session_token: Some("r:token".to_string()),
             external_credentials: None,

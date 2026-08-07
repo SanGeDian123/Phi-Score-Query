@@ -83,6 +83,8 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -277,6 +279,15 @@ private const val BACKEND_REPOSITORY_URL = "https://github.com/Sczr0/Next-Phi-Ba
 private const val EXPERIENCE_SURVEY_URL = "https://wj.qq.com/s2/27522729/6kti/"
 
 private val changelogEntries = listOf(
+    ChangelogEntry(
+        "Pre-0.9.7.6",
+        "P30 成绩图与体验优化",
+        listOf(
+            "从定数表进入单曲详情后，返回时会保留原来的位置。",
+            "优化 B30、P30 和单曲成绩图的生成速度。",
+            "图片页新增 P30 成绩图，可横向滑动切换 B30 和 P30。",
+        ),
+    ),
     ChangelogEntry(
         "Pre-0.9.7.5",
         "网络重试与体验问卷",
@@ -651,6 +662,8 @@ fun PhigrosScoreApp(viewModel: AppViewModel) {
                 onEnsureSongImage = viewModel::ensureSongImage,
                 onGenerateSongImage = viewModel::generateSongImage,
                 onGenerateImage = viewModel::generateImage,
+                onGenerateP30Image = viewModel::generateP30Image,
+                onDismissImagePagerGuide = viewModel::dismissImagePagerGuide,
                 onClearCache = viewModel::clearCache,
                 onThemeChange = viewModel::setDarkTheme,
                 onAutoRefreshChange = viewModel::setAutoRefreshOnLaunch,
@@ -1258,6 +1271,8 @@ private fun MainShell(
     onEnsureSongImage: (SongScoreResult) -> Unit,
     onGenerateSongImage: (SongScoreResult) -> Unit,
     onGenerateImage: () -> Unit,
+    onGenerateP30Image: () -> Unit,
+    onDismissImagePagerGuide: () -> Unit,
     onClearCache: () -> Unit,
     onThemeChange: (Boolean) -> Unit,
     onAutoRefreshChange: (Boolean) -> Unit,
@@ -1328,6 +1343,8 @@ private fun MainShell(
                     onEnsureSongImage = onEnsureSongImage,
                     onGenerateSongImage = onGenerateSongImage,
                     onGenerateImage = onGenerateImage,
+                    onGenerateP30Image = onGenerateP30Image,
+                    onDismissImagePagerGuide = onDismissImagePagerGuide,
                     onClearCache = onClearCache,
                     onThemeChange = onThemeChange,
                     onAutoRefreshChange = onAutoRefreshChange,
@@ -1380,6 +1397,8 @@ private fun PageContent(
     onEnsureSongImage: (SongScoreResult) -> Unit,
     onGenerateSongImage: (SongScoreResult) -> Unit,
     onGenerateImage: () -> Unit,
+    onGenerateP30Image: () -> Unit,
+    onDismissImagePagerGuide: () -> Unit,
     onClearCache: () -> Unit,
     onThemeChange: (Boolean) -> Unit,
     onAutoRefreshChange: (Boolean) -> Unit,
@@ -1419,7 +1438,12 @@ private fun PageContent(
                     onGenerateSongImage = onGenerateSongImage,
                 )
                 AppPage.LEADERBOARD -> LeaderboardPage(state, onRefreshLeaderboard)
-                AppPage.IMAGE -> ImagePage(state, onGenerateImage)
+                AppPage.IMAGE -> ImagePage(
+                    state = state,
+                    onGenerateB30Image = onGenerateImage,
+                    onGenerateP30Image = onGenerateP30Image,
+                    onDismissGuide = onDismissImagePagerGuide,
+                )
                 AppPage.MORE -> MorePage()
                 AppPage.SETTINGS -> SettingsPage(
                     state = state,
@@ -2596,6 +2620,7 @@ private fun ConstantTablePage(
     var selectedLevel by rememberSaveable { mutableStateOf<Int?>(null) }
     var selectedSong by remember { mutableStateOf<SongScoreResult?>(null) }
     val listState = rememberLazyListState()
+    var lastDisplayedLevel by rememberSaveable { mutableStateOf(selectedLevel) }
     val rows = remember(state.constantTableEntries, selectedLevel) {
         buildConstantTableRows(state.constantTableEntries, selectedLevel)
     }
@@ -2641,7 +2666,10 @@ private fun ConstantTablePage(
             EmptyState("暂无定数资料", "当前曲库中没有该等级的谱面。", {})
         } else {
             LaunchedEffect(selectedLevel) {
-                listState.scrollToItem(0)
+                if (lastDisplayedLevel != selectedLevel) {
+                    listState.scrollToItem(0)
+                    lastDisplayedLevel = selectedLevel
+                }
             }
             LazyColumn(
                 state = listState,
@@ -3347,17 +3375,34 @@ private fun pushAccLabel(pushAcc: Double?, pushAccHint: String?): String? = when
 }
 
 @Composable
-private fun ImagePage(state: AppUiState, onGenerateImage: () -> Unit) {
+private fun ImagePage(
+    state: AppUiState,
+    onGenerateB30Image: () -> Unit,
+    onGenerateP30Image: () -> Unit,
+    onDismissGuide: () -> Unit,
+) {
     val context = LocalContext.current
-    val image = state.imageFile
-    var showImageActions by remember { mutableStateOf(false) }
-    var showZoomedImage by remember(image?.absolutePath, image?.lastModified()) { mutableStateOf(false) }
+    val pagerState = rememberPagerState(pageCount = { 2 })
+    var actionPage by remember { mutableStateOf<Int?>(null) }
+    var zoomPage by remember { mutableStateOf<Int?>(null) }
+    val actionImage = when (actionPage) {
+        0 -> state.imageFile
+        1 -> state.p30ImageFile
+        else -> null
+    }
+    val actionLabel = if (actionPage == 1) "P30" else "B30"
     val saveScope = rememberCoroutineScope()
     val saveCurrentImage: () -> Unit = {
-        image?.takeIf(File::exists)?.let { source ->
+        actionImage?.takeIf(File::exists)?.let { source ->
             saveScope.launch {
                 val result = withContext(Dispatchers.IO) {
-                    runCatching { saveB30ImageToGallery(context, source) }
+                    runCatching {
+                        saveB30ImageToGallery(
+                            context,
+                            source,
+                            "Phi-$actionLabel-${System.currentTimeMillis()}.png",
+                        )
+                    }
                 }
                 Toast.makeText(
                     context,
@@ -3373,71 +3418,81 @@ private fun ImagePage(state: AppUiState, onGenerateImage: () -> Unit) {
         if (granted) saveCurrentImage()
         else Toast.makeText(context, "需要存储权限才能保存到相册", Toast.LENGTH_SHORT).show()
     }
-    Column(Modifier.fillMaxSize()) {
-        PageHeader("B30 图片", "生图可能需要30秒左右时间")
-        Column(
-            Modifier.fillMaxSize().padding(horizontal = 18.dp).verticalScroll(rememberScrollState()),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            if (image?.exists() == true) {
-                AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(image)
-                        .memoryCacheKey("b30-${image.lastModified()}-${image.length()}")
-                        .build(),
-                    contentDescription = "B30 图片",
-                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(AppSurface)
-                        .clickable { showZoomedImage = true },
-                    contentScale = ContentScale.FillWidth,
-                )
-                Text(
-                    "点击图片放大，支持双指缩放和拖动查看",
-                    color = AppTextMuted,
-                    fontSize = 11.sp,
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    textAlign = TextAlign.Center,
-                )
-                Spacer(Modifier.height(16.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(onClick = onGenerateImage, enabled = !state.isGeneratingB30Image) {
-                        Icon(Icons.Default.Refresh, null)
-                        Spacer(Modifier.width(7.dp))
-                        Text(if (state.isGeneratingB30Image) "正在生成" else "重新生成")
-                    }
-                    OutlinedButton(onClick = { showImageActions = true }) {
-                        Icon(Icons.Default.Share, null)
-                        Spacer(Modifier.width(7.dp))
-                        Text("保存或分享")
-                    }
-                }
-            } else if (state.isGeneratingB30Image) {
-                Card(colors = CardDefaults.cardColors(containerColor = AppSurface), shape = RoundedCornerShape(10.dp)) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(18.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
-                        Text(
-                            "正在后台生成 B30 成绩图… · 已用时 ${formatGenerationElapsed(state.b30ImageGenerationElapsedSeconds)}",
-                            modifier = Modifier.padding(start = 12.dp),
-                        )
-                    }
-                }
-            } else {
-                EmptyState("尚未生成图片", "图片包含完整 B30 与曲绘，首次生成可能需要一些时间。", onGenerateImage, "生成 B30 图片")
+
+    LaunchedEffect(state.showImagePagerGuide) {
+        if (state.showImagePagerGuide) {
+            delay(500)
+            if (pagerState.currentPage == 0) {
+                pagerState.animateScrollToPage(1, animationSpec = tween(650))
+                delay(650)
+                pagerState.animateScrollToPage(0, animationSpec = tween(600))
             }
-            Spacer(Modifier.height(24.dp))
+            delay(250)
+            onDismissGuide()
         }
     }
-    if (showImageActions && image?.exists() == true) {
+
+    Column(Modifier.fillMaxSize()) {
+        PageHeader("成绩图片")
+        Box(Modifier.weight(1f)) {
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxSize(),
+            ) { page ->
+                val isP30 = page == 1
+                RankingImagePanel(
+                    label = if (isP30) "P30" else "B30",
+                    image = if (isP30) state.p30ImageFile else state.imageFile,
+                    isGenerating = if (isP30) state.isGeneratingP30Image else state.isGeneratingB30Image,
+                    elapsedSeconds = if (isP30) {
+                        state.p30ImageGenerationElapsedSeconds
+                    } else {
+                        state.b30ImageGenerationElapsedSeconds
+                    },
+                    onGenerate = if (isP30) onGenerateP30Image else onGenerateB30Image,
+                    onZoom = { zoomPage = page },
+                    onActions = { actionPage = page },
+                )
+            }
+            if (state.showImagePagerGuide) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = AppAccent.copy(alpha = .94f)),
+                    shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier.align(Alignment.TopCenter),
+                ) {
+                    Text(
+                        "滑动切换 B30 / P30",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                }
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 14.dp),
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            repeat(2) { page ->
+                Box(
+                    Modifier
+                        .padding(horizontal = 4.dp)
+                        .size(if (pagerState.currentPage == page) 9.dp else 7.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(if (pagerState.currentPage == page) AppAccent else AppTextMuted.copy(alpha = .38f)),
+                )
+            }
+        }
+    }
+    if (actionPage != null && actionImage?.exists() == true) {
         AlertDialog(
-            onDismissRequest = { showImageActions = false },
-            title = { Text("保存或分享 B30 图片") },
+            onDismissRequest = { actionPage = null },
+            title = { Text("保存或分享 $actionLabel 图片") },
             text = { Text("可以直接保存到系统相册，也可以通过系统分享给其他应用。") },
             confirmButton = {
                 Button(
                     onClick = {
-                        showImageActions = false
+                        actionPage = null
                         if (
                             Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
                             ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
@@ -3453,15 +3508,89 @@ private fun ImagePage(state: AppUiState, onGenerateImage: () -> Unit) {
             dismissButton = {
                 TextButton(
                     onClick = {
-                        showImageActions = false
-                        shareImage(context, image)
+                        actionPage = null
+                        shareImage(context, actionImage, "分享 $actionLabel 成绩图")
                     },
                 ) { Text("系统分享") }
             },
         )
     }
-    if (showZoomedImage && image?.exists() == true) {
-        ZoomableB30ImageDialog(image = image, onDismiss = { showZoomedImage = false })
+    val zoomImage = if (zoomPage == 1) state.p30ImageFile else state.imageFile
+    if (zoomPage != null && zoomImage?.exists() == true) {
+        val zoomLabel = if (zoomPage == 1) "P30" else "B30"
+        ZoomableB30ImageDialog(
+            image = zoomImage,
+            onDismiss = { zoomPage = null },
+            contentDescription = "放大的 $zoomLabel 成绩图",
+        )
+    }
+}
+
+@Composable
+private fun RankingImagePanel(
+    label: String,
+    image: File?,
+    isGenerating: Boolean,
+    elapsedSeconds: Int,
+    onGenerate: () -> Unit,
+    onZoom: () -> Unit,
+    onActions: () -> Unit,
+) {
+    val context = LocalContext.current
+    Column(
+        Modifier.fillMaxSize().padding(horizontal = 18.dp).verticalScroll(rememberScrollState()),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(label, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+        Spacer(Modifier.height(12.dp))
+        if (image?.exists() == true) {
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(image)
+                    .memoryCacheKey("ranking-$label-${image.lastModified()}-${image.length()}")
+                    .build(),
+                contentDescription = "$label 图片",
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(AppSurface)
+                    .clickable(onClick = onZoom),
+                contentScale = ContentScale.FillWidth,
+            )
+            Text(
+                "点击放大，支持双指缩放",
+                color = AppTextMuted,
+                fontSize = 11.sp,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(16.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button(onClick = onGenerate, enabled = !isGenerating) {
+                    Icon(Icons.Default.Refresh, null)
+                    Spacer(Modifier.width(7.dp))
+                    Text(if (isGenerating) "正在生成" else "重新生成")
+                }
+                OutlinedButton(onClick = onActions) {
+                    Icon(Icons.Default.Share, null)
+                    Spacer(Modifier.width(7.dp))
+                    Text("保存或分享")
+                }
+            }
+        } else if (isGenerating) {
+            Card(colors = CardDefaults.cardColors(containerColor = AppSurface), shape = RoundedCornerShape(10.dp)) {
+                Row(
+                    Modifier.fillMaxWidth().padding(18.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                    Text(
+                        "正在生成 $label… · ${formatGenerationElapsed(elapsedSeconds)}",
+                        modifier = Modifier.padding(start = 12.dp),
+                    )
+                }
+            }
+        } else {
+            EmptyState("尚未生成 $label", "", onGenerate, "生成 $label 图片")
+        }
+        Spacer(Modifier.height(24.dp))
     }
 }
 
@@ -3848,7 +3977,7 @@ private fun B30ImageStyleSetting(
 ) {
     Card(colors = CardDefaults.cardColors(containerColor = AppSurface), shape = RoundedCornerShape(10.dp)) {
         Column(Modifier.fillMaxWidth().padding(16.dp)) {
-            Text("B30 成绩图样式", fontWeight = FontWeight.Bold)
+            Text("B30 / P30 成绩图样式", fontWeight = FontWeight.Bold)
             Text("切换后需重新生成成绩图", color = AppTextMuted, fontSize = 12.sp)
             Row(
                 Modifier.fillMaxWidth().padding(top = 13.dp),

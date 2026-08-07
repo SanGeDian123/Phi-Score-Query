@@ -158,11 +158,14 @@ class PhiApiClient(
         width: Int,
         style: B30ImageStyle,
         isDarkTheme: Boolean,
+        kind: RankingImageKind = RankingImageKind.B30,
     ): ByteArray {
         val requestBody = buildJsonObject {
             put("n", 27)
+            put("mode", kind.requestValue)
             put("theme", if (isDarkTheme) "black" else "white")
-            put("embedImages", true)
+            // 栅格图可直接读取服务端本地曲绘，避免把 30 张大图先转成 Base64 再解码。
+            put("embedImages", false)
             put("appVersion", BuildConfig.VERSION_NAME)
         }.toString()
         val templateQuery = if (style == B30ImageStyle.MINIMAL) "&template=minimal" else ""

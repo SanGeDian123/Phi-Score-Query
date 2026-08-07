@@ -58,7 +58,8 @@ class SongScoreImageRenderer(context: Context) {
     suspend fun render(song: SongScoreResult, style: SongScoreImageStyle): File = withContext(Dispatchers.IO) {
         val artwork = loadBitmap(
             urls = listOf(illustrationUrl(song.songId), fallbackIllustrationUrl(song.songId)),
-            cacheKey = "song-score-art-${song.songId}",
+            memoryCacheKey = "song-score-art-${song.songId}",
+            diskCacheKey = "illustration-full-${song.songId}",
             width = if (style == SongScoreImageStyle.DEFAULT) MODERN_IMAGE_WIDTH else 1_280,
             height = if (style == SongScoreImageStyle.DEFAULT) MODERN_IMAGE_HEIGHT else 720,
         )
@@ -107,7 +108,8 @@ class SongScoreImageRenderer(context: Context) {
 
     private suspend fun loadBitmap(
         urls: List<String>,
-        cacheKey: String,
+        memoryCacheKey: String,
+        diskCacheKey: String = memoryCacheKey,
         width: Int,
         height: Int,
     ): Bitmap? {
@@ -119,8 +121,8 @@ class SongScoreImageRenderer(context: Context) {
                             .data(url)
                             .size(width, height)
                             .allowHardware(false)
-                            .memoryCacheKey(cacheKey)
-                            .diskCacheKey(cacheKey)
+                            .memoryCacheKey(memoryCacheKey)
+                            .diskCacheKey(diskCacheKey)
                             .build(),
                     )
                 }.getOrNull()

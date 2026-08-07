@@ -119,6 +119,7 @@ mod tests {
     #[test]
     fn write_header_escapes_challenge_rank_text() {
         let stats = PlayerStats {
+            image_title: "B30".to_string(),
             ap_top_3_avg: None,
             best_27_avg: None,
             real_rks: Some(15.123_456),

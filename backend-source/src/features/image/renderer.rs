@@ -59,6 +59,7 @@ mod urls;
 
 #[allow(dead_code)]
 pub struct PlayerStats {
+    pub image_title: String,
     pub ap_top_3_avg: Option<f64>,
     pub best_27_avg: Option<f64>,
     pub real_rks: Option<f64>,

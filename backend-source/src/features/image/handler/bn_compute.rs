@@ -3,7 +3,9 @@ use std::{collections::HashMap, sync::Arc, time::Instant};
 use chrono::{DateTime, Utc};
 
 use crate::{
-    features::image::renderer::RenderRecord, save_contract::ParsedSave, song_contract::SongCatalog,
+    features::image::{BnMode, renderer::RenderRecord},
+    save_contract::ParsedSave,
+    song_contract::SongCatalog,
     startup::chart_loader::ChartConstantsMap,
 };
 
@@ -36,6 +38,7 @@ pub(super) struct BnComputeInput {
     pub(super) chart_constants: Arc<ChartConstantsMap>,
     pub(super) song_catalog: Arc<SongCatalog>,
     pub(super) n: u32,
+    pub(super) mode: BnMode,
 }
 
 pub(super) fn build_bn_compute_output(input: BnComputeInput) -> BnComputeOutput {
@@ -44,6 +47,7 @@ pub(super) fn build_bn_compute_output(input: BnComputeInput) -> BnComputeOutput 
         chart_constants,
         song_catalog,
         n,
+        mode,
     } = input;
 
     let t_flatten = Instant::now();
@@ -87,13 +91,17 @@ pub(super) fn build_bn_compute_output(input: BnComputeInput) -> BnComputeOutput 
     sort_render_records_by_rks_desc(&mut all);
     let sort_duration = t_sort_start.elapsed();
 
-    let top_len = usize_from_u32(n).min(all.len());
+    let selected = select_mode_records(&all, mode);
+    let top_len = usize_from_u32(n).min(selected.len());
     tracing::info!(target: "bestn_performance", "排序完成，目标TopN: {}, 排序耗时: {:?}ms", n, sort_duration.as_millis());
 
     let t_push_start = Instant::now();
     // 预计算推分 ACC（批量求解：避免每谱面重复扫描全量 records）
     let engine_all = build_engine_records_from_render_records(&all);
-    let push_acc_map = calculate_push_acc_map(&all, &engine_all, top_len);
+    let push_acc_map = match mode {
+        BnMode::B30 => calculate_push_acc_map(&all, &engine_all, top_len),
+        BnMode::P30 => HashMap::new(),
+    };
     let push_acc_duration = t_push_start.elapsed();
     tracing::info!(target: "bestn_performance", "推分ACC计算完成，计算数量: {}, 耗时: {:?}ms", push_acc_map.len(), push_acc_duration.as_millis());
 
@@ -101,10 +109,14 @@ pub(super) fn build_bn_compute_output(input: BnComputeInput) -> BnComputeOutput 
     let t_stats_start = Instant::now();
 
     // 统计计算：RKS 详情与平均值
-    let (exact_rks, _rounded) =
+    let (player_rks, _rounded) =
         crate::rks_contract::engine::calculate_player_rks_details(&engine_all);
     let ap_top_3_avg = calculate_ap_top_3_avg(&all);
-    let best_27_avg = calculate_best_27_avg(&all);
+    let best_27_avg = calculate_best_27_avg(&selected);
+    let exact_rks = match mode {
+        BnMode::B30 => player_rks,
+        BnMode::P30 => calculate_p30_rks(&selected),
+    };
     let stats_duration = t_stats_start.elapsed();
     tracing::info!(target: "bestn_performance", "统计数据计算完成，精确RKS: {:?}, AP Top3: {:?}, Best27: {:?}, 耗时: {:?}ms",
                    exact_rks, ap_top_3_avg, best_27_avg, stats_duration.as_millis());
@@ -141,7 +153,7 @@ pub(super) fn build_bn_compute_output(input: BnComputeInput) -> BnComputeOutput 
 
     let ap_top_3_scores = collect_ap_top_3_scores(&all);
 
-    let top: Vec<RenderRecord> = all.drain(..top_len).collect();
+    let top: Vec<RenderRecord> = selected.into_iter().take(top_len).collect();
 
     BnComputeOutput {
         top,
@@ -154,5 +166,65 @@ pub(super) fn build_bn_compute_output(input: BnComputeInput) -> BnComputeOutput 
         data_string,
         update_time,
         flatten_ms,
+    }
+}
+
+fn select_mode_records(records: &[RenderRecord], mode: BnMode) -> Vec<RenderRecord> {
+    match mode {
+        BnMode::B30 => records.to_vec(),
+        BnMode::P30 => records
+            .iter()
+            .filter(|record| record.acc >= 100.0)
+            .cloned()
+            .collect(),
+    }
+}
+
+fn calculate_p30_rks(perfect_records: &[RenderRecord]) -> f64 {
+    let p3_sum = perfect_records
+        .iter()
+        .take(3)
+        .map(|record| record.rks)
+        .sum::<f64>();
+    let b27_sum = perfect_records
+        .iter()
+        .take(27)
+        .map(|record| record.rks)
+        .sum::<f64>();
+    (p3_sum + b27_sum) / 30.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(id: &str, acc: f64, rks: f64) -> RenderRecord {
+        RenderRecord {
+            song_id: id.to_string(),
+            song_name: id.to_string(),
+            difficulty: "IN".to_string(),
+            score: Some(if acc >= 100.0 { 1_000_000.0 } else { 999_999.0 }),
+            acc,
+            rks,
+            difficulty_value: rks,
+            is_fc: true,
+        }
+    }
+
+    #[test]
+    fn p30_uses_only_ap_records_and_repeats_top_three() {
+        let records = vec![
+            record("ap-1", 100.0, 15.0),
+            record("not-ap", 99.9999, 18.0),
+            record("ap-2", 100.0, 12.0),
+            record("ap-3", 100.0, 9.0),
+            record("ap-4", 100.0, 6.0),
+        ];
+
+        let selected = select_mode_records(&records, BnMode::P30);
+
+        assert_eq!(selected.len(), 4);
+        assert!(selected.iter().all(|item| item.acc >= 100.0));
+        assert!((calculate_p30_rks(&selected) - 2.6).abs() < f64::EPSILON);
     }
 }

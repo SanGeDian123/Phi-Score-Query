@@ -121,6 +121,7 @@ fn generate_svg_uses_remote_cover_url_when_base_provided() {
         is_fc: false,
     };
     let stats = PlayerStats {
+        image_title: "B30".to_string(),
         ap_top_3_avg: None,
         best_27_avg: None,
         real_rks: None,
@@ -185,6 +186,7 @@ fn generate_bn_svg_renders_with_external_template() {
         is_fc: true,
     };
     let stats = PlayerStats {
+        image_title: "B30".to_string(),
         ap_top_3_avg: None,
         best_27_avg: Some(12.3456),
         real_rks: Some(12.345_678),
@@ -233,6 +235,7 @@ fn generate_bn_svg_renders_with_minimal_template_and_full_song_name() {
         })
         .collect();
     let stats = PlayerStats {
+        image_title: "B30".to_string(),
         ap_top_3_avg: Some(13.1234),
         best_27_avg: Some(12.3456),
         real_rks: Some(12.345_678),
@@ -291,6 +294,7 @@ fn generate_bn_svg_renders_with_neo_template() {
         is_fc: true,
     };
     let stats = PlayerStats {
+        image_title: "B30".to_string(),
         ap_top_3_avg: None,
         best_27_avg: Some(12.3456),
         real_rks: Some(12.345_678),
@@ -332,6 +336,7 @@ fn generate_bn_svg_renders_with_firstlook_template() {
         is_fc: true,
     };
     let stats = PlayerStats {
+        image_title: "B30".to_string(),
         ap_top_3_avg: None,
         best_27_avg: Some(12.3456),
         real_rks: Some(12.345_678),

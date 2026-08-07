@@ -50,11 +50,12 @@ fn output_cache_spec_normalizes_webp_cache_dimensions() {
         spec.bn_cache_key(
             "u",
             30,
+            crate::features::image::BnMode::B30,
             "updated",
             crate::features::image::Theme::Black,
             None,
         ),
-        "u:bn:30:updated:b:1:custom:webp:720:95:0:0:config"
+        "u:bn:30:b30:updated:b:1:custom:webp:720:95:0:0:config"
     );
     assert_eq!(
         spec.song_cache_key("u", "song-id", "updated"),
@@ -89,11 +90,12 @@ fn output_cache_spec_forces_svg_cache_dimensions() {
         spec.bn_cache_key(
             "u",
             0,
+            crate::features::image::BnMode::B30,
             "updated",
             crate::features::image::Theme::White,
             None,
         ),
-        "u:bn:1:updated:w:0:legacy:svg:0:0:0:0:config"
+        "u:bn:1:b30:updated:w:0:legacy:svg:0:0:0:0:config"
     );
     assert_eq!(
         spec.song_cache_key("u", "song-id", "updated"),
@@ -452,6 +454,7 @@ fn bn_cache_key_is_isolated_by_app_version() {
     let old = spec.bn_cache_key(
         "u",
         27,
+        crate::features::image::BnMode::B30,
         "updated",
         crate::features::image::Theme::White,
         Some("Pre-0.9.6.8"),
@@ -459,6 +462,7 @@ fn bn_cache_key_is_isolated_by_app_version() {
     let fixed = spec.bn_cache_key(
         "u",
         27,
+        crate::features::image::BnMode::B30,
         "updated",
         crate::features::image::Theme::White,
         Some("Pre-0.9.6.9-Fix"),
@@ -466,6 +470,31 @@ fn bn_cache_key_is_isolated_by_app_version() {
 
     assert_ne!(old, fixed);
     assert!(fixed.ends_with(":Pre-0.9.6.9-Fix"));
+}
+
+#[test]
+fn bn_cache_key_is_isolated_by_ranking_mode() {
+    let _ = crate::config::AppConfig::init_global();
+    let spec = ImageOutputCacheSpec::from_query(&ImageQueryOpts::default(), false);
+    let b30 = spec.bn_cache_key(
+        "u",
+        27,
+        crate::features::image::BnMode::B30,
+        "updated",
+        crate::features::image::Theme::Black,
+        None,
+    );
+    let p30 = spec.bn_cache_key(
+        "u",
+        27,
+        crate::features::image::BnMode::P30,
+        "updated",
+        crate::features::image::Theme::Black,
+        None,
+    );
+
+    assert_ne!(b30, p30);
+    assert!(p30.contains(":p30:"));
 }
 
 #[test]

@@ -168,14 +168,19 @@ impl ImageOutputCacheSpec {
         &self,
         user_hash: &str,
         n: u32,
+        mode: crate::features::image::BnMode,
         updated: &str,
         theme: Theme,
         app_version: Option<&str>,
     ) -> String {
         format!(
-            "{}:bn:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+            "{}:bn:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
             user_hash,
             n.max(1),
+            match mode {
+                crate::features::image::BnMode::B30 => "b30",
+                crate::features::image::BnMode::P30 => "p30",
+            },
             updated,
             theme_cache_code(theme),
             i32::from(self.embed_images_effective),

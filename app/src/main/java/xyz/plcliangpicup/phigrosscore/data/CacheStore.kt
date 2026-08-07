@@ -10,6 +10,7 @@ class CacheStore(private val context: Context, private val json: Json) {
     private val snapshotFile = File(context.filesDir, "cache/b30.json")
     private val songCatalogFile = File(context.filesDir, "cache/song-catalog.json")
     val imageFile = File(context.filesDir, "b30/latest.png")
+    val p30ImageFile = File(context.filesDir, "p30/latest.png")
 
     suspend fun saveSnapshot(snapshot: B30Snapshot) = withContext(Dispatchers.IO) {
         snapshotFile.parentFile?.mkdirs()
@@ -45,24 +46,27 @@ class CacheStore(private val context: Context, private val json: Json) {
         }.getOrNull()
     }
 
-    suspend fun saveImage(bytes: ByteArray): File = withContext(Dispatchers.IO) {
-        imageFile.parentFile?.mkdirs()
-        val temp = File(imageFile.parentFile, "latest.tmp")
+    suspend fun saveImage(bytes: ByteArray, kind: RankingImageKind): File = withContext(Dispatchers.IO) {
+        val destination = if (kind == RankingImageKind.B30) imageFile else p30ImageFile
+        destination.parentFile?.mkdirs()
+        val temp = File(destination.parentFile, "latest.tmp")
         temp.writeBytes(bytes)
-        if (!temp.renameTo(imageFile)) {
-            imageFile.writeBytes(bytes)
+        if (!temp.renameTo(destination)) {
+            destination.writeBytes(bytes)
             temp.delete()
         }
-        imageFile
+        destination
     }
 
     suspend fun deleteImage() = withContext(Dispatchers.IO) {
-        val temp = File(imageFile.parentFile, "latest.tmp")
-        if (temp.exists() && !temp.delete()) {
-            throw IllegalStateException("无法删除旧的 B30 临时图片")
-        }
-        if (imageFile.exists() && !imageFile.delete()) {
-            throw IllegalStateException("无法删除旧的 B30 成绩图")
+        listOf(imageFile, p30ImageFile).forEach { destination ->
+            val temp = File(destination.parentFile, "latest.tmp")
+            if (temp.exists() && !temp.delete()) {
+                throw IllegalStateException("无法删除旧的成绩图临时文件")
+            }
+            if (destination.exists() && !destination.delete()) {
+                throw IllegalStateException("无法删除旧的成绩图")
+            }
         }
     }
 
@@ -70,5 +74,6 @@ class CacheStore(private val context: Context, private val json: Json) {
         snapshotFile.delete()
         songCatalogFile.delete()
         imageFile.delete()
+        p30ImageFile.delete()
     }
 }

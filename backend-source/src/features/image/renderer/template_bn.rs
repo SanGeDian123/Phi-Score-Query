@@ -353,7 +353,7 @@ where
             overlay_rgba,
         },
         header: HeaderCtx {
-            title_xml: "B30".to_string(),
+            title_xml: escape_xml(&stats.image_title),
             player_name_xml: escape_xml(
                 stats
                     .player_name
