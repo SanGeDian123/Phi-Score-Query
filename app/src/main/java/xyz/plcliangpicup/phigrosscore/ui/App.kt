@@ -183,16 +183,19 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -675,7 +678,10 @@ fun PhigrosScoreApp(viewModel: AppViewModel) {
             )
         }
         ExperienceSurveyPrompt(
-            visible = state.showExperienceSurveyPrompt,
+            visible = state.isLoggedIn &&
+                state.page == AppPage.HOME &&
+                !state.showNavigationGuide &&
+                state.showExperienceSurveyPrompt,
             onDismiss = viewModel::dismissExperienceSurveyPrompt,
             onConfirm = {
                 viewModel.dismissExperienceSurveyPrompt()
@@ -738,7 +744,6 @@ private fun ExperienceSurveyPrompt(
             contentAlignment = Alignment.Center,
         ) {
             val compactLayout = maxHeight < 620.dp || maxWidth > maxHeight
-            val narrowLayout = maxWidth < 400.dp
             val modalShape = RoundedCornerShape(if (compactLayout) 28.dp else 34.dp)
             Card(
                 modifier = Modifier
@@ -793,14 +798,7 @@ private fun ExperienceSurveyPrompt(
                         textAlign = TextAlign.Center,
                     )
                     Spacer(Modifier.height(if (compactLayout) 8.dp else 12.dp))
-                    Text(
-                        text = "点击填写 Phi Score Query 使用体验调查问卷",
-                        color = Color(0xFF52647D),
-                        fontSize = if (compactLayout || narrowLayout) 11.sp else 13.sp,
-                        textAlign = TextAlign.Center,
-                        maxLines = 1,
-                        softWrap = false,
-                    )
+                    SurveyPromptDescription(compactLayout = compactLayout)
                     Spacer(Modifier.height(if (compactLayout) 16.dp else 22.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -829,6 +827,41 @@ private fun ExperienceSurveyPrompt(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SurveyPromptDescription(compactLayout: Boolean) {
+    val text = "点击填写 Phi Score Query 使用体验调查问卷"
+    val textMeasurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val baseStyle = MaterialTheme.typography.bodyMedium.copy(
+        color = Color(0xFF52647D),
+        textAlign = TextAlign.Center,
+    )
+    BoxWithConstraints(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center,
+    ) {
+        val availableWidthPx = with(density) { maxWidth.roundToPx() } - 4
+        var fittedFontSize = if (compactLayout) 12f else 13f
+        while (fittedFontSize > 8f) {
+            val measuredWidth = textMeasurer.measure(
+                text = AnnotatedString(text),
+                style = baseStyle.copy(fontSize = fittedFontSize.sp),
+                maxLines = 1,
+                softWrap = false,
+            ).size.width
+            if (measuredWidth <= availableWidthPx) break
+            fittedFontSize -= .25f
+        }
+        Text(
+            text = text,
+            style = baseStyle.copy(fontSize = fittedFontSize.sp),
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Clip,
+        )
     }
 }
 
