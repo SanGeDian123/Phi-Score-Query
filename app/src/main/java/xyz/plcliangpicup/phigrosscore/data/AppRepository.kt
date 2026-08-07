@@ -52,6 +52,8 @@ class AppRepository(
     val shouldGenerateFirstLoginB30Image: Boolean
         get() = !preferences.getBoolean("first_login_b30_image_generated", false)
     val shouldShowNavigationGuide: Boolean get() = !preferences.getBoolean("navigation_drawer_guide_shown", false)
+    val shouldShowExperienceSurveyPrompt: Boolean
+        get() = !preferences.getBoolean("experience_survey_prompt_pre0975_shown", false)
     val cachedImage: File get() = cacheStore.imageFile
 
     fun constantTableEntries(): List<ConstantTableEntry> = songCatalog.constantTableEntries()
@@ -136,6 +138,10 @@ class AppRepository(
 
     fun markNavigationGuideShown() {
         preferences.edit().putBoolean("navigation_drawer_guide_shown", true).apply()
+    }
+
+    fun markExperienceSurveyPromptShown() {
+        preferences.edit().putBoolean("experience_survey_prompt_pre0975_shown", true).apply()
     }
 
     fun markFirstLoginB30ImageGenerated() {

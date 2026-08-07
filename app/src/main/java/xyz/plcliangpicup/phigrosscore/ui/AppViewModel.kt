@@ -57,6 +57,7 @@ data class AppUiState(
     val isGeneratingB30Image: Boolean = false,
     val b30ImageGenerationElapsedSeconds: Int = 0,
     val showNavigationGuide: Boolean = true,
+    val showExperienceSurveyPrompt: Boolean = false,
     val loginProgress: LoginProgress = LoginProgress.Idle,
     val availableAppUpdate: AppUpdateManifest? = null,
     val isCheckingAppUpdate: Boolean = false,
@@ -80,6 +81,7 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
             navigationHandlePosition = repository.navigationHandlePosition,
             hasStoredSessionToken = repository.hasStoredSessionToken,
             showNavigationGuide = repository.shouldShowNavigationGuide,
+            showExperienceSurveyPrompt = repository.shouldShowExperienceSurveyPrompt,
             constantTableEntries = repository.constantTableEntries(),
         ),
     )
@@ -132,6 +134,11 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
     fun dismissNavigationGuide() {
         repository.markNavigationGuideShown()
         _state.update { it.copy(showNavigationGuide = false) }
+    }
+
+    fun dismissExperienceSurveyPrompt() {
+        repository.markExperienceSurveyPromptShown()
+        _state.update { it.copy(showExperienceSurveyPrompt = false) }
     }
 
     fun dismissMessage() = _state.update { it.copy(message = null) }
@@ -664,6 +671,7 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
                 b30ImageStyle = repository.b30ImageStyle,
                 navigationHandlePosition = repository.navigationHandlePosition,
                 showNavigationGuide = repository.shouldShowNavigationGuide,
+                showExperienceSurveyPrompt = repository.shouldShowExperienceSurveyPrompt,
                 constantTableEntries = repository.constantTableEntries(),
                 message = "已安全退出登录",
             )

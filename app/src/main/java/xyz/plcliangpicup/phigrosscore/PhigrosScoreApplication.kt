@@ -6,6 +6,8 @@ import coil.ImageLoaderFactory
 import coil.decode.SvgDecoder
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
+import okhttp3.OkHttpClient
+import java.util.concurrent.TimeUnit
 
 class PhigrosScoreApplication : Application(), ImageLoaderFactory {
     override fun newImageLoader(): ImageLoader = ImageLoader.Builder(this)
@@ -23,6 +25,15 @@ class PhigrosScoreApplication : Application(), ImageLoaderFactory {
         .respectCacheHeaders(false)
         .allowRgb565(true)
         .crossfade(120)
+        .okHttpClient {
+            OkHttpClient.Builder()
+                .connectTimeout(15, TimeUnit.SECONDS)
+                .readTimeout(45, TimeUnit.SECONDS)
+                .writeTimeout(30, TimeUnit.SECONDS)
+                .callTimeout(60, TimeUnit.SECONDS)
+                .retryOnConnectionFailure(true)
+                .build()
+        }
         .components { add(SvgDecoder.Factory()) }
         .build()
 }

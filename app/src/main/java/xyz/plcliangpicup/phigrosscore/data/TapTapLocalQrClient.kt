@@ -49,6 +49,7 @@ internal class TapTapLocalQrClient(
         .connectTimeout(12, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(20, TimeUnit.SECONDS)
+        .callTimeout(45, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
         .build()
 
@@ -199,13 +200,24 @@ internal class TapTapLocalQrClient(
     }
 
     private fun execute(request: Request): String {
-        client.newCall(request).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful && body.isBlank()) {
-                throw IOException("上游服务返回 HTTP ${response.code}")
+        var lastError: IOException? = null
+        repeat(NETWORK_ATTEMPTS) { attempt ->
+            try {
+                client.newCall(request).execute().use { response ->
+                    val body = response.body?.string().orEmpty()
+                    if (!response.isSuccessful && body.isBlank()) {
+                        throw IOException("上游服务返回 HTTP ${response.code}")
+                    }
+                    return body
+                }
+            } catch (error: IOException) {
+                lastError = error
+                if (attempt < NETWORK_ATTEMPTS - 1) {
+                    Thread.sleep(if (attempt == 0) 500L else 1_500L)
+                }
             }
-            return body
         }
+        throw IOException("TapTap 网络请求失败，已自动重试 ${NETWORK_ATTEMPTS - 1} 次", lastError)
     }
 
     private fun tapHeaders() = okhttp3.Headers.Builder()
@@ -300,5 +312,6 @@ internal class TapTapLocalQrClient(
         const val LEANCLOUD_APP_ID = "rAK3FfdieFob2Nn8Am"
         const val LEANCLOUD_APP_KEY = "Qr9AEqtuoSVS3zeD6iVbM4ZC0AtkJcQ89tywVyi0"
         val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+        const val NETWORK_ATTEMPTS = 3
     }
 }

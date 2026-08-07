@@ -3,6 +3,7 @@
 package xyz.plcliangpicup.phigrosscore.ui
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.ContentValues
 import android.content.Context
@@ -15,6 +16,10 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.provider.MediaStore
 import android.media.MediaScannerConnection
+import android.webkit.CookieManager
+import android.webkit.WebChromeClient
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -88,6 +93,7 @@ import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Cached
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -103,6 +109,7 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.QrCode2
+import androidx.compose.material.icons.filled.RateReview
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -141,6 +148,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material3.DrawerValue
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
@@ -165,6 +173,7 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.input.pointer.pointerInput
@@ -252,8 +261,17 @@ private val navItems = listOf(
 
 private const val PROJECT_REPOSITORY_URL = "https://github.com/SanGeDian123/Phi-Score-Query"
 private const val BACKEND_REPOSITORY_URL = "https://github.com/Sczr0/Next-Phi-Backend"
+private const val EXPERIENCE_SURVEY_URL = "https://wj.qq.com/s2/27522729/6kti/"
 
 private val changelogEntries = listOf(
+    ChangelogEntry(
+        "Pre-0.9.7.5",
+        "网络重试与体验问卷",
+        listOf(
+            "B30 图片、单曲图片、排行榜及其他联网场景新增无响应超时检测与自动重试，避免请求长时间无结果。",
+            "APP 首次打开会提示体验问卷，设置页新增可随时打开的腾讯问卷入口。",
+        ),
+    ),
     ChangelogEntry(
         "Pre-0.9.7.4",
         "单曲成绩图与动画优化",
@@ -533,6 +551,7 @@ fun PhigrosScoreApp(viewModel: AppViewModel) {
     val appScope = rememberCoroutineScope()
     var lastHomeBackPressAt by rememberSaveable { mutableStateOf(0L) }
     var pendingUpdateInstall by remember { mutableStateOf<File?>(null) }
+    var showExperienceSurvey by rememberSaveable { mutableStateOf(false) }
     val unknownSourcesLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         pendingUpdateInstall?.takeIf(File::exists)?.let { file ->
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || context.packageManager.canRequestPackageInstalls()) {
@@ -627,6 +646,7 @@ fun PhigrosScoreApp(viewModel: AppViewModel) {
                 onNavigationHandlePositionChange = viewModel::setNavigationHandlePosition,
                 onB30ImageStyleChange = viewModel::setB30ImageStyle,
                 onSongScoreImageStyleChange = viewModel::setSongScoreImageStyle,
+                onOpenSurvey = { showExperienceSurvey = true },
                 onCheckUpdate = { viewModel.checkAppUpdate(silent = false) },
                 onRevealSessionToken = viewModel::revealSessionToken,
                 onHideSessionToken = viewModel::hideSessionToken,
@@ -644,6 +664,28 @@ fun PhigrosScoreApp(viewModel: AppViewModel) {
                 onInstall = installUpdate,
             )
         }
+    }
+    if (state.showExperienceSurveyPrompt) {
+        AlertDialog(
+            onDismissRequest = viewModel::dismissExperienceSurveyPrompt,
+            icon = { Icon(Icons.Default.RateReview, null, tint = AppAccent) },
+            title = { Text("体验问卷调查") },
+            text = { Text("欢迎填写 Phi Score Query 使用体验调查问卷。") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.dismissExperienceSurveyPrompt()
+                        showExperienceSurvey = true
+                    },
+                ) { Text("填写问卷") }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::dismissExperienceSurveyPrompt) { Text("暂不填写") }
+            },
+        )
+    }
+    if (showExperienceSurvey) {
+        ExperienceSurveyDialog(onDismiss = { showExperienceSurvey = false })
     }
 }
 
@@ -892,6 +934,7 @@ private fun MainShell(
     onNavigationHandlePositionChange: (Float) -> Unit,
     onB30ImageStyleChange: (B30ImageStyle) -> Unit,
     onSongScoreImageStyleChange: (SongScoreImageStyle) -> Unit,
+    onOpenSurvey: () -> Unit,
     onCheckUpdate: () -> Unit,
     onRevealSessionToken: () -> Unit,
     onHideSessionToken: () -> Unit,
@@ -960,6 +1003,7 @@ private fun MainShell(
                     onNavigationHandleVisibilityChange = onNavigationHandleVisibilityChange,
                     onB30ImageStyleChange = onB30ImageStyleChange,
                     onSongScoreImageStyleChange = onSongScoreImageStyleChange,
+                    onOpenSurvey = onOpenSurvey,
                     onCheckUpdate = onCheckUpdate,
                     onRevealSessionToken = onRevealSessionToken,
                     onHideSessionToken = onHideSessionToken,
@@ -1011,6 +1055,7 @@ private fun PageContent(
     onNavigationHandleVisibilityChange: (Boolean) -> Unit,
     onB30ImageStyleChange: (B30ImageStyle) -> Unit,
     onSongScoreImageStyleChange: (SongScoreImageStyle) -> Unit,
+    onOpenSurvey: () -> Unit,
     onCheckUpdate: () -> Unit,
     onRevealSessionToken: () -> Unit,
     onHideSessionToken: () -> Unit,
@@ -1053,6 +1098,7 @@ private fun PageContent(
                     onNavigationHandleVisibilityChange = onNavigationHandleVisibilityChange,
                     onB30ImageStyleChange = onB30ImageStyleChange,
                     onSongScoreImageStyleChange = onSongScoreImageStyleChange,
+                    onOpenSurvey = onOpenSurvey,
                     onCheckUpdate = onCheckUpdate,
                     onRevealSessionToken = onRevealSessionToken,
                     onHideSessionToken = onHideSessionToken,
@@ -3199,6 +3245,71 @@ private fun MorePage() {
     }
 }
 
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+private fun ExperienceSurveyDialog(onDismiss: () -> Unit) {
+    var webView by remember { mutableStateOf<WebView?>(null) }
+    BackHandler {
+        val current = webView
+        if (current?.canGoBack() == true) current.goBack() else onDismiss()
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            webView?.stopLoading()
+            webView?.destroy()
+            webView = null
+        }
+    }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+        ),
+    ) {
+        Column(
+            Modifier.fillMaxSize()
+                .background(AppBackground)
+                .padding(WindowInsets.safeDrawing.asPaddingValues()),
+        ) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 18.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "Phi Score Query 使用体验调查问卷",
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Black,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Default.Close, "关闭问卷")
+                }
+            }
+            HorizontalDivider(color = AppTextMuted.copy(alpha = .16f))
+            AndroidView(
+                factory = { context ->
+                    WebView(context).apply {
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        settings.allowFileAccess = true
+                        settings.javaScriptCanOpenWindowsAutomatically = false
+                        CookieManager.getInstance().setAcceptCookie(true)
+                        CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                        webViewClient = WebViewClient()
+                        webChromeClient = WebChromeClient()
+                        loadUrl(EXPERIENCE_SURVEY_URL)
+                        webView = this
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().weight(1f),
+            )
+        }
+    }
+}
+
 @Composable
 private fun SettingsPage(
     state: AppUiState,
@@ -3209,6 +3320,7 @@ private fun SettingsPage(
     onNavigationHandleVisibilityChange: (Boolean) -> Unit,
     onB30ImageStyleChange: (B30ImageStyle) -> Unit,
     onSongScoreImageStyleChange: (SongScoreImageStyle) -> Unit,
+    onOpenSurvey: () -> Unit,
     onCheckUpdate: () -> Unit,
     onRevealSessionToken: () -> Unit,
     onHideSessionToken: () -> Unit,
@@ -3253,6 +3365,12 @@ private fun SettingsPage(
                 "关于",
                 "开源许可、项目源码与后端项目",
                 onClick = { showAbout = true },
+            )
+            SettingCard(
+                Icons.Default.RateReview,
+                "体验问卷调查",
+                "Phi Score Query 使用体验调查问卷",
+                onClick = onOpenSurvey,
             )
             OutlinedButton(onClick = onClearCache, modifier = Modifier.fillMaxWidth()) {
                 Icon(Icons.Default.Cached, null)

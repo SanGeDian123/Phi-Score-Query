@@ -20,6 +20,7 @@ import coil.imageLoader
 import coil.request.ImageRequest
 import coil.request.SuccessResult
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import xyz.plcliangpicup.phigrosscore.BuildConfig
 import xyz.plcliangpicup.phigrosscore.R
@@ -111,19 +112,22 @@ class SongScoreImageRenderer(context: Context) {
         height: Int,
     ): Bitmap? {
         urls.forEach { url ->
-            val result = runCatching {
-                imageLoader.execute(
-                    ImageRequest.Builder(appContext)
-                        .data(url)
-                        .size(width, height)
-                        .allowHardware(false)
-                        .memoryCacheKey(cacheKey)
-                        .diskCacheKey(cacheKey)
-                        .build(),
-                )
-            }.getOrNull()
-            val drawable = (result as? SuccessResult)?.drawable as? BitmapDrawable
-            if (drawable != null) return drawable.bitmap
+            repeat(ARTWORK_NETWORK_ATTEMPTS) { attempt ->
+                val result = runCatching {
+                    imageLoader.execute(
+                        ImageRequest.Builder(appContext)
+                            .data(url)
+                            .size(width, height)
+                            .allowHardware(false)
+                            .memoryCacheKey(cacheKey)
+                            .diskCacheKey(cacheKey)
+                            .build(),
+                    )
+                }.getOrNull()
+                val drawable = (result as? SuccessResult)?.drawable as? BitmapDrawable
+                if (drawable != null) return drawable.bitmap
+                if (attempt < ARTWORK_NETWORK_ATTEMPTS - 1) delay(if (attempt == 0) 500L else 1_500L)
+            }
         }
         return null
     }
@@ -725,6 +729,7 @@ class SongScoreImageRenderer(context: Context) {
 
     private companion object {
         const val CACHE_RENDER_VERSION = "v3"
+        const val ARTWORK_NETWORK_ATTEMPTS = 3
         const val MODERN_IMAGE_WIDTH = 2_560
         const val MODERN_IMAGE_HEIGHT = 1_440
         const val MODERN_OVERLAY_ALPHA = 154

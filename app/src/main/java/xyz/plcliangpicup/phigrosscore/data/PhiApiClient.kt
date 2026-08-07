@@ -15,6 +15,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.io.File
 import java.io.IOException
+import java.net.SocketTimeoutException
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
@@ -24,8 +25,9 @@ class PhiApiClient(
 ) {
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(100, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
+        .callTimeout(90, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
         .build()
 
@@ -50,7 +52,6 @@ class PhiApiClient(
             .header("Authorization", "Bearer $accessToken")
             .post("{}".toRequestBody(jsonMediaType))
             .build(),
-        retryNetwork = false,
     )
 
     suspend fun logout(accessToken: String) {
@@ -60,7 +61,6 @@ class PhiApiClient(
                 .header("Authorization", "Bearer $accessToken")
                 .post("{\"scope\":\"current\"}".toRequestBody(jsonMediaType))
                 .build(),
-            retryNetwork = false,
         )
     }
 
@@ -76,7 +76,6 @@ class PhiApiClient(
             .url(url("api/v2/auth/qrcode/$qrId/status"))
             .get()
             .build(),
-        retryNetwork = false,
     )
 
     suspend fun fetchB30(accessToken: String): SaveAndRksResponse = executeJson(
@@ -173,9 +172,6 @@ class PhiApiClient(
                 .header("Authorization", "Bearer $accessToken")
                 .post(requestBody.toRequestBody(jsonMediaType))
                 .build(),
-            // A render timeout must not immediately start a second full render;
-            // the server-side image cache will be used by the user's next tap.
-            retryNetwork = false,
         )
     }
 
@@ -185,7 +181,6 @@ class PhiApiClient(
             .header("Cache-Control", "no-cache")
             .get()
             .build(),
-        retryNetwork = false,
     )
 
     suspend fun downloadAppUpdate(
@@ -205,65 +200,73 @@ class PhiApiClient(
 
         destination.parentFile?.mkdirs()
         val temp = File(destination.parentFile, "${destination.name}.download")
-        temp.delete()
-        try {
-            client.newCall(Request.Builder().url(downloadUrl).get().build()).execute().use { response ->
-                if (!response.isSuccessful) throw ApiException(response.code, "安装包下载失败：HTTP ${response.code}")
-                val finalUrl = response.request.url
-                if (!finalUrl.isHttps || finalUrl.host != base.host) {
-                    throw SecurityException("安装包下载被重定向到非官方服务器")
-                }
-                val body = response.body ?: throw IOException("服务器未返回安装包内容")
-                val totalBytes = body.contentLength()
-                if (totalBytes > 200L * 1024L * 1024L) throw IOException("安装包大小异常")
-                if (update.sizeBytes != null && totalBytes >= 0 && update.sizeBytes != totalBytes) {
-                    throw IOException("安装包大小与更新清单不一致")
-                }
+        var lastError: IOException? = null
+        repeat(MAX_NETWORK_ATTEMPTS) { attempt ->
+            temp.delete()
+            try {
+                client.newCall(Request.Builder().url(downloadUrl).get().build()).execute().use { response ->
+                    if (!response.isSuccessful) throw ApiException(response.code, "安装包下载失败：HTTP ${response.code}")
+                    val finalUrl = response.request.url
+                    if (!finalUrl.isHttps || finalUrl.host != base.host) {
+                        throw SecurityException("安装包下载被重定向到非官方服务器")
+                    }
+                    val body = response.body ?: throw IOException("服务器未返回安装包内容")
+                    val totalBytes = body.contentLength()
+                    if (totalBytes > 200L * 1024L * 1024L) throw IOException("安装包大小异常")
+                    if (update.sizeBytes != null && totalBytes >= 0 && update.sizeBytes != totalBytes) {
+                        throw IOException("安装包大小与更新清单不一致")
+                    }
 
-                val digest = MessageDigest.getInstance("SHA-256")
-                var downloadedBytes = 0L
-                body.byteStream().use { input ->
-                    temp.outputStream().buffered().use { output ->
-                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                        while (true) {
-                            val count = input.read(buffer)
-                            if (count < 0) break
-                            output.write(buffer, 0, count)
-                            digest.update(buffer, 0, count)
-                            downloadedBytes += count
-                            onProgress(downloadedBytes, totalBytes)
+                    val digest = MessageDigest.getInstance("SHA-256")
+                    var downloadedBytes = 0L
+                    onProgress(0L, totalBytes)
+                    body.byteStream().use { input ->
+                        temp.outputStream().buffered().use { output ->
+                            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                            while (true) {
+                                val count = input.read(buffer)
+                                if (count < 0) break
+                                output.write(buffer, 0, count)
+                                digest.update(buffer, 0, count)
+                                downloadedBytes += count
+                                onProgress(downloadedBytes, totalBytes)
+                            }
                         }
                     }
+                    if (update.sizeBytes != null && downloadedBytes != update.sizeBytes) {
+                        throw IOException("安装包下载不完整")
+                    }
+                    val actualHash = digest.digest().joinToString("") { "%02x".format(it) }
+                    if (actualHash != expectedHash) throw SecurityException("安装包 SHA-256 校验失败")
                 }
-                if (update.sizeBytes != null && downloadedBytes != update.sizeBytes) {
-                    throw IOException("安装包下载不完整")
+                destination.delete()
+                if (!temp.renameTo(destination)) {
+                    temp.copyTo(destination, overwrite = true)
+                    temp.delete()
                 }
-                val actualHash = digest.digest().joinToString("") { "%02x".format(it) }
-                if (actualHash != expectedHash) throw SecurityException("安装包 SHA-256 校验失败")
-            }
-            destination.delete()
-            if (!temp.renameTo(destination)) {
-                temp.copyTo(destination, overwrite = true)
+                return@withContext destination
+            } catch (error: IOException) {
                 temp.delete()
+                lastError = error
+                if (attempt < MAX_NETWORK_ATTEMPTS - 1) delay(retryDelay(attempt))
+            } catch (error: Throwable) {
+                temp.delete()
+                throw error
             }
-            destination
-        } catch (error: Throwable) {
-            temp.delete()
-            throw error
         }
+        throw finalNetworkError("安装包下载", lastError)
     }
 
     private fun url(path: String): String = baseUrl.trimEnd('/') + "/" + path.trimStart('/')
 
     private suspend inline fun <reified T> executeJson(
         request: Request,
-        retryNetwork: Boolean = true,
-    ): T = json.decodeFromString(executeBytes(request, retryNetwork).decodeToString())
+    ): T = json.decodeFromString(executeBytes(request).decodeToString())
 
-    private suspend fun executeBytes(request: Request, retryNetwork: Boolean = true): ByteArray =
+    private suspend fun executeBytes(request: Request): ByteArray =
         withContext(Dispatchers.IO) {
             var lastError: IOException? = null
-            val attempts = if (retryNetwork) 3 else 1
+            val attempts = MAX_NETWORK_ATTEMPTS
             repeat(attempts) { attempt ->
                 try {
                     client.newCall(request).execute().use { response ->
@@ -280,9 +283,30 @@ class PhiApiClient(
                     }
                 } catch (error: IOException) {
                     lastError = error
-                    if (attempt < attempts - 1) delay(if (attempt == 0) 600 else 1_800)
+                    if (attempt < attempts - 1) delay(retryDelay(attempt))
                 }
             }
-            throw IOException("无法连接查分服务器，请稍后重试", lastError)
+            throw finalNetworkError("服务器请求", lastError)
         }
+
+    private fun retryDelay(attempt: Int): Long = if (attempt == 0) 600L else 1_800L
+
+    private fun finalNetworkError(operation: String, error: IOException?): IOException {
+        var cause: Throwable? = error
+        var timeout = false
+        while (cause != null) {
+            if (cause is SocketTimeoutException) timeout = true
+            cause = cause.cause
+        }
+        val message = if (timeout) {
+            "${operation}超时，已自动重试 ${MAX_NETWORK_ATTEMPTS - 1} 次，请稍后再试"
+        } else {
+            "${operation}失败，已自动重试 ${MAX_NETWORK_ATTEMPTS - 1} 次，请检查网络后重试"
+        }
+        return IOException(message, error)
+    }
+
+    private companion object {
+        const val MAX_NETWORK_ATTEMPTS = 3
+    }
 }
