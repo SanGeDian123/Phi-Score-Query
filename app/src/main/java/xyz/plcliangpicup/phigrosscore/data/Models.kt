@@ -29,9 +29,9 @@ enum class B30ImageStyle(val preferenceValue: String) {
     }
 }
 
-enum class RankingImageKind(val requestValue: String) {
-    B30("b30"),
-    P30("p30"),
+enum class RankingImageKind {
+    B30,
+    P30,
 }
 
 enum class SongScoreImageStyle(val preferenceValue: String) {

@@ -3,7 +3,7 @@ use std::time::Instant;
 use axum::{
     extract::{Query, State},
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
 };
 use tracing::debug;
 
@@ -11,6 +11,7 @@ use crate::{
     config::AppConfig,
     error::AppError,
     features::image::{
+        BnMode,
         renderer::{self, PlayerStats},
         signing,
         types::RenderBnRequest,
@@ -85,7 +86,7 @@ pub async fn render_bn(
     State(state): State<AppState>,
     Query(q): Query<ImageQueryOpts>,
     request: axum::extract::Request,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Response, AppError> {
     let (mut req, bearer_state) =
         crate::session_auth::parse_json_with_bearer_state::<RenderBnRequest>(request).await?;
     crate::session_auth::merge_auth_from_bearer_if_missing(
@@ -95,6 +96,29 @@ pub async fn render_bn(
     )
     .await?;
 
+    render_ranking_image(state, q, req, bearer_state, BnMode::B30, "/image/bn").await
+}
+
+pub(super) async fn render_ranking_image(
+    state: AppState,
+    q: ImageQueryOpts,
+    req: RenderBnRequest,
+    bearer_state: crate::session_auth::BearerAuthState,
+    mode: BnMode,
+    route: &'static str,
+) -> Result<Response, AppError> {
+    let metric_name = match mode {
+        BnMode::B30 => "bn",
+        BnMode::P30 => "p30",
+    };
+    let cache_hit_event = match mode {
+        BnMode::B30 => "bn_hit",
+        BnMode::P30 => "p30_hit",
+    };
+    let cache_miss_event = match mode {
+        BnMode::B30 => "bn_miss",
+        BnMode::P30 => "p30_miss",
+    };
     // 全流程计时：从请求进入到返回响应
     let t_total = Instant::now();
     // 存档获取耗时（含认证源构造 + 解密）
@@ -127,7 +151,7 @@ pub async fn render_bn(
             output.bn_cache_key(
                 user_hash,
                 req.n,
-                req.mode,
+                mode,
                 &updated_for_cache,
                 req.theme,
                 app_version.as_deref(),
@@ -145,9 +169,9 @@ pub async fn render_bn(
                 let total_ms = duration_ms_i64(t_total.elapsed());
                 track_image_event(
                     h,
-                    "/image/bn",
+                    route,
                     "image_cache",
-                    "bn_hit",
+                    cache_hit_event,
                     Some(total_ms),
                     Some(user_hash.clone()),
                     serde_json::json!({
@@ -173,16 +197,16 @@ pub async fn render_bn(
 
             let total_duration = t_total.elapsed();
             tracing::info!(target: "bestn_performance", "BestN缓存命中完成，总耗时: {:?}ms (缓存命中)", total_duration.as_millis());
-            return Ok((StatusCode::OK, headers, p));
+            return Ok((StatusCode::OK, headers, p).into_response());
         }
         let _cache_duration = Instant::now().elapsed();
         tracing::info!(target: "bestn_performance", "缓存未命中，缓存键: {}", key);
         if let Some(h) = state.stats.as_ref() {
             track_image_event(
                 h,
-                "/image/bn",
+                route,
                 "image_cache",
-                "bn_miss",
+                cache_miss_event,
                 None,
                 Some(user_hash.clone()),
                 serde_json::json!({ "cached": false, "user_kind": user_kind_for_cache.as_deref(), "tpl": output.tpl_code.as_str() }),
@@ -226,7 +250,7 @@ pub async fn render_bn(
                 chart_constants,
                 song_catalog,
                 n,
-                mode: req.mode,
+                mode,
             })
         })
         .await;
@@ -245,7 +269,7 @@ pub async fn render_bn(
     tracing::info!(target: "bestn_performance", "昵称获取完成: {}, 耗时: {:?}ms", display_name, nickname_duration.as_millis());
 
     let stats = PlayerStats {
-        image_title: match req.mode {
+        image_title: match mode {
             crate::features::image::BnMode::B30 => "B30".to_string(),
             crate::features::image::BnMode::P30 => "P30".to_string(),
         },
@@ -350,7 +374,7 @@ pub async fn render_bn(
     if let Some(stats) = state.stats.as_ref() {
         let extra = serde_json::json!({ "bestn_song_ids": bestn_song_ids, "user_kind": user_kind_for_cache.as_deref() });
         stats.track_feature(
-            "bestn",
+            metric_name,
             "generate_image",
             user_hash_for_cache.clone(),
             Some(extra),
@@ -380,9 +404,9 @@ pub async fn render_bn(
         let logic_ms = total_ms.saturating_sub(save_ms).saturating_sub(render_ms);
         track_image_event(
             h,
-            "/image/bn",
+            route,
             "image_render",
-            "bn",
+            metric_name,
             Some(total_ms),
             None,
             serde_json::json!({
@@ -413,5 +437,5 @@ pub async fn render_bn(
             "BestN 渲染耗时统计：total={total_ms}ms, save={save_ms}ms, flatten={flatten_ms}ms, logic={logic_ms}ms, wait={wait_ms}ms, render={render_ms}ms"
         );
     }
-    Ok((StatusCode::OK, headers, bytes))
+    Ok((StatusCode::OK, headers, bytes).into_response())
 }

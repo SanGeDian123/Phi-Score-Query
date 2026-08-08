@@ -10,7 +10,8 @@ class CacheStore(private val context: Context, private val json: Json) {
     private val snapshotFile = File(context.filesDir, "cache/b30.json")
     private val songCatalogFile = File(context.filesDir, "cache/song-catalog.json")
     val imageFile = File(context.filesDir, "b30/latest.png")
-    val p30ImageFile = File(context.filesDir, "p30/latest.png")
+    private val legacyP30ImageFile = File(context.filesDir, "p30/latest.png")
+    val p30ImageFile = File(context.filesDir, "p30/top30-v2.png")
 
     suspend fun saveSnapshot(snapshot: B30Snapshot) = withContext(Dispatchers.IO) {
         snapshotFile.parentFile?.mkdirs()
@@ -49,7 +50,7 @@ class CacheStore(private val context: Context, private val json: Json) {
     suspend fun saveImage(bytes: ByteArray, kind: RankingImageKind): File = withContext(Dispatchers.IO) {
         val destination = if (kind == RankingImageKind.B30) imageFile else p30ImageFile
         destination.parentFile?.mkdirs()
-        val temp = File(destination.parentFile, "latest.tmp")
+        val temp = File(destination.parentFile, "${destination.name}.tmp")
         temp.writeBytes(bytes)
         if (!temp.renameTo(destination)) {
             destination.writeBytes(bytes)
@@ -59,8 +60,8 @@ class CacheStore(private val context: Context, private val json: Json) {
     }
 
     suspend fun deleteImage() = withContext(Dispatchers.IO) {
-        listOf(imageFile, p30ImageFile).forEach { destination ->
-            val temp = File(destination.parentFile, "latest.tmp")
+        listOf(imageFile, p30ImageFile, legacyP30ImageFile).forEach { destination ->
+            val temp = File(destination.parentFile, "${destination.name}.tmp")
             if (temp.exists() && !temp.delete()) {
                 throw IllegalStateException("无法删除旧的成绩图临时文件")
             }
@@ -75,5 +76,6 @@ class CacheStore(private val context: Context, private val json: Json) {
         songCatalogFile.delete()
         imageFile.delete()
         p30ImageFile.delete()
+        legacyP30ImageFile.delete()
     }
 }

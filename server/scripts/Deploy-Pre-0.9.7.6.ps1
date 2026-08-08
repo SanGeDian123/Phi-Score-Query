@@ -11,6 +11,8 @@ if ($installRoot.Length -lt 10) { throw 'InstallRoot path is invalid.' }
 $currentRoot = Join-Path $installRoot 'current'
 $backendTarget = Join-Path $currentRoot 'backend\phi-backend.exe'
 $templateTarget = Join-Path $currentRoot 'backend\resources\templates\image\bn\minimal.svg.jinja'
+$caddyExe = Join-Path $currentRoot 'caddy\caddy.exe'
+$caddyTarget = Join-Path $currentRoot 'caddy\Caddyfile'
 $appUpdateRoot = Join-Path $installRoot 'app-update'
 $latestTarget = Join-Path $appUpdateRoot 'latest.json'
 $manifestPath = Join-Path $bundleRoot 'SHA256SUMS.json'
@@ -20,6 +22,7 @@ $apkSource = Join-Path $bundleRoot $apkName
 $publishedApk = Join-Path $appUpdateRoot $apkName
 $backendSource = Join-Path $bundleRoot 'backend\phi-backend.exe'
 $templateSource = Join-Path $bundleRoot 'backend\resources\templates\image\bn\minimal.svg.jinja'
+$caddySource = Join-Path $bundleRoot 'caddy\Caddyfile'
 $publishScript = Join-Path $bundleRoot 'scripts\Publish-AppUpdate.ps1'
 
 function Read-Utf8Json([string] $Path) {
@@ -32,15 +35,26 @@ foreach ($required in @(
     $apkSource,
     $backendSource,
     $templateSource,
+    $caddySource,
     $publishScript,
     $backendTarget,
-    $templateTarget
+    $templateTarget,
+    $caddyExe,
+    $caddyTarget
 )) {
     if (-not (Test-Path -LiteralPath $required)) { throw "Missing deployment file: $required" }
 }
-if (-not (Get-ScheduledTask -TaskName 'PhigrosScore-Backend' -ErrorAction SilentlyContinue)) {
-    throw 'Missing scheduled task: PhigrosScore-Backend'
+foreach ($taskName in @('PhigrosScore-Backend', 'PhigrosScore-Caddy')) {
+    if (-not (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)) {
+        throw "Missing scheduled task: $taskName"
+    }
 }
+
+$env:APP_LOG_DIR = ($installRoot -replace '\\', '/') + '/logs'
+$env:APP_UPDATE_DIR = ($installRoot -replace '\\', '/') + '/app-update'
+$env:APP_AVATAR_DIR = ($installRoot -replace '\\', '/') + '/avatar'
+& $caddyExe validate --config $caddySource --adapter caddyfile
+if ($LASTEXITCODE -ne 0) { throw 'New Caddy configuration validation failed.' }
 
 $manifest = Read-Utf8Json $manifestPath
 foreach ($entry in $manifest.files.psobject.Properties) {
@@ -63,20 +77,23 @@ $hadLatest = Test-Path -LiteralPath $latestTarget
 $hadNewApk = Test-Path -LiteralPath $publishedApk
 $backupReady = $false
 
-function Wait-BackendTaskStopped {
+function Wait-AppTaskStopped([string] $TaskName) {
     $deadline = (Get-Date).AddSeconds(20)
-    while ((Get-ScheduledTask -TaskName 'PhigrosScore-Backend').State -eq 'Running') {
-        if ((Get-Date) -ge $deadline) { throw 'Timed out waiting for backend task to stop.' }
+    while ((Get-ScheduledTask -TaskName $TaskName).State -eq 'Running') {
+        if ((Get-Date) -ge $deadline) { throw "Timed out waiting for task to stop: $TaskName" }
         Start-Sleep -Milliseconds 250
     }
 }
 
 try {
+    Stop-ScheduledTask -TaskName 'PhigrosScore-Caddy' -ErrorAction SilentlyContinue
     Stop-ScheduledTask -TaskName 'PhigrosScore-Backend' -ErrorAction SilentlyContinue
-    Wait-BackendTaskStopped
+    Wait-AppTaskStopped 'PhigrosScore-Caddy'
+    Wait-AppTaskStopped 'PhigrosScore-Backend'
 
     Copy-Item -LiteralPath $backendTarget -Destination (Join-Path $backupRoot 'phi-backend.exe') -Force
     Copy-Item -LiteralPath $templateTarget -Destination (Join-Path $backupRoot 'minimal.svg.jinja') -Force
+    Copy-Item -LiteralPath $caddyTarget -Destination (Join-Path $backupRoot 'Caddyfile') -Force
     if ($hadLatest) {
         Copy-Item -LiteralPath $latestTarget -Destination (Join-Path $backupUpdateRoot 'latest.json') -Force
         $oldLatest = Read-Utf8Json $latestTarget
@@ -95,6 +112,7 @@ try {
 
     Copy-Item -LiteralPath $backendSource -Destination $backendTarget -Force
     Copy-Item -LiteralPath $templateSource -Destination $templateTarget -Force
+    Copy-Item -LiteralPath $caddySource -Destination $caddyTarget -Force
     Start-ScheduledTask -TaskName 'PhigrosScore-Backend'
 
     $backendReady = $false
@@ -109,11 +127,17 @@ try {
         }
     } until ($backendReady)
 
+    Start-ScheduledTask -TaskName 'PhigrosScore-Caddy'
+    Start-Sleep -Seconds 3
+    if ((Get-ScheduledTask -TaskName 'PhigrosScore-Caddy').State -ne 'Running') {
+        throw 'Caddy task failed to start.'
+    }
+
     & $publishScript `
         -ApkPath $apkSource `
         -VersionCode 34 `
         -VersionName 'Pre-0.9.7.6' `
-        -PublishedAt '2026-08-07' `
+        -PublishedAt '2026-08-08' `
         -InstallRoot $installRoot `
         -Changelog $changelog
 
@@ -130,13 +154,15 @@ try {
     Write-Output 'Pre-0.9.7.6 backend and app update published.'
     Write-Output "Backup: $backupRoot"
     Write-Output "APK SHA256: $actualHash"
-    Write-Output 'Backend restarted and passed local health check; Caddy was not restarted.'
+    Write-Output 'Backend and Caddy restarted; the independent P30 route is enabled.'
 } catch {
+    Stop-ScheduledTask -TaskName 'PhigrosScore-Caddy' -ErrorAction SilentlyContinue
     Stop-ScheduledTask -TaskName 'PhigrosScore-Backend' -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
     if ($backupReady) {
         Copy-Item -LiteralPath (Join-Path $backupRoot 'phi-backend.exe') -Destination $backendTarget -Force
         Copy-Item -LiteralPath (Join-Path $backupRoot 'minimal.svg.jinja') -Destination $templateTarget -Force
+        Copy-Item -LiteralPath (Join-Path $backupRoot 'Caddyfile') -Destination $caddyTarget -Force
         if (Test-Path -LiteralPath $latestTarget) { Remove-Item -LiteralPath $latestTarget -Force }
         if ($hadLatest) {
             Copy-Item -LiteralPath (Join-Path $backupUpdateRoot 'latest.json') -Destination $latestTarget -Force
@@ -147,5 +173,7 @@ try {
         }
     }
     Start-ScheduledTask -TaskName 'PhigrosScore-Backend' -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    Start-ScheduledTask -TaskName 'PhigrosScore-Caddy' -ErrorAction SilentlyContinue
     throw "Pre-0.9.7.6 deployment failed and was rolled back. Original error: $($_.Exception.Message)"
 }

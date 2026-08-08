@@ -51,6 +51,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
@@ -190,6 +192,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.text.AnnotatedString
@@ -237,6 +240,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 private data class NavItem(val page: AppPage, val title: String, val icon: ImageVector)
@@ -1344,6 +1348,7 @@ private fun MainShell(
                     onGenerateSongImage = onGenerateSongImage,
                     onGenerateImage = onGenerateImage,
                     onGenerateP30Image = onGenerateP30Image,
+                    onOpenDrawer = { scope.launch { drawerState.open() } },
                     onDismissImagePagerGuide = onDismissImagePagerGuide,
                     onClearCache = onClearCache,
                     onThemeChange = onThemeChange,
@@ -1398,6 +1403,7 @@ private fun PageContent(
     onGenerateSongImage: (SongScoreResult) -> Unit,
     onGenerateImage: () -> Unit,
     onGenerateP30Image: () -> Unit,
+    onOpenDrawer: () -> Unit,
     onDismissImagePagerGuide: () -> Unit,
     onClearCache: () -> Unit,
     onThemeChange: (Boolean) -> Unit,
@@ -1442,6 +1448,7 @@ private fun PageContent(
                     state = state,
                     onGenerateB30Image = onGenerateImage,
                     onGenerateP30Image = onGenerateP30Image,
+                    onOpenDrawer = onOpenDrawer,
                     onDismissGuide = onDismissImagePagerGuide,
                 )
                 AppPage.MORE -> MorePage()
@@ -1783,8 +1790,10 @@ private fun HomePage(state: AppUiState, onRefresh: () -> Unit, onOpenImage: () -
                 GradeOverview(snapshot)
                 HomeB30ImageSection(
                     image = state.imageFile,
-                    generating = state.isGeneratingB30Image,
-                    elapsedSeconds = state.b30ImageGenerationElapsedSeconds,
+                    generatingB30 = state.isGeneratingB30Image,
+                    generatingP30 = state.isGeneratingP30Image,
+                    b30ElapsedSeconds = state.b30ImageGenerationElapsedSeconds,
+                    p30ElapsedSeconds = state.p30ImageGenerationElapsedSeconds,
                     onOpenImage = onOpenImage,
                 )
                 Spacer(Modifier.height(18.dp))
@@ -1796,11 +1805,23 @@ private fun HomePage(state: AppUiState, onRefresh: () -> Unit, onOpenImage: () -
 @Composable
 private fun HomeB30ImageSection(
     image: File?,
-    generating: Boolean,
-    elapsedSeconds: Int,
+    generatingB30: Boolean,
+    generatingP30: Boolean,
+    b30ElapsedSeconds: Int,
+    p30ElapsedSeconds: Int,
     onOpenImage: () -> Unit,
 ) {
+    val generating = generatingB30 || generatingP30
     if (!generating && image?.exists() != true) return
+    val generatingLabel = when {
+        generatingB30 && generatingP30 -> "B30 和 P30"
+        generatingP30 -> "P30"
+        else -> "B30"
+    }
+    val elapsedSeconds = maxOf(
+        b30ElapsedSeconds.takeIf { generatingB30 } ?: 0,
+        p30ElapsedSeconds.takeIf { generatingP30 } ?: 0,
+    )
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("B30 成绩图", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         if (generating) {
@@ -1811,7 +1832,7 @@ private fun HomeB30ImageSection(
                 ) {
                     CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
                     Text(
-                        "正在后台生成 B30 成绩图… · 已用时 ${formatGenerationElapsed(elapsedSeconds)}",
+                        "正在后台生成 $generatingLabel 成绩图… · 已用时 ${formatGenerationElapsed(elapsedSeconds)}",
                         modifier = Modifier.padding(start = 12.dp),
                     )
                 }
@@ -3379,6 +3400,7 @@ private fun ImagePage(
     state: AppUiState,
     onGenerateB30Image: () -> Unit,
     onGenerateP30Image: () -> Unit,
+    onOpenDrawer: () -> Unit,
     onDismissGuide: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -3392,6 +3414,9 @@ private fun ImagePage(
     }
     val actionLabel = if (actionPage == 1) "P30" else "B30"
     val saveScope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    val drawerSwipeThreshold = with(density) { 56.dp.toPx() }
+    val drawerEdgeWidth = with(density) { 40.dp.toPx() }
     val saveCurrentImage: () -> Unit = {
         actionImage?.takeIf(File::exists)?.let { source ->
             saveScope.launch {
@@ -3434,7 +3459,34 @@ private fun ImagePage(
 
     Column(Modifier.fillMaxSize()) {
         PageHeader("成绩图片")
-        Box(Modifier.weight(1f)) {
+        Box(
+            Modifier
+                .weight(1f)
+                .pointerInput(pagerState, onOpenDrawer, drawerSwipeThreshold, drawerEdgeWidth) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(
+                            requireUnconsumed = false,
+                            pass = PointerEventPass.Initial,
+                        )
+                        val start = down.position
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) break
+                            val delta = change.position - start
+                            if (
+                                (pagerState.currentPage == 0 || start.x <= drawerEdgeWidth) &&
+                                delta.x >= drawerSwipeThreshold &&
+                                delta.x > abs(delta.y) * 1.25f
+                            ) {
+                                change.consume()
+                                onOpenDrawer()
+                                break
+                            }
+                        }
+                    }
+                },
+        ) {
             HorizontalPager(
                 state = pagerState,
                 modifier = Modifier.fillMaxSize(),

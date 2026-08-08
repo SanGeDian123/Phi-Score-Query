@@ -507,7 +507,10 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
         beginImageGeneration(kind)
         return try {
             val state = _state.value
-            val file = repository.renderB30(state.b30ImageStyle, state.isDarkTheme, kind = kind)
+            val file = when (kind) {
+                RankingImageKind.B30 -> repository.renderB30(state.b30ImageStyle, state.isDarkTheme)
+                RankingImageKind.P30 -> repository.renderP30(state.b30ImageStyle, state.isDarkTheme)
+            }
             _state.update {
                 if (kind == RankingImageKind.B30) it.copy(imageFile = file, isOffline = false)
                 else it.copy(p30ImageFile = file, isOffline = false)

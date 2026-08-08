@@ -1,6 +1,6 @@
 # Pre-0.9.7.6 服务器升级包
 
-本包更新 Next-Phi-Backend 图片接口、简约成绩图模板，并发布 Pre-0.9.7.6 签名 Android 客户端与更新清单；不修改或重启 Caddy。
+本包更新 Next-Phi-Backend 图片接口、P30 独立路由、Caddy 配置和简约成绩图模板，并发布 Pre-0.9.7.6 签名 Android 客户端与更新清单。
 
 ## 升级命令
 
@@ -10,7 +10,7 @@
 $d=[Environment]::GetFolderPath('Desktop'); $z=Join-Path $d 'server-upgrade-Pre-0.9.7.6.zip'; $p=Join-Path $d 'server-upgrade-Pre-0.9.7.6'; Expand-Archive -LiteralPath $z -DestinationPath $p -Force; Set-ExecutionPolicy -Scope Process Bypass -Force; & (Join-Path $p 'scripts\Deploy-Pre-0.9.7.6.ps1')
 ```
 
-脚本会校验包内文件，备份当前后端、成绩图模板、更新清单与相关 APK，替换后端并通过本机健康检查后发布 APP；失败时自动回滚。
+脚本会校验包内文件，备份当前后端、Caddy、成绩图模板、更新清单与相关 APK，替换后端并启用 P30 独立接口，通过健康检查后发布 APP；失败时自动回滚。
 
 ## 发布后验证
 

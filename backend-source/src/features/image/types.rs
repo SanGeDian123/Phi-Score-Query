@@ -14,15 +14,12 @@ pub enum Theme {
     Black,
 }
 
-/// BN 图片采用的成绩筛选口径。
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, utoipa::ToSchema, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-#[derive(Default)]
+/// 成绩图内部采用的成绩筛选口径。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BnMode {
     /// P3 + Best 27。
-    #[default]
     B30,
-    /// P3 + 最高 27 张 All Perfect。
+    /// 单曲 RKS 最高的 30 张 All Perfect。
     P30,
 }
 
@@ -37,9 +34,6 @@ pub struct RenderBnRequest {
     #[schema(example = 30)]
     #[serde(default = "default_n")]
     pub n: u32,
-    /// 图片口径：b30（默认）或 p30。
-    #[serde(default)]
-    pub mode: BnMode,
     /// 渲染主题：white/black（默认 black）
     #[serde(default)]
     pub theme: Theme,
@@ -52,6 +46,40 @@ pub struct RenderBnRequest {
     /// 可选：发起生图请求的 APP 版本，用于生成动态版本水印
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app_version: Option<String>,
+}
+
+/// P30 渲染请求体。P30 固定取单曲 RKS 最高的 30 张 All Perfect。
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderP30Request {
+    /// 认证方式（二选一）：sessionToken 或 externalCredentials
+    #[serde(flatten)]
+    pub auth: UnifiedSaveRequest,
+    /// 渲染主题：white/black（默认 black）
+    #[serde(default)]
+    pub theme: Theme,
+    /// 是否将封面等资源内嵌到 PNG（默认为 false）
+    #[serde(default)]
+    pub embed_images: bool,
+    /// 可选：用于显示的玩家昵称
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nickname: Option<String>,
+    /// 可选：发起生图请求的 APP 版本，用于生成动态版本水印
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_version: Option<String>,
+}
+
+impl From<RenderP30Request> for RenderBnRequest {
+    fn from(value: RenderP30Request) -> Self {
+        Self {
+            auth: value.auth,
+            n: 30,
+            theme: value.theme,
+            embed_images: value.embed_images,
+            nickname: value.nickname,
+            app_version: value.app_version,
+        }
+    }
 }
 
 /// 单曲渲染请求体

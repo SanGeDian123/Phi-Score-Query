@@ -158,11 +158,9 @@ class PhiApiClient(
         width: Int,
         style: B30ImageStyle,
         isDarkTheme: Boolean,
-        kind: RankingImageKind = RankingImageKind.B30,
     ): ByteArray {
         val requestBody = buildJsonObject {
             put("n", 27)
-            put("mode", kind.requestValue)
             put("theme", if (isDarkTheme) "black" else "white")
             // 栅格图可直接读取服务端本地曲绘，避免把 30 张大图先转成 Base64 再解码。
             put("embedImages", false)
@@ -172,6 +170,27 @@ class PhiApiClient(
         return executeBytes(
             Request.Builder()
                 .url(url("api/v2/image/bn?format=png&width=$width$templateQuery"))
+                .header("Authorization", "Bearer $accessToken")
+                .post(requestBody.toRequestBody(jsonMediaType))
+                .build(),
+        )
+    }
+
+    suspend fun renderP30(
+        accessToken: String,
+        width: Int,
+        style: B30ImageStyle,
+        isDarkTheme: Boolean,
+    ): ByteArray {
+        val requestBody = buildJsonObject {
+            put("theme", if (isDarkTheme) "black" else "white")
+            put("embedImages", false)
+            put("appVersion", BuildConfig.VERSION_NAME)
+        }.toString()
+        val templateQuery = if (style == B30ImageStyle.MINIMAL) "&template=minimal" else ""
+        return executeBytes(
+            Request.Builder()
+                .url(url("api/v2/image/p30?format=png&width=$width$templateQuery"))
                 .header("Authorization", "Bearer $accessToken")
                 .post(requestBody.toRequestBody(jsonMediaType))
                 .build(),

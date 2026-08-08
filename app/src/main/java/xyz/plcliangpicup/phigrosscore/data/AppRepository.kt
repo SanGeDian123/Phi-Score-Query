@@ -50,7 +50,7 @@ class AppRepository(
     val navigationHandlePosition: Float get() = preferences.getFloat("navigation_handle_position", 0.5f)
         .coerceIn(0f, 1f)
     val shouldGenerateInitialImagePair: Boolean
-        get() = !preferences.getBoolean("initial_image_pair_pre0976_generated", false)
+        get() = !preferences.getBoolean("initial_image_pair_pre0976_p30v2_generated", false)
     val shouldShowNavigationGuide: Boolean get() = !preferences.getBoolean("navigation_drawer_guide_shown", false)
     val shouldShowExperienceSurveyPrompt: Boolean
         get() = !preferences.getBoolean("experience_survey_prompt_pre0975_shown", false)
@@ -148,7 +148,7 @@ class AppRepository(
     }
 
     fun markInitialImagePairGenerated() {
-        preferences.edit().putBoolean("initial_image_pair_pre0976_generated", true).apply()
+        preferences.edit().putBoolean("initial_image_pair_pre0976_p30v2_generated", true).apply()
     }
 
     fun markImagePagerGuideShown() {
@@ -294,11 +294,21 @@ class AppRepository(
         style: B30ImageStyle,
         isDarkTheme: Boolean,
         width: Int = 1440,
-        kind: RankingImageKind = RankingImageKind.B30,
     ): File = authenticatedCall { token ->
         cacheStore.saveImage(
-            api.renderB30(token, width.coerceIn(900, 2400), style, isDarkTheme, kind),
-            kind,
+            api.renderB30(token, width.coerceIn(900, 2400), style, isDarkTheme),
+            RankingImageKind.B30,
+        )
+    }
+
+    suspend fun renderP30(
+        style: B30ImageStyle,
+        isDarkTheme: Boolean,
+        width: Int = 1440,
+    ): File = authenticatedCall { token ->
+        cacheStore.saveImage(
+            api.renderP30(token, width.coerceIn(900, 2400), style, isDarkTheme),
+            RankingImageKind.P30,
         )
     }
 

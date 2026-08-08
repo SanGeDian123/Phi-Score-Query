@@ -17,6 +17,7 @@ mod context;
 mod display;
 pub(crate) mod nickname;
 mod output;
+pub(crate) mod p30;
 mod runtime;
 mod save_flow;
 mod score;
@@ -27,6 +28,7 @@ mod user_bn_compute;
 
 pub use bn::render_bn;
 pub use output::ImageQueryOpts;
+pub use p30::render_p30;
 pub use song::render_song;
 pub use user_bn::render_bn_user;
 
@@ -61,6 +63,7 @@ mod tests;
 pub fn create_image_router() -> Router<AppState> {
     let mut router = Router::new()
         .route("/image/bn", post(render_bn))
+        .route("/image/p30", post(render_p30))
         .route("/image/song", post(render_song))
         .route("/image/bn/user", post(render_bn_user));
 

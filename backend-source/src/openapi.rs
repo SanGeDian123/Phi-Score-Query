@@ -79,6 +79,7 @@ impl Modify for ApiServers {
         crate::features::song::handler::search_songs,
         crate::features::song::handler::get_song_catalog,
         crate::features::image::handler::bn::render_bn,
+        crate::features::image::handler::p30::render_p30,
         crate::features::image::handler::song::render_song,
         crate::features::image::handler::user_bn::render_bn_user,
         crate::features::stats::handler::get_daily_stats,

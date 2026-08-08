@@ -21,4 +21,4 @@ pub use renderer::{
     render_svg_to_png,
 };
 pub use service::ImageService;
-pub use types::{BnMode, RenderBnRequest, RenderSongRequest, Theme};
+pub use types::{BnMode, RenderBnRequest, RenderP30Request, RenderSongRequest, Theme};

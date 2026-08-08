@@ -112,11 +112,11 @@ pub(super) fn build_bn_compute_output(input: BnComputeInput) -> BnComputeOutput 
     let (player_rks, _rounded) =
         crate::rks_contract::engine::calculate_player_rks_details(&engine_all);
     let ap_top_3_avg = calculate_ap_top_3_avg(&all);
-    let best_27_avg = calculate_best_27_avg(&selected);
-    let exact_rks = match mode {
-        BnMode::B30 => player_rks,
-        BnMode::P30 => calculate_p30_rks(&selected),
+    let best_27_avg = match mode {
+        BnMode::B30 => calculate_best_27_avg(&selected),
+        BnMode::P30 => average_top_records(&selected, 30),
     };
+    let exact_rks = player_rks;
     let stats_duration = t_stats_start.elapsed();
     tracing::info!(target: "bestn_performance", "统计数据计算完成，精确RKS: {:?}, AP Top3: {:?}, Best27: {:?}, 耗时: {:?}ms",
                    exact_rks, ap_top_3_avg, best_27_avg, stats_duration.as_millis());
@@ -151,7 +151,11 @@ pub(super) fn build_bn_compute_output(input: BnComputeInput) -> BnComputeOutput 
     let time_parse_duration = t_time_start.elapsed();
     tracing::info!(target: "bestn_performance", "更新时间解析完成, 耗时: {:?}ms", time_parse_duration.as_millis());
 
-    let ap_top_3_scores = collect_ap_top_3_scores(&all);
+    let ap_top_3_scores = match mode {
+        BnMode::B30 => collect_ap_top_3_scores(&all),
+        // P30 本体就是 30 张 AP，不能再额外绘制 B30 专用的 AP Top 3 区域。
+        BnMode::P30 => Vec::new(),
+    };
 
     let top: Vec<RenderRecord> = selected.into_iter().take(top_len).collect();
 
@@ -174,36 +178,28 @@ fn select_mode_records(records: &[RenderRecord], mode: BnMode) -> Vec<RenderReco
         BnMode::B30 => records.to_vec(),
         BnMode::P30 => records
             .iter()
-            .filter(|record| record.acc >= 100.0)
+            .filter(|record| record.acc >= 100.0 && record.score == Some(1_000_000.0))
             .cloned()
             .collect(),
     }
 }
 
-fn calculate_p30_rks(perfect_records: &[RenderRecord]) -> f64 {
-    let p3_sum = perfect_records
-        .iter()
-        .take(3)
-        .map(|record| record.rks)
-        .sum::<f64>();
-    let b27_sum = perfect_records
-        .iter()
-        .take(27)
-        .map(|record| record.rks)
-        .sum::<f64>();
-    (p3_sum + b27_sum) / 30.0
+fn average_top_records(records: &[RenderRecord], limit: usize) -> Option<f64> {
+    let selected: Vec<&RenderRecord> = records.iter().take(limit).collect();
+    (!selected.is_empty())
+        .then(|| selected.iter().map(|record| record.rks).sum::<f64>() / selected.len() as f64)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn record(id: &str, acc: f64, rks: f64) -> RenderRecord {
+    fn record(id: &str, score: f64, acc: f64, rks: f64) -> RenderRecord {
         RenderRecord {
             song_id: id.to_string(),
             song_name: id.to_string(),
             difficulty: "IN".to_string(),
-            score: Some(if acc >= 100.0 { 1_000_000.0 } else { 999_999.0 }),
+            score: Some(score),
             acc,
             rks,
             difficulty_value: rks,
@@ -212,19 +208,44 @@ mod tests {
     }
 
     #[test]
-    fn p30_uses_only_ap_records_and_repeats_top_three() {
-        let records = vec![
-            record("ap-1", 100.0, 15.0),
-            record("not-ap", 99.9999, 18.0),
-            record("ap-2", 100.0, 12.0),
-            record("ap-3", 100.0, 9.0),
-            record("ap-4", 100.0, 6.0),
+    fn p30_uses_the_top_30_unique_ap_records_by_chart_rks() {
+        let mut records = vec![
+            record("not-ap", 999_999.0, 99.9999, 40.0),
+            record("invalid-perfect", 999_999.0, 100.0, 39.0),
         ];
+        records.extend((1..=35).map(|index| {
+            record(
+                &format!("ap-{index}"),
+                1_000_000.0,
+                100.0,
+                36.0 - f64::from(index),
+            )
+        }));
 
         let selected = select_mode_records(&records, BnMode::P30);
+        let top_30: Vec<_> = selected.into_iter().take(30).collect();
 
-        assert_eq!(selected.len(), 4);
-        assert!(selected.iter().all(|item| item.acc >= 100.0));
-        assert!((calculate_p30_rks(&selected) - 2.6).abs() < f64::EPSILON);
+        assert_eq!(top_30.len(), 30);
+        assert!(
+            top_30
+                .iter()
+                .all(|item| item.acc >= 100.0 && item.score == Some(1_000_000.0))
+        );
+        assert_eq!(
+            top_30.first().map(|item| item.song_id.as_str()),
+            Some("ap-1")
+        );
+        assert_eq!(
+            top_30.last().map(|item| item.song_id.as_str()),
+            Some("ap-30")
+        );
+        assert_eq!(
+            top_30
+                .iter()
+                .map(|item| item.song_id.as_str())
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            30,
+        );
     }
 }

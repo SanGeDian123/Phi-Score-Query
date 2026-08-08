@@ -486,7 +486,7 @@ fn bn_cache_key_is_isolated_by_ranking_mode() {
     );
     let p30 = spec.bn_cache_key(
         "u",
-        27,
+        30,
         crate::features::image::BnMode::P30,
         "updated",
         crate::features::image::Theme::Black,

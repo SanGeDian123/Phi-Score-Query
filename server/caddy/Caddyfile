@@ -79,7 +79,8 @@ api.plc-liangpi-cup.xyz {
  /api/v2/leaderboard/rks/by-rank \
  /api/v2/leaderboard/rks/me \
  /api/v2/save \
- /api/v2/image/bn
+ /api/v2/image/bn \
+ /api/v2/image/p30
 	handle @allowed {
 		request_body {
 			max_size 1MB

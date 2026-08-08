@@ -38,7 +38,6 @@ fn render_bn_request_serializes_as_camel_case() {
     use phi_backend::features::save::models::UnifiedSaveRequest;
 
     let req = RenderBnRequest {
-        mode: phi_backend::features::image::BnMode::B30,
         auth: UnifiedSaveRequest {
             session_token: Some("r:token".to_string()),
             external_credentials: None,
@@ -64,4 +63,31 @@ fn render_bn_request_serializes_as_camel_case() {
     // flatten 的认证字段也应遵循 camelCase
     assert!(v.get("sessionToken").is_some());
     assert!(v.get("session_token").is_none());
+}
+
+#[test]
+fn render_p30_request_has_an_independent_contract_without_bn_mode_or_count() {
+    use phi_backend::features::image::{RenderP30Request, Theme};
+    use phi_backend::features::save::models::UnifiedSaveRequest;
+
+    let req = RenderP30Request {
+        auth: UnifiedSaveRequest {
+            session_token: Some("r:token".to_string()),
+            external_credentials: None,
+            taptap_version: None,
+        },
+        theme: Theme::Black,
+        embed_images: false,
+        nickname: None,
+        app_version: Some("Pre-0.9.7.6".to_string()),
+    };
+
+    let v = serde_json::to_value(req).expect("serialize p30 json");
+
+    assert_eq!(
+        v.get("appVersion").and_then(|value| value.as_str()),
+        Some("Pre-0.9.7.6")
+    );
+    assert!(v.get("mode").is_none());
+    assert!(v.get("n").is_none());
 }

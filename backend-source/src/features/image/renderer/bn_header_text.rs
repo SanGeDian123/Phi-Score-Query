@@ -16,9 +16,14 @@ pub(super) fn build_bn_header_text(stats: &PlayerStats) -> BnHeaderText {
         || "AP Top 3 Avg: N/A".to_string(),
         |avg| format!("AP Top 3 Avg: {avg:.4}"),
     );
+    let average_label = if stats.image_title == "P30" {
+        "P30 Avg"
+    } else {
+        "Best 27 Avg"
+    };
     let bn_text = stats.best_27_avg.map_or_else(
-        || "Best 27 Avg: N/A".to_string(),
-        |avg| format!("Best 27 Avg: {avg:.4}"),
+        || format!("{average_label}: N/A"),
+        |avg| format!("{average_label}: {avg:.4}"),
     );
 
     BnHeaderText {
