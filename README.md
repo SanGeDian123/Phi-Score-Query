@@ -1,21 +1,18 @@
 # Phi Score Query
 
-Phi Score Query 是一个面向 Android 8.0 及以上系统的非官方 Phigros 成绩查询客户端。当前版本为 **Pre-0.9.7.5 公开测试版**。
+Phi Score Query 是一个面向 Android 8.0 及以上系统的非官方 Phigros 成绩查询客户端。当前版本为 **Pre-0.9.7.6 公开测试版**。
 
-项目提供 Android 客户端、自托管服务器部署工具，以及线上服务实际使用的 Next-Phi-Backend 修改版对应源码。
+项目提供 Android 客户端，以及线上服务实际使用的 Next-Phi-Backend 修改版对应源码。
 
 > 本项目与 Pigeon Games、TapTap 无隶属或授权关系。请勿在 Issue、日志、截图或其他公开位置提交 SessionToken、Access Token 或其他账号凭据。
 
 ## 功能
 
 - 大陆版 TapTap 扫码和 SessionToken 登录
-- B30、Best N、P3+B27 Ranking Score
-- 完整存档差分和成绩更新提示
+- B30、P30、Best N等成绩查询
 - 单曲查询、定数表和排行榜
-- 经典/简约 B30 图片生成、保存与分享
+- 经典/简约 B30/P30 图片生成、保存与分享
 - 服务器曲库同步与离线缓存
-- 应用内安全更新检查与 SHA-256 校验
-- Android Keystore 加密保存本地敏感凭据
 
 ## 项目结构
 
@@ -58,4 +55,4 @@ Release 构建需要自行创建 `keystore.properties` 和签名密钥；这些�
 - [安全策略](SECURITY.md)
 - [贡献指南](CONTRIBUTING.md)
 
-发现安全问题时请不要创建公开 Issue，按照安全策略中的方式联系维护者。
+发现安全问题时请不要创建公开 Issue，按照安全策略中的方式联系相关维护者。
