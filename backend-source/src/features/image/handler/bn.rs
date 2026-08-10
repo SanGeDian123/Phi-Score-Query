@@ -238,6 +238,7 @@ pub(super) async fn render_ranking_image(
         ap_top_3_scores,
         challenge_rank,
         data_string,
+        grade_counts,
         update_time,
         flatten_ms,
     } = {
@@ -283,6 +284,7 @@ pub(super) async fn render_ranking_image(
         ap_top_3_scores,
         challenge_rank,
         data_string,
+        grade_counts,
         custom_footer_text: image_footer_text(app_version.as_deref()),
         is_user_generated: false,
     };

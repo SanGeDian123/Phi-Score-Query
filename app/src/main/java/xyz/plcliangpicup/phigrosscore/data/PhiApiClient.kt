@@ -160,13 +160,17 @@ class PhiApiClient(
         isDarkTheme: Boolean,
     ): ByteArray {
         val requestBody = buildJsonObject {
-            put("n", 27)
+            put("n", if (style == B30ImageStyle.PHI_PLUGIN) 33 else 27)
             put("theme", if (isDarkTheme) "black" else "white")
             // 栅格图可直接读取服务端本地曲绘，避免把 30 张大图先转成 Base64 再解码。
             put("embedImages", false)
             put("appVersion", BuildConfig.VERSION_NAME)
         }.toString()
-        val templateQuery = if (style == B30ImageStyle.MINIMAL) "&template=minimal" else ""
+        val templateQuery = when (style) {
+            B30ImageStyle.CLASSIC -> ""
+            B30ImageStyle.MINIMAL -> "&template=minimal"
+            B30ImageStyle.PHI_PLUGIN -> "&template=phi-plugin"
+        }
         return executeBytes(
             Request.Builder()
                 .url(url("api/v2/image/bn?format=png&width=$width$templateQuery"))
@@ -187,7 +191,11 @@ class PhiApiClient(
             put("embedImages", false)
             put("appVersion", BuildConfig.VERSION_NAME)
         }.toString()
-        val templateQuery = if (style == B30ImageStyle.MINIMAL) "&template=minimal" else ""
+        val templateQuery = when (style) {
+            B30ImageStyle.CLASSIC -> ""
+            B30ImageStyle.MINIMAL -> "&template=minimal"
+            B30ImageStyle.PHI_PLUGIN -> "&template=phi-plugin"
+        }
         return executeBytes(
             Request.Builder()
                 .url(url("api/v2/image/p30?format=png&width=$width$templateQuery"))
@@ -200,6 +208,14 @@ class PhiApiClient(
     suspend fun fetchAppUpdate(): AppUpdateManifest = executeJson(
         Request.Builder()
             .url(url("app-update/latest.json"))
+            .header("Cache-Control", "no-cache")
+            .get()
+            .build(),
+    )
+
+    suspend fun fetchAppAnnouncement(): AppAnnouncement = executeJson(
+        Request.Builder()
+            .url(url("app-announcement/latest.json"))
             .header("Cache-Control", "no-cache")
             .get()
             .build(),

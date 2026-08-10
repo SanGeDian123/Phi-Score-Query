@@ -11,6 +11,7 @@ $caddyExe = Join-Path $current 'caddy\caddy.exe'
 $caddyTarget = Join-Path $current 'caddy\Caddyfile'
 $runCaddyTarget = Join-Path $current 'scripts\Run-Caddy.ps1'
 $publishTarget = Join-Path $current 'scripts\Publish-AppUpdate.ps1'
+$publishAnnouncementTarget = Join-Path $current 'scripts\Publish-AppAnnouncement.ps1'
 $apkPath = Join-Path $bundleRoot 'Phi-Score-Query-Pre-0.9.6-Fix.apk'
 
 foreach ($required in @(
@@ -18,22 +19,25 @@ foreach ($required in @(
     (Join-Path $bundleRoot 'Caddyfile'),
     (Join-Path $bundleRoot 'Run-Caddy.ps1'),
     (Join-Path $bundleRoot 'Publish-AppUpdate.ps1'),
+    (Join-Path $bundleRoot 'Publish-AppAnnouncement.ps1'),
     $apkPath
 )) {
     if (-not (Test-Path -LiteralPath $required)) { throw "缺少部署文件: $required" }
 }
 
 $backup = Join-Path $InstallRoot ("backup\app-update-bootstrap-" + (Get-Date -Format 'yyyyMMdd-HHmmss'))
-New-Item -ItemType Directory -Force -Path $backup, (Join-Path $InstallRoot 'app-update') | Out-Null
+New-Item -ItemType Directory -Force -Path $backup, (Join-Path $InstallRoot 'app-update'), (Join-Path $InstallRoot 'app-announcement') | Out-Null
 Copy-Item -LiteralPath $caddyTarget -Destination (Join-Path $backup 'Caddyfile') -Force
 Copy-Item -LiteralPath $runCaddyTarget -Destination (Join-Path $backup 'Run-Caddy.ps1') -Force
 
 Copy-Item -LiteralPath (Join-Path $bundleRoot 'Caddyfile') -Destination $caddyTarget -Force
 Copy-Item -LiteralPath (Join-Path $bundleRoot 'Run-Caddy.ps1') -Destination $runCaddyTarget -Force
 Copy-Item -LiteralPath (Join-Path $bundleRoot 'Publish-AppUpdate.ps1') -Destination $publishTarget -Force
+Copy-Item -LiteralPath (Join-Path $bundleRoot 'Publish-AppAnnouncement.ps1') -Destination $publishAnnouncementTarget -Force
 
 $env:APP_LOG_DIR = ($InstallRoot -replace '\\', '/') + '/logs'
 $env:APP_UPDATE_DIR = ($InstallRoot -replace '\\', '/') + '/app-update'
+$env:APP_ANNOUNCEMENT_DIR = ($InstallRoot -replace '\\', '/') + '/app-announcement'
 & $caddyExe validate --config $caddyTarget --adapter caddyfile
 if ($LASTEXITCODE -ne 0) {
     Copy-Item -LiteralPath (Join-Path $backup 'Caddyfile') -Destination $caddyTarget -Force

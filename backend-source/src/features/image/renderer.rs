@@ -25,6 +25,7 @@ mod bn_sections;
 mod bn_theme;
 mod leaderboard;
 mod math;
+mod phi_plugin;
 mod raster_jpeg;
 mod raster_options;
 mod raster_png;
@@ -70,6 +71,7 @@ pub struct PlayerStats {
     pub ap_top_3_scores: Vec<RenderRecord>,       // AP Top 3 的具体成绩
     pub challenge_rank: Option<(String, String)>, // 课题等级（颜色、等级）
     pub data_string: Option<String>,              // 格式化后的 Data 字符串
+    pub grade_counts: crate::features::save::models::CfcPCountsByDifficulty,
     pub custom_footer_text: Option<String>,
     pub is_user_generated: bool, // 标记是否为用户生成
 }

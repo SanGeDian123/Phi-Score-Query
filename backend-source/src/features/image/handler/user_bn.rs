@@ -159,6 +159,7 @@ pub async fn render_bn_user(
         ap_top_3_scores,
         challenge_rank: None,
         data_string: None,
+        grade_counts: Default::default(),
         custom_footer_text: image_footer_text(None),
         is_user_generated: explicit,
     };

@@ -19,9 +19,27 @@ data class AppUpdateManifest(
 internal fun AppUpdateManifest.isNewerThan(currentVersionCode: Int): Boolean =
     versionCode > currentVersionCode
 
+@Serializable
+data class AppAnnouncement(
+    val id: String,
+    val title: String,
+    val body: String,
+    val publishedAt: String? = null,
+)
+
+internal fun AppAnnouncement.isDisplayableAfter(lastSeenId: String?): Boolean =
+    id.isNotBlank() &&
+        id != lastSeenId &&
+        title.isNotBlank() &&
+        body.isNotBlank() &&
+        id.length <= 128 &&
+        title.length <= 120 &&
+        body.length <= 8_000
+
 enum class B30ImageStyle(val preferenceValue: String) {
     CLASSIC("classic"),
-    MINIMAL("minimal");
+    MINIMAL("minimal"),
+    PHI_PLUGIN("phi-plugin");
 
     companion object {
         fun fromPreference(value: String?): B30ImageStyle =

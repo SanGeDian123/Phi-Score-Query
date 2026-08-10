@@ -7,6 +7,7 @@ Get-Content "$installRoot\secrets.env" | ForEach-Object {
 }
 $env:APP_LOG_DIR = ($installRoot -replace '\\', '/') + '/logs'
 $env:APP_UPDATE_DIR = ($installRoot -replace '\\', '/') + '/app-update'
+$env:APP_ANNOUNCEMENT_DIR = ($installRoot -replace '\\', '/') + '/app-announcement'
 $env:APP_AVATAR_DIR = ($installRoot -replace '\\', '/') + '/avatar'
 Set-Location "$current\caddy"
 & "$current\caddy\caddy.exe" run --config "$current\caddy\Caddyfile" --adapter caddyfile *>> "$installRoot\logs\caddy.log"

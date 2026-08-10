@@ -29,6 +29,7 @@ pub(super) struct BnComputeOutput {
     pub(super) ap_top_3_scores: Vec<RenderRecord>,
     pub(super) challenge_rank: Option<(String, String)>,
     pub(super) data_string: Option<String>,
+    pub(super) grade_counts: crate::features::save::models::CfcPCountsByDifficulty,
     pub(super) update_time: DateTime<Utc>,
     pub(super) flatten_ms: i64,
 }
@@ -49,6 +50,8 @@ pub(super) fn build_bn_compute_output(input: BnComputeInput) -> BnComputeOutput 
         n,
         mode,
     } = input;
+
+    let grade_counts = crate::features::save::handler::compute_grade_counts(&parsed.game_record);
 
     let t_flatten = Instant::now();
     let total_records = parsed.game_record.values().map(Vec::len).sum();
@@ -116,7 +119,10 @@ pub(super) fn build_bn_compute_output(input: BnComputeInput) -> BnComputeOutput 
         BnMode::B30 => calculate_best_27_avg(&selected),
         BnMode::P30 => average_top_records(&selected, 30),
     };
-    let exact_rks = player_rks;
+    let exact_rks = match mode {
+        BnMode::B30 => player_rks,
+        BnMode::P30 => calculate_p30_rks(&selected),
+    };
     let stats_duration = t_stats_start.elapsed();
     tracing::info!(target: "bestn_performance", "统计数据计算完成，精确RKS: {:?}, AP Top3: {:?}, Best27: {:?}, 耗时: {:?}ms",
                    exact_rks, ap_top_3_avg, best_27_avg, stats_duration.as_millis());
@@ -168,6 +174,7 @@ pub(super) fn build_bn_compute_output(input: BnComputeInput) -> BnComputeOutput 
         ap_top_3_scores,
         challenge_rank,
         data_string,
+        grade_counts,
         update_time,
         flatten_ms,
     }
@@ -188,6 +195,16 @@ fn average_top_records(records: &[RenderRecord], limit: usize) -> Option<f64> {
     let selected: Vec<&RenderRecord> = records.iter().take(limit).collect();
     (!selected.is_empty())
         .then(|| selected.iter().map(|record| record.rks).sum::<f64>() / selected.len() as f64)
+}
+
+fn calculate_p30_rks(records: &[RenderRecord]) -> f64 {
+    let b27_sum = records
+        .iter()
+        .take(27)
+        .map(|record| record.rks)
+        .sum::<f64>();
+    let p3_sum = records.iter().take(3).map(|record| record.rks).sum::<f64>();
+    (b27_sum + p3_sum) / 30.0
 }
 
 #[cfg(test)]
@@ -247,5 +264,16 @@ mod tests {
                 .len(),
             30,
         );
+    }
+
+    #[test]
+    fn p30_rks_repeats_the_top_three_and_uses_a_fixed_denominator() {
+        let records = vec![
+            record("p1", 1_000_000.0, 100.0, 3.0),
+            record("p2", 1_000_000.0, 100.0, 2.0),
+            record("p3", 1_000_000.0, 100.0, 1.0),
+        ];
+
+        assert!((calculate_p30_rks(&records) - 0.4).abs() < f64::EPSILON);
     }
 }

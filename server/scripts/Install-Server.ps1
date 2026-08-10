@@ -32,7 +32,7 @@ foreach ($taskName in $taskNames) {
     Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 }
 
-New-Item -ItemType Directory -Force -Path $InstallRoot, "$InstallRoot\logs", "$InstallRoot\backup", "$InstallRoot\app-update" | Out-Null
+New-Item -ItemType Directory -Force -Path $InstallRoot, "$InstallRoot\logs", "$InstallRoot\backup", "$InstallRoot\app-update", "$InstallRoot\app-announcement" | Out-Null
 $current = Join-Path $InstallRoot 'current'
 $backup = $null
 if (Test-Path -LiteralPath $current) {

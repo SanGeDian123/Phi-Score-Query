@@ -62,6 +62,12 @@ api.plc-liangpi-cup.xyz {
 		file_server
 	}
 
+	handle_path /app-announcement/* {
+		header Cache-Control "no-store"
+		root * {$APP_ANNOUNCEMENT_DIR}
+		file_server
+	}
+
 	handle_path /avatar/* {
 		header Cache-Control "public, max-age=604800, immutable"
 		root * {$APP_AVATAR_DIR}

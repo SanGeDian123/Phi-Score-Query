@@ -59,6 +59,14 @@ class AppRepository(
     val shouldShowImagePagerGuide: Boolean
         get() = !preferences.getBoolean("image_pager_guide_pre0976_shown", false)
 
+    suspend fun fetchPendingAnnouncement(): AppAnnouncement? {
+        val announcement = api.fetchAppAnnouncement()
+        val lastSeenId = preferences.getString("last_seen_announcement_id", null)
+        if (!announcement.isDisplayableAfter(lastSeenId)) return null
+        preferences.edit().putString("last_seen_announcement_id", announcement.id).apply()
+        return announcement
+    }
+
     fun constantTableEntries(): List<ConstantTableEntry> = songCatalog.constantTableEntries()
 
     suspend fun loadCachedSongCatalog(): Boolean {

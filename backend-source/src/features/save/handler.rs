@@ -24,6 +24,7 @@ use super::{
 
 mod response;
 
+pub(crate) use self::response::compute_grade_counts;
 pub use self::response::{SaveAndRksResponse, SaveApiResponse};
 use self::response::{
     build_save_response, build_textual_details_from_rks, serialize_save_data_body,

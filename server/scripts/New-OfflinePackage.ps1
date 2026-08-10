@@ -81,7 +81,7 @@ foreach ($illustrationFolder in @('ill', 'illLow', 'illBlur')) {
 Copy-Item -Path "$BackendSource\info\*" -Destination "$stage\backend\info" -Recurse
 Copy-Item -LiteralPath $CaddyExe -Destination "$stage\caddy\caddy.exe"
 Copy-Item -LiteralPath "$projectRoot\server\caddy\Caddyfile" -Destination "$stage\caddy\Caddyfile"
-Copy-Item -Path "$projectRoot\server\scripts\Install-Server.ps1", "$projectRoot\server\scripts\Run-Backend.ps1", "$projectRoot\server\scripts\Run-Caddy.ps1", "$projectRoot\server\scripts\Test-ServerConnectivity.ps1", "$projectRoot\server\scripts\Publish-AppUpdate.ps1" -Destination "$stage\scripts"
+Copy-Item -Path "$projectRoot\server\scripts\Install-Server.ps1", "$projectRoot\server\scripts\Run-Backend.ps1", "$projectRoot\server\scripts\Run-Caddy.ps1", "$projectRoot\server\scripts\Test-ServerConnectivity.ps1", "$projectRoot\server\scripts\Publish-AppUpdate.ps1", "$projectRoot\server\scripts\Publish-AppAnnouncement.ps1" -Destination "$stage\scripts"
 Set-Content -LiteralPath "$stage\VERSION" -Value $Version -Encoding ascii
 
 $zip = "$stage.zip"

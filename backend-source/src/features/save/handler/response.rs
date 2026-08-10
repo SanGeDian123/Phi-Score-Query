@@ -97,7 +97,7 @@ pub(super) fn build_save_response(
     Ok(json_bytes_response(body))
 }
 
-fn compute_grade_counts(
+pub(crate) fn compute_grade_counts(
     records: &HashMap<String, Vec<super::super::models::DifficultyRecord>>,
 ) -> super::super::models::CfcPCountsByDifficulty {
     use super::super::models::{CfcPCounts, CfcPCountsByDifficulty, Difficulty};

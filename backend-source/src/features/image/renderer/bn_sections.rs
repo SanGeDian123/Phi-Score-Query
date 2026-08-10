@@ -130,6 +130,7 @@ mod tests {
             ap_top_3_scores: vec![],
             challenge_rank: Some(("Green<&>\"".to_string(), "Lv<1&\"".to_string())),
             data_string: None,
+            grade_counts: Default::default(),
             custom_footer_text: None,
             is_user_generated: false,
         };

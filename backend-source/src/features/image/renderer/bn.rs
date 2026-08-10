@@ -17,7 +17,7 @@ use super::bn_sections::{
 };
 use super::bn_theme::BnThemePalette;
 use super::svg_error::svg_fmt_error;
-use super::{PlayerStats, RenderRecord, template_bn};
+use super::{PlayerStats, RenderRecord, phi_plugin, template_bn};
 
 // --- SVG 生成函数 ---
 
@@ -36,6 +36,16 @@ pub(super) fn generate_svg_string<S>(
 where
     S: std::hash::BuildHasher,
 {
+    if template_id == Some("phi-plugin") {
+        return phi_plugin::generate_phi_plugin_svg(
+            scores,
+            stats,
+            push_acc_map,
+            *theme,
+            embed_images,
+            public_illustration_base_url,
+        );
+    }
     if template_id.is_some() {
         return template_bn::generate_bn_svg_with_template(
             scores,

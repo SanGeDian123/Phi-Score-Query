@@ -8,6 +8,7 @@ import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PhiApiClientTest {
@@ -62,5 +63,56 @@ class PhiApiClientTest {
         val p30Body = p30Request.body.readUtf8()
         assertFalse(p30Body.contains("\"mode\""))
         assertFalse(p30Body.contains("\"n\""))
+    }
+
+    @Test
+    fun `Phi Plugin B30 requests Best 33 without changing P30 semantics`() = runTest {
+        server.enqueue(MockResponse().setBody("b30-png"))
+        server.enqueue(MockResponse().setBody("p30-png"))
+        server.start()
+
+        val client = PhiApiClient(server.url("/").toString(), json)
+        client.renderB30("access", 1260, B30ImageStyle.PHI_PLUGIN, isDarkTheme = true)
+        val b30Request = server.takeRequest()
+        client.renderP30("access", 1260, B30ImageStyle.PHI_PLUGIN, isDarkTheme = true)
+        val p30Request = server.takeRequest()
+
+        assertEquals(
+            "/api/v2/image/bn?format=png&width=1260&template=phi-plugin",
+            b30Request.path,
+        )
+        assertTrue(b30Request.body.readUtf8().contains("\"n\":33"))
+        assertEquals(
+            "/api/v2/image/p30?format=png&width=1260&template=phi-plugin",
+            p30Request.path,
+        )
+        assertFalse(p30Request.body.readUtf8().contains("\"n\""))
+    }
+
+    @Test
+    fun `announcement uses the static latest endpoint and decodes content`() = runTest {
+        server.enqueue(
+            MockResponse().setBody(
+                """
+                    {
+                      "id": "notice-20260809",
+                      "title": "测试公告",
+                      "body": "公告正文",
+                      "publishedAt": "2026-08-09 22:30"
+                    }
+                """.trimIndent(),
+            ),
+        )
+        server.start()
+
+        val client = PhiApiClient(server.url("/").toString(), json)
+        val announcement = client.fetchAppAnnouncement()
+        val request = server.takeRequest()
+
+        assertEquals("/app-announcement/latest.json", request.path)
+        assertEquals("no-cache", request.getHeader("Cache-Control"))
+        assertEquals("notice-20260809", announcement.id)
+        assertEquals("测试公告", announcement.title)
+        assertEquals("公告正文", announcement.body)
     }
 }

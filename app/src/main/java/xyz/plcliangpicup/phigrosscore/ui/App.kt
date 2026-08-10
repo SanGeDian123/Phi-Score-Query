@@ -72,6 +72,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -131,6 +132,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -220,6 +223,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import xyz.plcliangpicup.phigrosscore.BuildConfig
 import xyz.plcliangpicup.phigrosscore.R
+import xyz.plcliangpicup.phigrosscore.data.AppAnnouncement
 import xyz.plcliangpicup.phigrosscore.data.B30Item
 import xyz.plcliangpicup.phigrosscore.data.B30ImageStyle
 import xyz.plcliangpicup.phigrosscore.data.B30Snapshot
@@ -283,6 +287,15 @@ private const val BACKEND_REPOSITORY_URL = "https://github.com/Sczr0/Next-Phi-Ba
 private const val EXPERIENCE_SURVEY_URL = "https://wj.qq.com/s2/27522729/6kti/"
 
 private val changelogEntries = listOf(
+    ChangelogEntry(
+        "Pre-0.9.7.7",
+        "筛选与成绩图体验优化",
+        listOf(
+            "修复部分设备左侧导航栏无法上下滑动、较下方入口无法点击的问题。",
+            "B30 与 P30 新增 Phi-Plugin 成绩图样式，样式选择改为下拉菜单。",
+            "定数表新增 EZ、HD、IN、AT 难度多选筛选，并与定数等级筛选联动。",
+        ),
+    ),
     ChangelogEntry(
         "Pre-0.9.7.6",
         "P30 成绩图与体验优化",
@@ -685,7 +698,7 @@ fun PhigrosScoreApp(viewModel: AppViewModel) {
             )
         }
         if (!state.isLoggedIn) SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
-        state.availableAppUpdate?.let { update ->
+        state.availableAppUpdate?.takeIf { state.announcement == null }?.let { update ->
             AppUpdateDialog(
                 update = update,
                 state = state,
@@ -698,6 +711,7 @@ fun PhigrosScoreApp(viewModel: AppViewModel) {
             visible = state.isLoggedIn &&
                 state.page == AppPage.HOME &&
                 !state.showNavigationGuide &&
+                state.announcement == null &&
                 state.showExperienceSurveyPrompt,
             onDismiss = viewModel::dismissExperienceSurveyPrompt,
             onConfirm = {
@@ -705,9 +719,115 @@ fun PhigrosScoreApp(viewModel: AppViewModel) {
                 showExperienceSurvey = true
             },
         )
+        AnnouncementPrompt(
+            announcement = state.announcement,
+            onDismiss = viewModel::dismissAnnouncement,
+        )
     }
     if (showExperienceSurvey) {
         ExperienceSurveyDialog(onDismiss = { showExperienceSurvey = false })
+    }
+}
+
+@Composable
+private fun AnnouncementPrompt(
+    announcement: AppAnnouncement?,
+    onDismiss: () -> Unit,
+) {
+    var renderedAnnouncement by remember { mutableStateOf<AppAnnouncement?>(null) }
+    var visible by remember { mutableStateOf(false) }
+
+    LaunchedEffect(announcement) {
+        if (announcement != null) {
+            renderedAnnouncement = announcement
+            visible = true
+        } else if (renderedAnnouncement != null) {
+            visible = false
+            delay(220)
+            renderedAnnouncement = null
+        }
+    }
+
+    val cardProgress by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = tween(durationMillis = if (visible) 280 else 190),
+        label = "announcement-card-fade",
+    )
+    val rendered = renderedAnnouncement ?: return
+    BackHandler(enabled = visible, onBack = onDismiss)
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(tween(240)),
+        exit = fadeOut(tween(200)),
+    ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = .66f))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = {},
+                )
+                .padding(horizontal = 22.dp, vertical = 36.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = AppSurfaceRaised),
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 520.dp)
+                    .graphicsLayer {
+                        alpha = cardProgress
+                        scaleX = .94f + cardProgress * .06f
+                        scaleY = .94f + cardProgress * .06f
+                    }
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {},
+                    ),
+            ) {
+                Column(Modifier.padding(24.dp)) {
+                    Text(
+                        rendered.title,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Black,
+                    )
+                    rendered.publishedAt?.takeIf(String::isNotBlank)?.let { publishedAt ->
+                        Text(
+                            publishedAt,
+                            color = AppTextMuted,
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(top = 5.dp),
+                        )
+                    }
+                    HorizontalDivider(
+                        color = AppTextMuted.copy(alpha = .16f),
+                        modifier = Modifier.padding(vertical = 18.dp),
+                    )
+                    SelectionContainer {
+                        Text(
+                            rendered.body,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontSize = 15.sp,
+                            lineHeight = 24.sp,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 360.dp)
+                                .verticalScroll(rememberScrollState()),
+                        )
+                    }
+                    Button(
+                        onClick = onDismiss,
+                        modifier = Modifier.fillMaxWidth().padding(top = 22.dp),
+                    ) {
+                        Text("我知道了")
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1307,19 +1427,26 @@ private fun MainShell(
                         Text(BuildConfig.VERSION_NAME, color = AppTextMuted, fontSize = 12.sp)
                     }
                     HorizontalDivider(color = AppTextMuted.copy(alpha = .16f))
-                    navItems.forEach { item ->
-                        NavigationDrawerItem(
-                            selected = state.page == item.page,
-                            onClick = {
-                                onPage(item.page)
-                                scope.launch { drawerState.close() }
-                            },
-                            icon = { Icon(item.icon, null) },
-                            label = { Text(item.title) },
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 3.dp),
-                        )
+                    Column(
+                        Modifier
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState())
+                            .padding(vertical = 6.dp),
+                    ) {
+                        navItems.forEach { item ->
+                            NavigationDrawerItem(
+                                selected = state.page == item.page,
+                                onClick = {
+                                    onPage(item.page)
+                                    scope.launch { drawerState.close() }
+                                },
+                                icon = { Icon(item.icon, null) },
+                                label = { Text(item.title) },
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 3.dp),
+                            )
+                        }
                     }
-                    Spacer(Modifier.weight(1f))
+                    HorizontalDivider(color = AppTextMuted.copy(alpha = .12f))
                     Text(
                         "从屏幕左侧向右滑动，可随时打开导航",
                         color = AppTextMuted,
@@ -2639,11 +2766,13 @@ private fun ConstantTablePage(
     onGenerateSongImage: (SongScoreResult) -> Unit,
 ) {
     var selectedLevel by rememberSaveable { mutableStateOf<Int?>(null) }
+    var selectedDifficultyMask by rememberSaveable { mutableStateOf(CONSTANT_DIFFICULTY_ALL_MASK) }
     var selectedSong by remember { mutableStateOf<SongScoreResult?>(null) }
     val listState = rememberLazyListState()
     var lastDisplayedLevel by rememberSaveable { mutableStateOf(selectedLevel) }
-    val rows = remember(state.constantTableEntries, selectedLevel) {
-        buildConstantTableRows(state.constantTableEntries, selectedLevel)
+    var lastDisplayedDifficultyMask by rememberSaveable { mutableStateOf(selectedDifficultyMask) }
+    val rows = remember(state.constantTableEntries, selectedLevel, selectedDifficultyMask) {
+        buildConstantTableRows(state.constantTableEntries, selectedLevel, selectedDifficultyMask)
     }
 
     selectedSong?.let { song ->
@@ -2682,14 +2811,39 @@ private fun ConstantTablePage(
                 )
             }
         }
+        Spacer(Modifier.height(8.dp))
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 18.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            item(key = "difficulty-all") {
+                ConstantLevelChip(
+                    label = "全部",
+                    selected = selectedDifficultyMask == CONSTANT_DIFFICULTY_ALL_MASK,
+                    onClick = { selectedDifficultyMask = CONSTANT_DIFFICULTY_ALL_MASK },
+                )
+            }
+            items(CONSTANT_DIFFICULTIES, key = { "difficulty-$it" }) { difficulty ->
+                val bit = constantDifficultyBit(difficulty)
+                ConstantLevelChip(
+                    label = difficulty,
+                    selected = selectedDifficultyMask and bit != 0,
+                    onClick = { selectedDifficultyMask = selectedDifficultyMask xor bit },
+                )
+            }
+        }
         Spacer(Modifier.height(12.dp))
         if (rows.isEmpty()) {
-            EmptyState("暂无定数资料", "当前曲库中没有该等级的谱面。", {})
+            EmptyState("暂无定数资料", "当前定数与难度筛选条件下没有谱面。", {})
         } else {
-            LaunchedEffect(selectedLevel) {
-                if (lastDisplayedLevel != selectedLevel) {
+            LaunchedEffect(selectedLevel, selectedDifficultyMask) {
+                if (
+                    lastDisplayedLevel != selectedLevel ||
+                    lastDisplayedDifficultyMask != selectedDifficultyMask
+                ) {
                     listState.scrollToItem(0)
                     lastDisplayedLevel = selectedLevel
+                    lastDisplayedDifficultyMask = selectedDifficultyMask
                 }
             }
             LazyColumn(
@@ -2702,7 +2856,7 @@ private fun ConstantTablePage(
                     key = { _, row -> row.key },
                 ) { index, row ->
                     AnimatedConstantTableRow(
-                        animationKey = selectedLevel ?: 0,
+                        animationKey = ((selectedLevel ?: 0) shl 4) or selectedDifficultyMask,
                         rowIndex = index,
                         rowKey = row.key,
                     ) {
@@ -2726,11 +2880,12 @@ private fun ConstantTablePage(
 private fun buildConstantTableRows(
     entries: List<ConstantTableEntry>,
     selectedLevel: Int?,
+    selectedDifficultyMask: Int,
 ): List<ConstantTableRow> = buildList {
-    val filtered = if (selectedLevel == null) {
-        entries
-    } else {
-        entries.filter { it.chart.chartConstant?.toInt() == selectedLevel }
+    val filtered = entries.filter { entry ->
+        val matchesLevel = selectedLevel == null || entry.chart.chartConstant?.toInt() == selectedLevel
+        val matchesDifficulty = selectedDifficultyMask and constantDifficultyBit(entry.chart.difficulty) != 0
+        matchesLevel && matchesDifficulty
     }
     filtered.groupBy { it.chart.chartConstant?.toInt() ?: 0 }
         .toSortedMap(compareByDescending { it })
@@ -4027,31 +4182,73 @@ private fun B30ImageStyleSetting(
     style: B30ImageStyle,
     onStyleChange: (B30ImageStyle) -> Unit,
 ) {
+    var expanded by remember { mutableStateOf(false) }
     Card(colors = CardDefaults.cardColors(containerColor = AppSurface), shape = RoundedCornerShape(10.dp)) {
         Column(Modifier.fillMaxWidth().padding(16.dp)) {
             Text("B30 / P30 成绩图样式", fontWeight = FontWeight.Bold)
             Text("切换后需重新生成成绩图", color = AppTextMuted, fontSize = 12.sp)
-            Row(
-                Modifier.fillMaxWidth().padding(top = 13.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                ThemeChoice(
-                    label = "经典",
-                    icon = Icons.Default.BarChart,
-                    selected = style == B30ImageStyle.CLASSIC,
-                    onClick = { onStyleChange(B30ImageStyle.CLASSIC) },
-                    modifier = Modifier.weight(1f),
-                )
-                ThemeChoice(
-                    label = "简约",
-                    icon = Icons.Default.Image,
-                    selected = style == B30ImageStyle.MINIMAL,
-                    onClick = { onStyleChange(B30ImageStyle.MINIMAL) },
-                    modifier = Modifier.weight(1f),
-                )
+            Box(Modifier.fillMaxWidth().padding(top = 13.dp)) {
+                OutlinedButton(
+                    onClick = { expanded = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(9.dp),
+                ) {
+                    Icon(Icons.Default.Image, null, modifier = Modifier.size(18.dp))
+                    Text(
+                        b30ImageStyleLabel(style),
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(start = 10.dp).weight(1f),
+                        textAlign = TextAlign.Start,
+                    )
+                    Icon(Icons.Default.ExpandMore, "展开样式列表")
+                }
+                DropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false },
+                    modifier = Modifier.widthIn(min = 240.dp),
+                ) {
+                    B30ImageStyle.entries.forEach { option ->
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    b30ImageStyleLabel(option),
+                                    fontWeight = if (option == style) FontWeight.Black else FontWeight.Medium,
+                                )
+                            },
+                            leadingIcon = {
+                                if (option == style) {
+                                    Icon(Icons.Default.CheckCircle, null, tint = AppAccent)
+                                } else {
+                                    Icon(Icons.Default.Image, null, tint = AppTextMuted)
+                                }
+                            },
+                            onClick = {
+                                expanded = false
+                                onStyleChange(option)
+                            },
+                        )
+                    }
+                }
             }
         }
     }
+}
+
+private val CONSTANT_DIFFICULTIES = listOf("EZ", "HD", "IN", "AT")
+private const val CONSTANT_DIFFICULTY_ALL_MASK = 0b1111
+
+private fun constantDifficultyBit(difficulty: String): Int = when (difficulty.uppercase(Locale.US)) {
+    "EZ" -> 0b0001
+    "HD" -> 0b0010
+    "IN" -> 0b0100
+    "AT" -> 0b1000
+    else -> 0
+}
+
+private fun b30ImageStyleLabel(style: B30ImageStyle): String = when (style) {
+    B30ImageStyle.CLASSIC -> "经典"
+    B30ImageStyle.MINIMAL -> "简约"
+    B30ImageStyle.PHI_PLUGIN -> "Phi-Plugin"
 }
 
 @Composable

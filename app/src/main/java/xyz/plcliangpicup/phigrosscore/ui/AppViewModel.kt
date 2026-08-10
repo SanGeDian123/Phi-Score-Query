@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import xyz.plcliangpicup.phigrosscore.BuildConfig
+import xyz.plcliangpicup.phigrosscore.data.AppAnnouncement
 import xyz.plcliangpicup.phigrosscore.data.AppRepository
 import xyz.plcliangpicup.phigrosscore.data.AppUpdateManifest
 import xyz.plcliangpicup.phigrosscore.data.B30ImageStyle
@@ -67,6 +68,7 @@ data class AppUiState(
     val showExperienceSurveyPrompt: Boolean = false,
     val loginProgress: LoginProgress = LoginProgress.Idle,
     val availableAppUpdate: AppUpdateManifest? = null,
+    val announcement: AppAnnouncement? = null,
     val isCheckingAppUpdate: Boolean = false,
     val isDownloadingAppUpdate: Boolean = false,
     val appUpdateDownloadedBytes: Long = 0L,
@@ -106,6 +108,14 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
 
     init {
         if (repository.autoCheckAppUpdates) checkAppUpdate(silent = true)
+        viewModelScope.launch {
+            runCatching { repository.fetchPendingAnnouncement() }
+                .onSuccess { announcement ->
+                    if (announcement != null) {
+                        _state.update { it.copy(announcement = announcement) }
+                    }
+                }
+        }
         viewModelScope.launch {
             if (repository.loadCachedSongCatalog()) {
                 _state.update {
@@ -160,6 +170,8 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
     }
 
     fun dismissMessage() = _state.update { it.copy(message = null) }
+
+    fun dismissAnnouncement() = _state.update { it.copy(announcement = null) }
 
     fun setDarkTheme(enabled: Boolean) {
         if (_state.value.isDarkTheme == enabled) return

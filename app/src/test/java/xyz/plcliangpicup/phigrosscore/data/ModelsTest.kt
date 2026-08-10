@@ -20,6 +20,26 @@ class ModelsTest {
     }
 
     @Test
+    fun `Phi Plugin image style persists and unknown values remain classic`() {
+        assertEquals(B30ImageStyle.PHI_PLUGIN, B30ImageStyle.fromPreference("phi-plugin"))
+        assertEquals(B30ImageStyle.CLASSIC, B30ImageStyle.fromPreference("unknown"))
+    }
+
+    @Test
+    fun `announcement requires new bounded nonblank content`() {
+        val announcement = AppAnnouncement(
+            id = "notice-1",
+            title = "标题",
+            body = "正文",
+        )
+
+        assertTrue(announcement.isDisplayableAfter(null))
+        assertTrue(!announcement.isDisplayableAfter("notice-1"))
+        assertTrue(announcement.copy(title = " ").isDisplayableAfter(null).not())
+        assertTrue(announcement.copy(body = "x".repeat(8_001)).isDisplayableAfter(null).not())
+    }
+
+    @Test
     fun `single song image style defaults to new design and preserves legacy selection`() {
         assertEquals(SongScoreImageStyle.DEFAULT, SongScoreImageStyle.fromPreference(null))
         assertEquals(SongScoreImageStyle.DEFAULT, SongScoreImageStyle.fromPreference("unknown"))
