@@ -1,6 +1,6 @@
 # Phi Score Query
 
-Phi Score Query 是一个面向 Android 8.0 及以上系统的非官方 Phigros 成绩查询客户端。当前版本为 **Pre-0.9.7.6 公开测试版**。
+Phi Score Query 是一个面向 Android 8.0 及以上系统的非官方 Phigros 成绩查询客户端。当前版本为 **Pre-0.9.7.7 公开测试版**。
 
 项目提供 Android 客户端，以及线上服务实际使用的 Next-Phi-Backend 修改版对应源码。
 
@@ -11,7 +11,7 @@ Phi Score Query 是一个面向 Android 8.0 及以上系统的非官方 Phigros 
 - 大陆版 TapTap 扫码和 SessionToken 登录
 - B30、P30、Best N等成绩查询
 - 单曲查询、定数表和排行榜
-- 经典/简约 B30/P30 图片生成、保存与分享
+- 多种样式的 B30/P30 图片生成、保存与分享
 - 服务器曲库同步与离线缓存
 - 应该能用的在线更新系统(我自己能用😋)
 
