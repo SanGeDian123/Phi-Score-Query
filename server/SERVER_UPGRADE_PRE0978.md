@@ -1,6 +1,6 @@
 # Pre-0.9.7.8 服务器升级包
 
-本包更新后端建议区接口、持久化图片目录、SQLite 表结构、Caddy 路由、Phi-Plugin B30/P30 金色光晕，并发布 Pre-0.9.7.8 签名 Android 测试客户端。客户端更多页主体色跟随主题，RKS 草稿会持久化，提升估算会读取账号真实 B27 与 AP3 并按替换线重算，建议区仅允许选择 APP 内生成的 B30/P30 图片。本次后端对应源码也随包提供，部署后可从 `/source` 下载。
+本包更新后端建议区接口、持久化图片目录、SQLite 表结构、Caddy 路由、Phi-Plugin B30/P30 金色光晕，并发布 Pre-0.9.7.8 签名 Android 测试客户端。客户端更多页主体色跟随主题，RKS 草稿会持久化，提升估算会读取账号真实 B27 与 AP3 并按替换线重算；建议区仅允许选择 APP 内生成的 B30/P30 图片，并新增作者删除、评论通知、通知直达、图片放大及正确的本地时间显示。本次后端对应源码也随包提供，部署后可从 `/source` 下载。
 
 ## 升级命令
 
@@ -23,4 +23,4 @@ Invoke-RestMethod 'https://api.plc-liangpi-cup.xyz/health'
 try { Invoke-WebRequest 'https://api.plc-liangpi-cup.xyz/api/v2/suggestions/random' -UseBasicParsing } catch { $_.Exception.Response.StatusCode.value__ }
 ```
 
-预期更新清单为 `versionCode 38`、`Pre-0.9.7.8`；未携带登录令牌访问建议区应返回 `401`，而不是 Caddy `404`。
+预期更新清单为 `versionCode 39`、`Pre-0.9.7.8`；未携带登录令牌访问建议区应返回 `401`，而不是 Caddy `404`。

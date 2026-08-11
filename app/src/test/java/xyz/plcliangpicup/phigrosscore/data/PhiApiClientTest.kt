@@ -178,4 +178,69 @@ class PhiApiClientTest {
         assertEquals("/api/v2/suggestions/random?exclude=post-1", request.path)
         assertEquals("Bearer access", request.getHeader("Authorization"))
     }
+
+    @Test
+    fun `blank comment image is treated as absent`() = runTest {
+        server.enqueue(
+            MockResponse().setBody(
+                """
+                    {
+                      "id":"post-3",
+                      "description":"求建议！",
+                      "imageUrl":"/suggestion-media/post.png",
+                      "author":{"nickname":"Alice","rks":15.5},
+                      "createdAt":"2026-08-11T00:00:00Z",
+                      "comments":[{
+                        "id":"comment-1",
+                        "text":"先练短板",
+                        "imageUrl":"   ",
+                        "author":{"nickname":"Bob","rks":14.0},
+                        "createdAt":"2026-08-11T00:01:00Z",
+                        "canDelete":true
+                      }]
+                    }
+                """.trimIndent(),
+            ),
+        )
+        server.start()
+
+        val post = PhiApiClient(server.url("/").toString(), json)
+            .fetchSuggestionPost("access", "post-3")
+
+        assertEquals(null, post.comments.single().imageUrl)
+        assertTrue(post.comments.single().canDelete)
+    }
+
+    @Test
+    fun `suggestion delete and notification routes are authenticated`() = runTest {
+        server.enqueue(MockResponse().setResponseCode(204))
+        server.enqueue(
+            MockResponse().setBody(
+                """
+                    {
+                      "checkedAt":"2026-08-11T00:15:00Z",
+                      "items":[{
+                        "postId":"post-1",
+                        "postTitle":"求建议！",
+                        "commentCount":1,
+                        "latestCommentAt":"2026-08-11T00:10:00Z"
+                      }]
+                    }
+                """.trimIndent(),
+            ),
+        )
+        server.start()
+        val client = PhiApiClient(server.url("/").toString(), json)
+
+        client.deleteSuggestionComment("access", "comment-1")
+        val deleteRequest = server.takeRequest()
+        assertEquals("DELETE", deleteRequest.method)
+        assertEquals("/api/v2/suggestions/comments/comment-1", deleteRequest.path)
+        assertEquals("Bearer access", deleteRequest.getHeader("Authorization"))
+
+        val response = client.fetchSuggestionNotifications("access", "2026-08-11T00:00:00Z")
+        val notificationRequest = server.takeRequest()
+        assertTrue(notificationRequest.path.orEmpty().startsWith("/api/v2/suggestions/notifications?after="))
+        assertEquals(1, response.items.single().commentCount)
+    }
 }

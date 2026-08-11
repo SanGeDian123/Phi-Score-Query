@@ -17,6 +17,7 @@ data class SuggestionComment(
     val imageUrl: String? = null,
     val author: SuggestionAuthor,
     val createdAt: String,
+    val canDelete: Boolean = false,
 )
 
 @Serializable
@@ -27,4 +28,19 @@ data class SuggestionPost(
     val author: SuggestionAuthor,
     val createdAt: String,
     val comments: List<SuggestionComment> = emptyList(),
+    val canDelete: Boolean = false,
+)
+
+@Serializable
+data class SuggestionNotificationItem(
+    val postId: String,
+    val postTitle: String,
+    val commentCount: Int,
+    val latestCommentAt: String,
+)
+
+@Serializable
+data class SuggestionNotificationResponse(
+    val checkedAt: String,
+    val items: List<SuggestionNotificationItem> = emptyList(),
 )

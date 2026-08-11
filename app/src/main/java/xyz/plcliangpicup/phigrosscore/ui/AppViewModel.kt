@@ -62,8 +62,12 @@ data class AppUiState(
     val leaderboard: LeaderboardSnapshot? = null,
     val isLeaderboardLoading: Boolean = false,
     val suggestionPost: SuggestionPost? = null,
+    val ownSuggestionPosts: List<SuggestionPost> = emptyList(),
+    val commentedSuggestionPosts: List<SuggestionPost> = emptyList(),
     val isSuggestionLoading: Boolean = false,
     val isSuggestionSubmitting: Boolean = false,
+    val suggestionNotificationsEnabled: Boolean = false,
+    val suggestionOpenRequestId: Long = 0L,
     val rksCalculatorDraft: RksCalculatorDraft = RksCalculatorDraft(),
     val isGeneratingB30Image: Boolean = false,
     val b30ImageGenerationElapsedSeconds: Int = 0,
@@ -100,6 +104,7 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
             showImagePagerGuide = repository.shouldShowImagePagerGuide,
             constantTableEntries = repository.constantTableEntries(),
             rksCalculatorDraft = repository.rksCalculatorDraft,
+            suggestionNotificationsEnabled = repository.suggestionNotificationsEnabled,
         ),
     )
     val state: StateFlow<AppUiState> = _state.asStateFlow()
@@ -530,6 +535,57 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
         }
     }
 
+    fun loadOwnSuggestionPosts() {
+        if (_state.value.isSuggestionLoading) return
+        viewModelScope.launch {
+            _state.update { it.copy(isSuggestionLoading = true, message = null) }
+            runCatching {
+                repository.fetchOwnSuggestionPosts() to repository.fetchCommentedSuggestionPosts()
+            }
+                .onSuccess { (posts, commentedPosts) ->
+                    _state.update {
+                        it.copy(
+                            ownSuggestionPosts = posts,
+                            commentedSuggestionPosts = commentedPosts,
+                            isSuggestionLoading = false,
+                            isOffline = false,
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _state.update {
+                        it.copy(isSuggestionLoading = false, message = readableError(error))
+                    }
+                }
+        }
+    }
+
+    fun openSuggestionPost(postId: String) {
+        if (postId.isBlank()) return
+        val requestId = SystemClock.elapsedRealtimeNanos()
+        _state.update {
+            it.copy(
+                page = AppPage.MORE,
+                suggestionOpenRequestId = requestId,
+                isSuggestionLoading = true,
+                message = null,
+            )
+        }
+        viewModelScope.launch {
+            runCatching { repository.fetchSuggestionPost(postId) }
+                .onSuccess { post ->
+                    _state.update {
+                        it.copy(suggestionPost = post, isSuggestionLoading = false, isOffline = false)
+                    }
+                }
+                .onFailure { error ->
+                    _state.update {
+                        it.copy(isSuggestionLoading = false, message = readableError(error))
+                    }
+                }
+        }
+    }
+
     fun submitSuggestionPost(
         description: String,
         imageBytes: ByteArray,
@@ -545,6 +601,7 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
                 _state.update {
                     it.copy(
                         suggestionPost = post,
+                        ownSuggestionPosts = listOf(post) + it.ownSuggestionPosts.filterNot { own -> own.id == post.id },
                         isSuggestionSubmitting = false,
                         message = "已发送，等待建议",
                     )
@@ -588,6 +645,66 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
                 onComplete(false)
             }
         }
+    }
+
+    fun deleteSuggestionPost(postId: String, onComplete: (Boolean) -> Unit = {}) {
+        if (_state.value.isSuggestionSubmitting) return
+        viewModelScope.launch {
+            _state.update { it.copy(isSuggestionSubmitting = true, message = null) }
+            runCatching { repository.deleteSuggestionPost(postId) }
+                .onSuccess {
+                    _state.update { current ->
+                        current.copy(
+                            suggestionPost = current.suggestionPost.takeUnless { it?.id == postId },
+                            ownSuggestionPosts = current.ownSuggestionPosts.filterNot { it.id == postId },
+                            commentedSuggestionPosts = current.commentedSuggestionPosts.filterNot { it.id == postId },
+                            isSuggestionSubmitting = false,
+                            message = "帖子已删除",
+                        )
+                    }
+                    onComplete(true)
+                }
+                .onFailure { error ->
+                    _state.update { it.copy(isSuggestionSubmitting = false, message = readableError(error)) }
+                    onComplete(false)
+                }
+        }
+    }
+
+    fun deleteSuggestionComment(commentId: String, onComplete: (Boolean) -> Unit = {}) {
+        if (_state.value.isSuggestionSubmitting) return
+        viewModelScope.launch {
+            _state.update { it.copy(isSuggestionSubmitting = true, message = null) }
+            runCatching { repository.deleteSuggestionComment(commentId) }
+                .onSuccess {
+                    _state.update { current ->
+                        val updatedPost = current.suggestionPost?.copy(
+                            comments = current.suggestionPost.comments.filterNot { it.id == commentId },
+                        )
+                        current.copy(
+                            suggestionPost = updatedPost,
+                            ownSuggestionPosts = current.ownSuggestionPosts.map { post ->
+                                if (post.id == updatedPost?.id) updatedPost else post
+                            },
+                            commentedSuggestionPosts = current.commentedSuggestionPosts
+                                .map { post -> if (post.id == updatedPost?.id) updatedPost else post }
+                                .filter { post -> post.comments.any { it.canDelete } },
+                            isSuggestionSubmitting = false,
+                            message = "评论已删除",
+                        )
+                    }
+                    onComplete(true)
+                }
+                .onFailure { error ->
+                    _state.update { it.copy(isSuggestionSubmitting = false, message = readableError(error)) }
+                    onComplete(false)
+                }
+        }
+    }
+
+    fun setSuggestionNotificationsEnabled(enabled: Boolean) {
+        repository.setSuggestionNotificationsEnabled(enabled)
+        _state.update { it.copy(suggestionNotificationsEnabled = enabled) }
     }
 
     fun generateImage() {

@@ -1,6 +1,11 @@
 package xyz.plcliangpicup.phigrosscore.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
@@ -17,6 +22,8 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -46,11 +53,13 @@ import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.Casino
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Functions
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -65,11 +74,13 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -84,6 +95,9 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -107,11 +121,16 @@ import xyz.plcliangpicup.phigrosscore.data.ChartRksSolution
 import xyz.plcliangpicup.phigrosscore.data.RksCalculatorDraft
 import xyz.plcliangpicup.phigrosscore.data.SuggestionAuthor
 import xyz.plcliangpicup.phigrosscore.data.SuggestionComment
+import xyz.plcliangpicup.phigrosscore.data.SuggestionPost
 import xyz.plcliangpicup.phigrosscore.data.calculateCustomCompositeRks
 import xyz.plcliangpicup.phigrosscore.data.projectAccountRksIncrease
 import xyz.plcliangpicup.phigrosscore.data.solveChartRks
 import java.io.File
 import java.util.Locale
+import java.time.Instant
+import java.time.OffsetDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 private enum class MoreFeature { RKS, SUGGESTION }
 private enum class CalculatorMode(val label: String, val preferenceValue: String) {
@@ -151,12 +170,20 @@ internal fun MoreFeaturesPage(
     state: AppUiState,
     onRefreshB30: () -> Unit,
     onLoadRandomSuggestion: (Boolean) -> Unit,
+    onLoadOwnSuggestionPosts: () -> Unit,
+    onOpenSuggestionPost: (String) -> Unit,
     onRksCalculatorDraftChange: (RksCalculatorDraft) -> Unit,
     onSubmitSuggestionPost: (String, ByteArray, String, (Boolean) -> Unit) -> Unit,
     onSubmitSuggestionComment: (String, ByteArray?, String?, (Boolean) -> Unit) -> Unit,
+    onDeleteSuggestionPost: (String, (Boolean) -> Unit) -> Unit,
+    onDeleteSuggestionComment: (String, (Boolean) -> Unit) -> Unit,
+    onSuggestionNotificationsChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var selected by remember { mutableStateOf<MoreFeature?>(null) }
+    LaunchedEffect(state.suggestionOpenRequestId) {
+        if (state.suggestionOpenRequestId != 0L) selected = MoreFeature.SUGGESTION
+    }
     BackHandler(enabled = selected != null) { selected = null }
     AnimatedContent(
         targetState = selected,
@@ -188,8 +215,13 @@ internal fun MoreFeaturesPage(
                 SuggestionHubScreen(
                     state = state,
                     onLoadRandomSuggestion = onLoadRandomSuggestion,
+                    onLoadOwnSuggestionPosts = onLoadOwnSuggestionPosts,
+                    onOpenSuggestionPost = onOpenSuggestionPost,
                     onSubmitSuggestionPost = onSubmitSuggestionPost,
                     onSubmitSuggestionComment = onSubmitSuggestionComment,
+                    onDeleteSuggestionPost = onDeleteSuggestionPost,
+                    onDeleteSuggestionComment = onDeleteSuggestionComment,
+                    onSuggestionNotificationsChange = onSuggestionNotificationsChange,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -686,11 +718,19 @@ private fun ErrorText(message: String) {
 private fun SuggestionHubScreen(
     state: AppUiState,
     onLoadRandomSuggestion: (Boolean) -> Unit,
+    onLoadOwnSuggestionPosts: () -> Unit,
+    onOpenSuggestionPost: (String) -> Unit,
     onSubmitSuggestionPost: (String, ByteArray, String, (Boolean) -> Unit) -> Unit,
     onSubmitSuggestionComment: (String, ByteArray?, String?, (Boolean) -> Unit) -> Unit,
+    onDeleteSuggestionPost: (String, (Boolean) -> Unit) -> Unit,
+    onDeleteSuggestionComment: (String, (Boolean) -> Unit) -> Unit,
+    onSuggestionNotificationsChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var tab by remember { mutableStateOf(SuggestionTab.ASK) }
+    LaunchedEffect(state.suggestionOpenRequestId) {
+        if (state.suggestionOpenRequestId != 0L) tab = SuggestionTab.GIVE
+    }
     val generatedImages = remember(state.imageFile, state.p30ImageFile) {
         listOfNotNull(
             state.imageFile?.takeIf(File::exists)?.let { GeneratedScoreImage("B30", it) },
@@ -728,7 +768,18 @@ private fun SuggestionHubScreen(
             when (it) {
                 SuggestionTab.ASK -> AskSuggestionPane(
                     submitting = state.isSuggestionSubmitting,
+                    loading = state.isSuggestionLoading,
                     generatedImages = generatedImages,
+                    ownPosts = state.ownSuggestionPosts,
+                    commentedPosts = state.commentedSuggestionPosts,
+                    notificationsEnabled = state.suggestionNotificationsEnabled,
+                    onLoadOwnPosts = onLoadOwnSuggestionPosts,
+                    onOpenPost = {
+                        tab = SuggestionTab.GIVE
+                        onOpenSuggestionPost(it)
+                    },
+                    onDeletePost = onDeleteSuggestionPost,
+                    onNotificationsChange = onSuggestionNotificationsChange,
                     onSubmit = { description, bytes, mime, done ->
                         onSubmitSuggestionPost(description, bytes, mime) { success ->
                             done(success)
@@ -741,6 +792,8 @@ private fun SuggestionHubScreen(
                     generatedImages = generatedImages,
                     onAnother = { onLoadRandomSuggestion(true) },
                     onSubmitComment = onSubmitSuggestionComment,
+                    onDeletePost = onDeleteSuggestionPost,
+                    onDeleteComment = onDeleteSuggestionComment,
                 )
             }
         }
@@ -750,7 +803,15 @@ private fun SuggestionHubScreen(
 @Composable
 private fun AskSuggestionPane(
     submitting: Boolean,
+    loading: Boolean,
     generatedImages: List<GeneratedScoreImage>,
+    ownPosts: List<xyz.plcliangpicup.phigrosscore.data.SuggestionPost>,
+    commentedPosts: List<xyz.plcliangpicup.phigrosscore.data.SuggestionPost>,
+    notificationsEnabled: Boolean,
+    onLoadOwnPosts: () -> Unit,
+    onOpenPost: (String) -> Unit,
+    onDeletePost: (String, (Boolean) -> Unit) -> Unit,
+    onNotificationsChange: (Boolean) -> Unit,
     onSubmit: (String, ByteArray, String, (Boolean) -> Unit) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -764,6 +825,7 @@ private fun AskSuggestionPane(
             selectedLabel = generatedImages.firstOrNull()?.label
         }
     }
+    LaunchedEffect(Unit) { onLoadOwnPosts() }
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -775,6 +837,10 @@ private fun AskSuggestionPane(
                 selectedLabel = it.label
                 localError = null
             },
+        )
+        SuggestionNotificationToggle(
+            enabled = notificationsEnabled,
+            onEnabledChange = onNotificationsChange,
         )
         OutlinedTextField(
             value = description,
@@ -811,6 +877,40 @@ private fun AskSuggestionPane(
                 Icon(Icons.Default.UploadFile, null)
                 Spacer(Modifier.width(8.dp))
                 Text("发送成绩图", fontWeight = FontWeight.Bold)
+            }
+        }
+        if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+        if (ownPosts.isNotEmpty()) {
+            Text("我的求建议帖子", fontWeight = FontWeight.Black, fontSize = 15.sp)
+            ownPosts.forEach { post ->
+                OwnSuggestionPostCard(
+                    post = post,
+                    submitting = submitting,
+                    onOpen = { onOpenPost(post.id) },
+                    onDelete = { done -> onDeletePost(post.id, done) },
+                )
+            }
+        }
+        if (commentedPosts.isNotEmpty()) {
+            Text("我的建议评论", fontWeight = FontWeight.Black, fontSize = 15.sp)
+            commentedPosts.forEach { post ->
+                val ownCommentCount = post.comments.count { it.canDelete }
+                Card(
+                    modifier = Modifier.fillMaxWidth().clickable(enabled = !submitting) { onOpenPost(post.id) },
+                    shape = RoundedCornerShape(15.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .56f),
+                    ),
+                ) {
+                    Column(Modifier.fillMaxWidth().padding(14.dp)) {
+                        Text(post.description, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold)
+                        Text(
+                            "$ownCommentCount 条我的评论 · 点击管理",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 10.sp,
+                        )
+                    }
+                }
             }
         }
     }
@@ -869,7 +969,11 @@ private fun GiveSuggestionPane(
     generatedImages: List<GeneratedScoreImage>,
     onAnother: () -> Unit,
     onSubmitComment: (String, ByteArray?, String?, (Boolean) -> Unit) -> Unit,
+    onDeletePost: (String, (Boolean) -> Unit) -> Unit,
+    onDeleteComment: (String, (Boolean) -> Unit) -> Unit,
 ) {
+    var previewUrl by remember { mutableStateOf<String?>(null) }
+    var confirmDeletePost by remember { mutableStateOf(false) }
     val post = state.suggestionPost
     if (state.isSuggestionLoading && post == null) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -900,6 +1004,11 @@ private fun GiveSuggestionPane(
             item {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     SuggestionAuthorRow(current.author, Modifier.weight(1f))
+                    if (current.canDelete) {
+                        IconButton(onClick = { confirmDeletePost = true }) {
+                            Icon(Icons.Default.DeleteOutline, "删除帖子")
+                        }
+                    }
                     TextButton(onClick = onAnother, enabled = !state.isSuggestionLoading) {
                         Icon(Icons.Default.Casino, null)
                         Spacer(Modifier.width(5.dp))
@@ -917,6 +1026,7 @@ private fun GiveSuggestionPane(
                         .fillMaxWidth()
                         .heightIn(min = 260.dp, max = 760.dp)
                         .clip(RoundedCornerShape(16.dp))
+                        .clickable { previewUrl = current.imageUrl }
                         .background(Color.Black.copy(alpha = .16f)),
                 )
             }
@@ -926,7 +1036,14 @@ private fun GiveSuggestionPane(
             }
             if (current.comments.isNotEmpty()) {
                 item { HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .5f)) }
-                items(current.comments, key = { it.id }) { SuggestionCommentCard(it) }
+                items(current.comments, key = { it.id }) {
+                    SuggestionCommentCard(
+                        comment = it,
+                        submitting = state.isSuggestionSubmitting,
+                        onImageClick = { url -> previewUrl = url },
+                        onDelete = { done -> onDeleteComment(it.id, done) },
+                    )
+                }
             }
             item {
                 CommentComposer(
@@ -936,6 +1053,17 @@ private fun GiveSuggestionPane(
                 )
             }
         }
+    }
+    previewUrl?.let { FullscreenSuggestionImage(it, onDismiss = { previewUrl = null }) }
+    if (confirmDeletePost) {
+        DeleteConfirmationDialog(
+            title = "删除求建议帖子？",
+            text = "帖子及其全部评论将不再展示。",
+            onDismiss = { confirmDeletePost = false },
+            onConfirm = {
+                onDeletePost(post.id) { if (it) confirmDeletePost = false }
+            },
+        )
     }
 }
 
@@ -970,26 +1098,48 @@ private fun SuggestionAuthorRow(author: SuggestionAuthor, modifier: Modifier = M
 }
 
 @Composable
-private fun SuggestionCommentCard(comment: SuggestionComment) {
+private fun SuggestionCommentCard(
+    comment: SuggestionComment,
+    submitting: Boolean,
+    onImageClick: (String) -> Unit,
+    onDelete: ((Boolean) -> Unit) -> Unit,
+) {
+    var confirmDelete by remember { mutableStateOf(false) }
     Card(
         shape = RoundedCornerShape(15.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .58f)),
         modifier = Modifier.fillMaxWidth().animateContentSize(),
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-            SuggestionAuthorRow(comment.author)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SuggestionAuthorRow(comment.author, Modifier.weight(1f))
+                if (comment.canDelete) {
+                    IconButton(onClick = { confirmDelete = true }, enabled = !submitting) {
+                        Icon(Icons.Default.DeleteOutline, "删除评论")
+                    }
+                }
+            }
             if (comment.text.isNotBlank()) Text(comment.text, fontSize = 13.sp)
-            comment.imageUrl?.let {
+            comment.imageUrl?.takeIf(String::isNotBlank)?.let {
                 AsyncImage(
                     model = it,
                     contentDescription = "评论成绩图",
                     contentScale = ContentScale.Fit,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp, max = 520.dp)
-                        .clip(RoundedCornerShape(12.dp)).background(Color.Black.copy(alpha = .12f)),
+                        .clip(RoundedCornerShape(12.dp)).clickable { onImageClick(it) }
+                        .background(Color.Black.copy(alpha = .12f)),
                 )
             }
             Text(formatCommunityTime(comment.createdAt), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp)
         }
+    }
+    if (confirmDelete) {
+        DeleteConfirmationDialog(
+            title = "删除这条评论？",
+            text = "删除后无法恢复。",
+            onDismiss = { confirmDelete = false },
+            onConfirm = { onDelete { if (it) confirmDelete = false } },
+        )
     }
 }
 
@@ -1077,6 +1227,163 @@ private fun CommentComposer(
     }
 }
 
+@Composable
+private fun SuggestionNotificationToggle(
+    enabled: Boolean,
+    onEnabledChange: (Boolean) -> Unit,
+) {
+    val context = LocalContext.current
+    var permissionDenied by remember { mutableStateOf(false) }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        permissionDenied = !granted
+        onEnabledChange(granted)
+    }
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .62f),
+        ),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 15.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("评论通知", fontWeight = FontWeight.Bold)
+                Text("有新建议时提醒我", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Switch(
+                checked = enabled,
+                onCheckedChange = { checked ->
+                    permissionDenied = false
+                    if (!checked) {
+                        onEnabledChange(false)
+                    } else if (
+                        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                        ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.POST_NOTIFICATIONS,
+                        ) == PackageManager.PERMISSION_GRANTED
+                    ) {
+                        onEnabledChange(true)
+                    } else {
+                        permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                },
+            )
+        }
+    }
+    if (permissionDenied) ErrorText("需要通知权限才能提醒新评论")
+}
+
+@Composable
+private fun OwnSuggestionPostCard(
+    post: SuggestionPost,
+    submitting: Boolean,
+    onOpen: () -> Unit,
+    onDelete: ((Boolean) -> Unit) -> Unit,
+) {
+    var confirmDelete by remember { mutableStateOf(false) }
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(enabled = !submitting, onClick = onOpen),
+        shape = RoundedCornerShape(15.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .56f),
+        ),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(start = 14.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(post.description, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold)
+                Text(
+                    "${formatCommunityTime(post.createdAt)} · ${post.comments.size} 条评论",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 10.sp,
+                )
+            }
+            IconButton(
+                onClick = { confirmDelete = true },
+                enabled = !submitting,
+            ) { Icon(Icons.Default.DeleteOutline, "删除帖子") }
+        }
+    }
+    if (confirmDelete) {
+        DeleteConfirmationDialog(
+            title = "删除求建议帖子？",
+            text = "帖子及其全部评论将不再展示。",
+            onDismiss = { confirmDelete = false },
+            onConfirm = { onDelete { if (it) confirmDelete = false } },
+        )
+    }
+}
+
+@Composable
+private fun DeleteConfirmationDialog(
+    title: String,
+    text: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = { Text(text) },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("删除") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
+}
+
+@Composable
+private fun FullscreenSuggestionImage(
+    imageUrl: String,
+    onDismiss: () -> Unit,
+) {
+    var scale by remember(imageUrl) { mutableFloatStateOf(1f) }
+    val transformableState = rememberTransformableState { zoomChange, _, _ ->
+        scale = (scale * zoomChange).coerceIn(1f, 5f)
+    }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+        ),
+    ) {
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(imageUrl)
+                    .crossfade(180)
+                    .build(),
+                contentDescription = "放大查看成绩图",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(12.dp)
+                    .transformable(transformableState)
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                    },
+            )
+            Text(
+                "双指缩放查看详情",
+                color = Color.White.copy(alpha = .76f),
+                fontSize = 12.sp,
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 20.dp),
+            )
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 8.dp),
+            ) { Icon(Icons.Default.Close, "关闭", tint = Color.White) }
+        }
+    }
+}
+
 private suspend fun readGeneratedScoreImage(image: GeneratedScoreImage): ByteArray = withContext(Dispatchers.IO) {
     require(image.file.exists() && image.file.isFile) { "APP 内生成的成绩图已失效，请重新生成" }
     val bytes = image.file.readBytes()
@@ -1093,8 +1400,13 @@ private val PNG_SIGNATURE = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0
 private fun formatNumber(value: Double, decimals: Int): String =
     String.format(Locale.US, "%.${decimals}f", value)
 
-private fun formatCommunityTime(value: String): String = value
-    .replace('T', ' ')
-    .substringBefore('.')
-    .removeSuffix("Z")
-    .take(16)
+internal fun formatCommunityTime(value: String, zoneId: ZoneId = ZoneId.systemDefault()): String =
+    runCatching {
+        val instant = runCatching { OffsetDateTime.parse(value).toInstant() }
+            .getOrElse { Instant.parse(value) }
+        COMMUNITY_TIME_FORMAT.format(instant.atZone(zoneId))
+    }.getOrElse {
+        value.replace('T', ' ').substringBefore('.').removeSuffix("Z").take(16)
+    }
+
+private val COMMUNITY_TIME_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")

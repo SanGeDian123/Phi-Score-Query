@@ -17,6 +17,7 @@ pub struct SuggestionComment {
     pub image_url: Option<String>,
     pub author: SuggestionAuthor,
     pub created_at: String,
+    pub can_delete: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
@@ -28,6 +29,23 @@ pub struct SuggestionPost {
     pub author: SuggestionAuthor,
     pub created_at: String,
     pub comments: Vec<SuggestionComment>,
+    pub can_delete: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SuggestionNotificationItem {
+    pub post_id: String,
+    pub post_title: String,
+    pub comment_count: i64,
+    pub latest_comment_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SuggestionNotificationResponse {
+    pub checked_at: String,
+    pub items: Vec<SuggestionNotificationItem>,
 }
 
 #[derive(Debug, Clone)]
@@ -40,6 +58,7 @@ pub struct SuggestionPostRecord {
     pub challenge_mode_rank: Option<i64>,
     pub rks: f64,
     pub created_at: String,
+    pub user_hash: String,
 }
 
 #[derive(Debug, Clone)]
@@ -52,4 +71,5 @@ pub struct SuggestionCommentRecord {
     pub challenge_mode_rank: Option<i64>,
     pub rks: f64,
     pub created_at: String,
+    pub user_hash: String,
 }

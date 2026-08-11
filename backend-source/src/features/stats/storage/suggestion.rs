@@ -2,7 +2,7 @@ use sqlx::Row;
 
 use crate::error::AppError;
 use crate::features::suggestion::models::{
-    SuggestionAuthor, SuggestionCommentRecord, SuggestionPostRecord,
+    SuggestionAuthor, SuggestionCommentRecord, SuggestionNotificationItem, SuggestionPostRecord,
 };
 
 use super::StatsStorage;
@@ -95,7 +95,7 @@ impl StatsStorage {
     ) -> Result<Option<SuggestionPostRecord>, AppError> {
         let row = if let Some(exclude) = exclude {
             sqlx::query(
-                "SELECT id,description,image_name,nickname,avatar,challenge_mode_rank,rks,created_at
+                "SELECT id,user_hash,description,image_name,nickname,avatar,challenge_mode_rank,rks,created_at
                  FROM suggestion_posts WHERE status='active' AND id<>? ORDER BY RANDOM() LIMIT 1",
             )
             .bind(exclude)
@@ -103,7 +103,7 @@ impl StatsStorage {
             .await
         } else {
             sqlx::query(
-                "SELECT id,description,image_name,nickname,avatar,challenge_mode_rank,rks,created_at
+                "SELECT id,user_hash,description,image_name,nickname,avatar,challenge_mode_rank,rks,created_at
                  FROM suggestion_posts WHERE status='active' ORDER BY RANDOM() LIMIT 1",
             )
             .fetch_optional(&self.pool)
@@ -121,7 +121,100 @@ impl StatsStorage {
             challenge_mode_rank: row.try_get("challenge_mode_rank").ok(),
             rks: row.try_get("rks").unwrap_or(0.0),
             created_at: row.try_get("created_at").unwrap_or_default(),
+            user_hash: row.try_get("user_hash").unwrap_or_default(),
         }))
+    }
+
+    pub async fn suggestion_post(
+        &self,
+        post_id: &str,
+    ) -> Result<Option<SuggestionPostRecord>, AppError> {
+        let row = sqlx::query(
+            "SELECT id,user_hash,description,image_name,nickname,avatar,challenge_mode_rank,rks,created_at
+             FROM suggestion_posts WHERE id=? AND status='active' LIMIT 1",
+        )
+        .bind(post_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| AppError::Internal(format!("query suggestion post: {e}")))?;
+        Ok(row.map(|row| SuggestionPostRecord {
+            id: row.try_get("id").unwrap_or_default(),
+            description: row.try_get("description").unwrap_or_default(),
+            image_name: row.try_get("image_name").unwrap_or_default(),
+            nickname: row
+                .try_get("nickname")
+                .unwrap_or_else(|_| "Phigros Player".to_string()),
+            avatar: row.try_get("avatar").ok(),
+            challenge_mode_rank: row.try_get("challenge_mode_rank").ok(),
+            rks: row.try_get("rks").unwrap_or(0.0),
+            created_at: row.try_get("created_at").unwrap_or_default(),
+            user_hash: row.try_get("user_hash").unwrap_or_default(),
+        }))
+    }
+
+    pub async fn own_suggestion_posts(
+        &self,
+        user_hash: &str,
+    ) -> Result<Vec<SuggestionPostRecord>, AppError> {
+        let rows = sqlx::query(
+            "SELECT id,user_hash,description,image_name,nickname,avatar,challenge_mode_rank,rks,created_at
+             FROM suggestion_posts
+             WHERE user_hash=? AND status='active' ORDER BY created_at DESC LIMIT 50",
+        )
+        .bind(user_hash)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| AppError::Internal(format!("query own suggestion posts: {e}")))?;
+        Ok(rows
+            .into_iter()
+            .map(|row| SuggestionPostRecord {
+                id: row.try_get("id").unwrap_or_default(),
+                description: row.try_get("description").unwrap_or_default(),
+                image_name: row.try_get("image_name").unwrap_or_default(),
+                nickname: row
+                    .try_get("nickname")
+                    .unwrap_or_else(|_| "Phigros Player".to_string()),
+                avatar: row.try_get("avatar").ok(),
+                challenge_mode_rank: row.try_get("challenge_mode_rank").ok(),
+                rks: row.try_get("rks").unwrap_or(0.0),
+                created_at: row.try_get("created_at").unwrap_or_default(),
+                user_hash: row.try_get("user_hash").unwrap_or_default(),
+            })
+            .collect())
+    }
+
+    pub async fn commented_suggestion_posts(
+        &self,
+        user_hash: &str,
+    ) -> Result<Vec<SuggestionPostRecord>, AppError> {
+        let rows = sqlx::query(
+            "SELECT p.id,p.user_hash,p.description,p.image_name,p.nickname,p.avatar,
+                    p.challenge_mode_rank,p.rks,p.created_at,MAX(c.created_at) AS latest_comment_at
+             FROM suggestion_posts p
+             JOIN suggestion_comments c ON c.post_id=p.id
+             WHERE c.user_hash=? AND c.status='active' AND p.status='active'
+             GROUP BY p.id ORDER BY latest_comment_at DESC LIMIT 50",
+        )
+        .bind(user_hash)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| AppError::Internal(format!("query commented suggestion posts: {e}")))?;
+        Ok(rows
+            .into_iter()
+            .map(|row| SuggestionPostRecord {
+                id: row.try_get("id").unwrap_or_default(),
+                description: row.try_get("description").unwrap_or_default(),
+                image_name: row.try_get("image_name").unwrap_or_default(),
+                nickname: row
+                    .try_get("nickname")
+                    .unwrap_or_else(|_| "Phigros Player".to_string()),
+                avatar: row.try_get("avatar").ok(),
+                challenge_mode_rank: row.try_get("challenge_mode_rank").ok(),
+                rks: row.try_get("rks").unwrap_or(0.0),
+                created_at: row.try_get("created_at").unwrap_or_default(),
+                user_hash: row.try_get("user_hash").unwrap_or_default(),
+            })
+            .collect())
     }
 
     pub async fn suggestion_post_exists(&self, post_id: &str) -> Result<bool, AppError> {
@@ -172,7 +265,7 @@ impl StatsStorage {
         post_id: &str,
     ) -> Result<Vec<SuggestionCommentRecord>, AppError> {
         let rows = sqlx::query(
-            "SELECT id,text,image_name,nickname,avatar,challenge_mode_rank,rks,created_at
+            "SELECT id,user_hash,text,image_name,nickname,avatar,challenge_mode_rank,rks,created_at
              FROM suggestion_comments
              WHERE post_id=? AND status='active' ORDER BY created_at ASC LIMIT 100",
         )
@@ -185,7 +278,11 @@ impl StatsStorage {
             .map(|row| SuggestionCommentRecord {
                 id: row.try_get("id").unwrap_or_default(),
                 text: row.try_get("text").unwrap_or_default(),
-                image_name: row.try_get("image_name").ok(),
+                image_name: row
+                    .try_get::<Option<String>, _>("image_name")
+                    .ok()
+                    .flatten()
+                    .filter(|value| !value.trim().is_empty()),
                 nickname: row
                     .try_get("nickname")
                     .unwrap_or_else(|_| "Phigros Player".to_string()),
@@ -193,6 +290,156 @@ impl StatsStorage {
                 challenge_mode_rank: row.try_get("challenge_mode_rank").ok(),
                 rks: row.try_get("rks").unwrap_or(0.0),
                 created_at: row.try_get("created_at").unwrap_or_default(),
+                user_hash: row.try_get("user_hash").unwrap_or_default(),
+            })
+            .collect())
+    }
+
+    pub async fn suggestion_comment(
+        &self,
+        comment_id: &str,
+    ) -> Result<Option<SuggestionCommentRecord>, AppError> {
+        let row = sqlx::query(
+            "SELECT id,user_hash,text,image_name,nickname,avatar,challenge_mode_rank,rks,created_at
+             FROM suggestion_comments WHERE id=? AND status='active' LIMIT 1",
+        )
+        .bind(comment_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| AppError::Internal(format!("query suggestion comment: {e}")))?;
+        Ok(row.map(|row| SuggestionCommentRecord {
+            id: row.try_get("id").unwrap_or_default(),
+            text: row.try_get("text").unwrap_or_default(),
+            image_name: row
+                .try_get::<Option<String>, _>("image_name")
+                .ok()
+                .flatten()
+                .filter(|value| !value.trim().is_empty()),
+            nickname: row
+                .try_get("nickname")
+                .unwrap_or_else(|_| "Phigros Player".to_string()),
+            avatar: row.try_get("avatar").ok(),
+            challenge_mode_rank: row.try_get("challenge_mode_rank").ok(),
+            rks: row.try_get("rks").unwrap_or(0.0),
+            created_at: row.try_get("created_at").unwrap_or_default(),
+            user_hash: row.try_get("user_hash").unwrap_or_default(),
+        }))
+    }
+
+    pub async fn delete_suggestion_post(
+        &self,
+        post_id: &str,
+        user_hash: &str,
+    ) -> Result<Option<Vec<String>>, AppError> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| AppError::Internal(format!("begin delete suggestion post: {e}")))?;
+        let mut images: Vec<String> = sqlx::query_scalar(
+            "SELECT image_name FROM suggestion_posts WHERE id=? AND user_hash=? AND status='active'",
+        )
+        .bind(post_id)
+        .bind(user_hash)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|e| AppError::Internal(format!("query suggestion post image: {e}")))?;
+        if images.is_empty() {
+            transaction
+                .rollback()
+                .await
+                .map_err(|e| AppError::Internal(format!("rollback delete suggestion post: {e}")))?;
+            return Ok(None);
+        }
+        let comment_images: Vec<Option<String>> = sqlx::query_scalar(
+            "SELECT image_name FROM suggestion_comments WHERE post_id=? AND status='active'",
+        )
+        .bind(post_id)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|e| AppError::Internal(format!("query suggestion comment images: {e}")))?;
+        images.extend(
+            comment_images
+                .into_iter()
+                .flatten()
+                .filter(|value| !value.trim().is_empty()),
+        );
+        sqlx::query(
+            "UPDATE suggestion_comments SET status='deleted' WHERE post_id=? AND status='active'",
+        )
+        .bind(post_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|e| AppError::Internal(format!("delete suggestion post comments: {e}")))?;
+        sqlx::query(
+            "UPDATE suggestion_posts SET status='deleted' WHERE id=? AND user_hash=? AND status='active'",
+        )
+            .bind(post_id)
+            .bind(user_hash)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|e| AppError::Internal(format!("delete suggestion post: {e}")))?;
+        transaction
+            .commit()
+            .await
+            .map_err(|e| AppError::Internal(format!("commit delete suggestion post: {e}")))?;
+        Ok(Some(images))
+    }
+
+    pub async fn delete_suggestion_comment(
+        &self,
+        comment_id: &str,
+        user_hash: &str,
+    ) -> Result<Option<Option<String>>, AppError> {
+        let row: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT image_name FROM suggestion_comments WHERE id=? AND user_hash=? AND status='active'",
+        )
+        .bind(comment_id)
+        .bind(user_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| AppError::Internal(format!("query suggestion comment image: {e}")))?;
+        let Some(image_name) = row else {
+            return Ok(None);
+        };
+        sqlx::query(
+            "UPDATE suggestion_comments SET status='deleted' WHERE id=? AND user_hash=? AND status='active'",
+        )
+        .bind(comment_id)
+        .bind(user_hash)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| AppError::Internal(format!("delete suggestion comment: {e}")))?;
+        Ok(Some(image_name.filter(|value| !value.trim().is_empty())))
+    }
+
+    pub async fn suggestion_notifications(
+        &self,
+        user_hash: &str,
+        after: &str,
+    ) -> Result<Vec<SuggestionNotificationItem>, AppError> {
+        let rows = sqlx::query(
+            "SELECT p.id AS post_id,p.description AS post_title,COUNT(c.id) AS comment_count,
+                    MAX(c.created_at) AS latest_comment_at
+             FROM suggestion_posts p
+             JOIN suggestion_comments c ON c.post_id=p.id
+             WHERE p.user_hash=? AND p.status='active' AND c.status='active'
+               AND c.user_hash<>? AND julianday(c.created_at)>julianday(?)
+             GROUP BY p.id,p.description ORDER BY latest_comment_at ASC LIMIT 50",
+        )
+        .bind(user_hash)
+        .bind(user_hash)
+        .bind(after)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| AppError::Internal(format!("query suggestion notifications: {e}")))?;
+        Ok(rows
+            .into_iter()
+            .map(|row| SuggestionNotificationItem {
+                post_id: row.try_get("post_id").unwrap_or_default(),
+                post_title: row.try_get("post_title").unwrap_or_default(),
+                comment_count: row.try_get("comment_count").unwrap_or(0),
+                latest_comment_at: row.try_get("latest_comment_at").unwrap_or_default(),
             })
             .collect())
     }
@@ -268,6 +515,56 @@ mod tests {
         let comments = storage.suggestion_comments("post-1").await.unwrap();
         assert_eq!(comments.len(), 1);
         assert_eq!(comments[0].text, "先补短板");
+
+        assert_eq!(comments[0].user_hash, "user-2");
+
+        let commented_posts = storage.commented_suggestion_posts("user-2").await.unwrap();
+        assert_eq!(commented_posts.len(), 1);
+        assert_eq!(commented_posts[0].id, "post-1");
+
+        let denied_comment_delete = storage
+            .delete_suggestion_comment("comment-1", "user-1")
+            .await
+            .unwrap();
+        assert!(denied_comment_delete.is_none());
+        assert_eq!(
+            storage.suggestion_comments("post-1").await.unwrap().len(),
+            1
+        );
+
+        let notification_items = storage
+            .suggestion_notifications("user-1", "2026-08-10T23:59:59Z")
+            .await
+            .unwrap();
+        assert_eq!(notification_items.len(), 1);
+        assert_eq!(notification_items[0].comment_count, 1);
+
+        let denied_post_delete = storage
+            .delete_suggestion_post("post-1", "user-2")
+            .await
+            .unwrap();
+        assert!(denied_post_delete.is_none());
+        assert!(storage.suggestion_post("post-1").await.unwrap().is_some());
+
+        let deleted_comment = storage
+            .delete_suggestion_comment("comment-1", "user-2")
+            .await
+            .unwrap();
+        assert_eq!(deleted_comment, Some(None));
+        assert!(
+            storage
+                .suggestion_comments("post-1")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let deleted_post = storage
+            .delete_suggestion_post("post-1", "user-1")
+            .await
+            .unwrap();
+        assert_eq!(deleted_post, Some(vec!["score.png".to_string()]));
+        assert!(storage.suggestion_post("post-1").await.unwrap().is_none());
 
         storage.pool.close().await;
         let _ = std::fs::remove_file(path);

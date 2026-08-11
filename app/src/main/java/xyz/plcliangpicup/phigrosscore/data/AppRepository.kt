@@ -66,6 +66,8 @@ class AppRepository(
                 }.getOrNull()
             }
             ?: RksCalculatorDraft()
+    val suggestionNotificationsEnabled: Boolean
+        get() = SuggestionNotificationManager.isEnabled(appContext)
 
     suspend fun fetchPendingAnnouncement(): AppAnnouncement? {
         val announcement = api.fetchAppAnnouncement()
@@ -366,6 +368,15 @@ class AppRepository(
     suspend fun fetchRandomSuggestion(excludeId: String? = null): SuggestionPost =
         authenticatedCall { token -> api.fetchRandomSuggestion(token, excludeId) }
 
+    suspend fun fetchSuggestionPost(postId: String): SuggestionPost =
+        authenticatedCall { token -> api.fetchSuggestionPost(token, postId) }
+
+    suspend fun fetchOwnSuggestionPosts(): List<SuggestionPost> =
+        authenticatedCall { token -> api.fetchOwnSuggestionPosts(token) }
+
+    suspend fun fetchCommentedSuggestionPosts(): List<SuggestionPost> =
+        authenticatedCall { token -> api.fetchCommentedSuggestionPosts(token) }
+
     suspend fun createSuggestionComment(
         postId: String,
         text: String,
@@ -373,6 +384,21 @@ class AppRepository(
         imageMimeType: String? = null,
     ): SuggestionComment = authenticatedCall { token ->
         api.createSuggestionComment(token, postId, text, imageBytes, imageMimeType)
+    }
+
+    suspend fun deleteSuggestionPost(postId: String) = authenticatedCall { token ->
+        api.deleteSuggestionPost(token, postId)
+    }
+
+    suspend fun deleteSuggestionComment(commentId: String) = authenticatedCall { token ->
+        api.deleteSuggestionComment(token, commentId)
+    }
+
+    suspend fun fetchSuggestionNotifications(after: String): SuggestionNotificationResponse =
+        authenticatedCall { token -> api.fetchSuggestionNotifications(token, after) }
+
+    fun setSuggestionNotificationsEnabled(enabled: Boolean) {
+        SuggestionNotificationManager.setEnabled(appContext, enabled)
     }
 
     @OptIn(coil.annotation.ExperimentalCoilApi::class)

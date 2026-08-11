@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 
 use axum::{
-    extract::{DefaultBodyLimit, Multipart, Path as AxumPath, Query, State},
-    routing::{get, post},
     Extension, Json, Router,
+    extract::{DefaultBodyLimit, Multipart, Path as AxumPath, Query, State},
+    http::StatusCode,
+    routing::{delete, get, post},
 };
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -16,8 +17,8 @@ use crate::{
 };
 
 use super::models::{
-    SuggestionAuthor, SuggestionComment, SuggestionCommentRecord, SuggestionPost,
-    SuggestionPostRecord,
+    SuggestionAuthor, SuggestionComment, SuggestionCommentRecord, SuggestionNotificationResponse,
+    SuggestionPost, SuggestionPostRecord,
 };
 
 const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
@@ -30,6 +31,11 @@ pub struct RandomQuery {
     exclude: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct NotificationQuery {
+    after: String,
+}
+
 struct UploadedImage {
     bytes: Vec<u8>,
     extension: &'static str,
@@ -38,8 +44,16 @@ struct UploadedImage {
 pub fn create_suggestion_router() -> Router<AppState> {
     Router::new()
         .route("/suggestions/posts", post(create_post))
+        .route(
+            "/suggestions/posts/:post_id",
+            get(get_post).delete(delete_post),
+        )
+        .route("/suggestions/mine", get(own_posts))
+        .route("/suggestions/commented", get(commented_posts))
         .route("/suggestions/random", get(random_post))
         .route("/suggestions/posts/:post_id/comments", post(create_comment))
+        .route("/suggestions/comments/:comment_id", delete(delete_comment))
+        .route("/suggestions/notifications", get(notifications))
         .layer(DefaultBodyLimit::max(MAX_MULTIPART_BYTES))
 }
 
@@ -142,7 +156,12 @@ async fn persist_image(image: &UploadedImage) -> Result<String, AppError> {
 }
 
 async fn remove_media_if_present(name: Option<&str>) {
-    if let Some(name) = name {
+    if let Some(name) = name.filter(|name| {
+        !name.trim().is_empty()
+            && std::path::Path::new(name)
+                .file_name()
+                .is_some_and(|file_name| file_name == *name)
+    }) {
         let _ = tokio::fs::remove_file(media_root().join(name)).await;
     }
 }
@@ -151,11 +170,19 @@ fn media_url(name: &str) -> String {
     format!("/suggestion-media/{name}")
 }
 
-fn comment_from_record(record: SuggestionCommentRecord) -> SuggestionComment {
+fn comment_from_record(
+    record: SuggestionCommentRecord,
+    viewer_user_hash: &str,
+) -> SuggestionComment {
+    let can_delete = record.user_hash == viewer_user_hash;
     SuggestionComment {
         id: record.id,
         text: record.text,
-        image_url: record.image_name.as_deref().map(media_url),
+        image_url: record
+            .image_name
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+            .map(media_url),
         author: SuggestionAuthor {
             nickname: record.nickname,
             avatar: record.avatar,
@@ -163,18 +190,21 @@ fn comment_from_record(record: SuggestionCommentRecord) -> SuggestionComment {
             rks: record.rks,
         },
         created_at: record.created_at,
+        can_delete,
     }
 }
 
 async fn post_from_record(
     storage: &crate::features::stats::storage::StatsStorage,
     record: SuggestionPostRecord,
+    viewer_user_hash: &str,
 ) -> Result<SuggestionPost, AppError> {
+    let can_delete = record.user_hash == viewer_user_hash;
     let comments = storage
         .suggestion_comments(&record.id)
         .await?
         .into_iter()
-        .map(comment_from_record)
+        .map(|comment| comment_from_record(comment, viewer_user_hash))
         .collect();
     Ok(SuggestionPost {
         id: record.id,
@@ -188,6 +218,7 @@ async fn post_from_record(
         },
         created_at: record.created_at,
         comments,
+        can_delete,
     })
 }
 
@@ -301,6 +332,7 @@ pub async fn create_post(
         author,
         created_at,
         comments: Vec::new(),
+        can_delete: true,
     }))
 }
 
@@ -315,11 +347,118 @@ pub async fn random_post(
         .random_suggestion_post(query.exclude.as_deref())
         .await?
         .ok_or_else(|| AppError::Search(SearchError::NotFound))?;
-    let post = post_from_record(storage, record).await?;
+    let post = post_from_record(storage, record, user_hash).await?;
     if let Some(stats) = &state.stats {
         stats.track_feature("suggestion", "random", Some(user_hash.to_string()), None);
     }
     Ok(Json(post))
+}
+
+pub async fn get_post(
+    State(state): State<AppState>,
+    Extension(bearer): Extension<BearerAuthState>,
+    AxumPath(post_id): AxumPath<String>,
+) -> Result<Json<SuggestionPost>, AppError> {
+    let user_hash = require_user_hash(&bearer)?;
+    let storage = storage(&state)?;
+    let record = storage
+        .suggestion_post(&post_id)
+        .await?
+        .ok_or_else(|| AppError::Search(SearchError::NotFound))?;
+    Ok(Json(post_from_record(storage, record, user_hash).await?))
+}
+
+pub async fn own_posts(
+    State(state): State<AppState>,
+    Extension(bearer): Extension<BearerAuthState>,
+) -> Result<Json<Vec<SuggestionPost>>, AppError> {
+    let user_hash = require_user_hash(&bearer)?;
+    let storage = storage(&state)?;
+    let records = storage.own_suggestion_posts(user_hash).await?;
+    let mut posts = Vec::with_capacity(records.len());
+    for record in records {
+        posts.push(post_from_record(storage, record, user_hash).await?);
+    }
+    Ok(Json(posts))
+}
+
+pub async fn commented_posts(
+    State(state): State<AppState>,
+    Extension(bearer): Extension<BearerAuthState>,
+) -> Result<Json<Vec<SuggestionPost>>, AppError> {
+    let user_hash = require_user_hash(&bearer)?;
+    let storage = storage(&state)?;
+    let records = storage.commented_suggestion_posts(user_hash).await?;
+    let mut posts = Vec::with_capacity(records.len());
+    for record in records {
+        posts.push(post_from_record(storage, record, user_hash).await?);
+    }
+    Ok(Json(posts))
+}
+
+pub async fn delete_post(
+    State(state): State<AppState>,
+    Extension(bearer): Extension<BearerAuthState>,
+    AxumPath(post_id): AxumPath<String>,
+) -> Result<StatusCode, AppError> {
+    let user_hash = require_user_hash(&bearer)?;
+    let storage = storage(&state)?;
+    let record = storage
+        .suggestion_post(&post_id)
+        .await?
+        .ok_or_else(|| AppError::Search(SearchError::NotFound))?;
+    if record.user_hash != user_hash {
+        return Err(AppError::Forbidden("只能删除自己的求建议帖子".into()));
+    }
+    let images = storage
+        .delete_suggestion_post(&post_id, user_hash)
+        .await?
+        .ok_or_else(|| AppError::Forbidden("只能删除自己的求建议帖子".into()))?;
+    for image_name in images {
+        remove_media_if_present(Some(&image_name)).await;
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn delete_comment(
+    State(state): State<AppState>,
+    Extension(bearer): Extension<BearerAuthState>,
+    AxumPath(comment_id): AxumPath<String>,
+) -> Result<StatusCode, AppError> {
+    let user_hash = require_user_hash(&bearer)?;
+    let storage = storage(&state)?;
+    let record = storage
+        .suggestion_comment(&comment_id)
+        .await?
+        .ok_or_else(|| AppError::Search(SearchError::NotFound))?;
+    if record.user_hash != user_hash {
+        return Err(AppError::Forbidden("只能删除自己的建议评论".into()));
+    }
+    let image_name = storage
+        .delete_suggestion_comment(&comment_id, user_hash)
+        .await?
+        .ok_or_else(|| AppError::Forbidden("只能删除自己的建议评论".into()))?;
+    remove_media_if_present(image_name.as_deref()).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn notifications(
+    State(state): State<AppState>,
+    Extension(bearer): Extension<BearerAuthState>,
+    Query(query): Query<NotificationQuery>,
+) -> Result<Json<SuggestionNotificationResponse>, AppError> {
+    let user_hash = require_user_hash(&bearer)?;
+    let after = DateTime::parse_from_rfc3339(query.after.trim())
+        .map_err(|_| AppError::Validation("通知检查时间无效".into()))?
+        .with_timezone(&Utc);
+    let checked_at = Utc::now();
+    let items = storage(&state)?
+        .suggestion_notifications(user_hash, &after.to_rfc3339())
+        .await?;
+    Ok(Json(SuggestionNotificationResponse {
+        checked_at: checked_at.to_rfc3339(),
+        items,
+    }))
 }
 
 pub async fn create_comment(
@@ -370,6 +509,7 @@ pub async fn create_comment(
         image_url: image_name.as_deref().map(media_url),
         author,
         created_at,
+        can_delete: true,
     }))
 }
 

@@ -248,6 +248,33 @@ class PhiApiClient(
         ).resolveMediaUrls()
     }
 
+    suspend fun fetchSuggestionPost(accessToken: String, postId: String): SuggestionPost =
+        executeJson<SuggestionPost>(
+            Request.Builder()
+                .url(url("api/v2/suggestions/posts/$postId"))
+                .header("Authorization", "Bearer $accessToken")
+                .get()
+                .build(),
+        ).resolveMediaUrls()
+
+    suspend fun fetchOwnSuggestionPosts(accessToken: String): List<SuggestionPost> =
+        executeJson<List<SuggestionPost>>(
+            Request.Builder()
+                .url(url("api/v2/suggestions/mine"))
+                .header("Authorization", "Bearer $accessToken")
+                .get()
+                .build(),
+        ).map { it.resolveMediaUrls() }
+
+    suspend fun fetchCommentedSuggestionPosts(accessToken: String): List<SuggestionPost> =
+        executeJson<List<SuggestionPost>>(
+            Request.Builder()
+                .url(url("api/v2/suggestions/commented"))
+                .header("Authorization", "Bearer $accessToken")
+                .get()
+                .build(),
+        ).map { it.resolveMediaUrls() }
+
     suspend fun createSuggestionComment(
         accessToken: String,
         postId: String,
@@ -272,6 +299,44 @@ class PhiApiClient(
                 .post(builder.build())
                 .build(),
         ).resolveMediaUrls()
+    }
+
+    suspend fun deleteSuggestionPost(accessToken: String, postId: String) {
+        executeBytes(
+            Request.Builder()
+                .url(url("api/v2/suggestions/posts/$postId"))
+                .header("Authorization", "Bearer $accessToken")
+                .delete()
+                .build(),
+        )
+    }
+
+    suspend fun deleteSuggestionComment(accessToken: String, commentId: String) {
+        executeBytes(
+            Request.Builder()
+                .url(url("api/v2/suggestions/comments/$commentId"))
+                .header("Authorization", "Bearer $accessToken")
+                .delete()
+                .build(),
+        )
+    }
+
+    suspend fun fetchSuggestionNotifications(
+        accessToken: String,
+        after: String,
+    ): SuggestionNotificationResponse {
+        val requestUrl = url("api/v2/suggestions/notifications").toHttpUrlOrNull()
+            ?.newBuilder()
+            ?.addQueryParameter("after", after)
+            ?.build()
+            ?: throw IOException("建议通知接口地址无效")
+        return executeJson(
+            Request.Builder()
+                .url(requestUrl)
+                .header("Authorization", "Bearer $accessToken")
+                .get()
+                .build(),
+        )
     }
 
     suspend fun fetchAppUpdate(): AppUpdateManifest = executeJson(
@@ -366,7 +431,7 @@ class PhiApiClient(
 
     private fun url(path: String): String = baseUrl.trimEnd('/') + "/" + path.trimStart('/')
 
-    private fun resolveMediaUrl(value: String?): String? = value?.let {
+    private fun resolveMediaUrl(value: String?): String? = value?.takeIf(String::isNotBlank)?.let {
         if (it.startsWith("http://") || it.startsWith("https://")) it else url(it)
     }
 
