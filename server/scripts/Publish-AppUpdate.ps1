@@ -11,6 +11,26 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Publish-FileAtomically([string] $TemporaryPath, [string] $DestinationPath) {
+    if (Test-Path -LiteralPath $DestinationPath) {
+        $destination = Get-Item -LiteralPath $DestinationPath -Force
+        if ($destination.PSIsContainer) {
+            throw "发布目标必须是文件，但当前是目录：$DestinationPath"
+        }
+        $replaceBackup = "$DestinationPath.replace-backup-$([Guid]::NewGuid().ToString('N'))"
+        try {
+            [IO.File]::Replace($TemporaryPath, $DestinationPath, $replaceBackup, $true)
+        } finally {
+            if (Test-Path -LiteralPath $replaceBackup) {
+                Remove-Item -LiteralPath $replaceBackup -Force
+            }
+        }
+    } else {
+        [IO.File]::Move($TemporaryPath, $DestinationPath)
+    }
+}
+
 $sourceApk = (Resolve-Path -LiteralPath $ApkPath).Path
 if ([IO.Path]::GetExtension($sourceApk) -ne '.apk') { throw 'ApkPath 必须指向 APK 文件。' }
 
@@ -22,7 +42,7 @@ $fileName = "Phi-Score-Query-$safeVersion.apk"
 $publishedApk = Join-Path $updateRoot $fileName
 $tempApk = "$publishedApk.upload"
 Copy-Item -LiteralPath $sourceApk -Destination $tempApk -Force
-Move-Item -LiteralPath $tempApk -Destination $publishedApk -Force
+Publish-FileAtomically $tempApk $publishedApk
 
 $hash = (Get-FileHash -LiteralPath $publishedApk -Algorithm SHA256).Hash.ToLowerInvariant()
 $size = (Get-Item -LiteralPath $publishedApk).Length
@@ -41,7 +61,7 @@ $manifestPath = Join-Path $updateRoot 'latest.json'
 $tempManifest = "$manifestPath.upload"
 $manifestJson = $manifest | ConvertTo-Json -Depth 4
 [IO.File]::WriteAllText($tempManifest, $manifestJson, (New-Object Text.UTF8Encoding($false)))
-Move-Item -LiteralPath $tempManifest -Destination $manifestPath -Force
+Publish-FileAtomically $tempManifest $manifestPath
 
 Write-Output "更新清单: $manifestPath"
 Write-Output "安装包: $publishedApk"

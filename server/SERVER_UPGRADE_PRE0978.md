@@ -10,7 +10,7 @@
 $d=[Environment]::GetFolderPath('Desktop'); $z=Join-Path $d 'server-upgrade-Pre-0.9.7.8.zip'; $p=Join-Path $d 'server-upgrade-Pre-0.9.7.8'; if(Test-Path $p){Remove-Item -LiteralPath $p -Recurse -Force}; Expand-Archive -LiteralPath $z -DestinationPath $p -Force; Set-ExecutionPolicy -Scope Process Bypass -Force; & (Join-Path $p 'scripts\Deploy-Pre-0.9.7.8.ps1')
 ```
 
-脚本会校验包内 SHA-256，备份后端、Caddy、运行脚本、Phi-Plugin 资源及 APP 更新清单，再替换并重启服务。后端启动时会幂等创建建议区数据表；成绩图持久保存在 `C:\Services\PhigrosScore\suggestion-media`，版本升级不会覆盖。
+脚本会校验包内 SHA-256，备份后端、Caddy、运行脚本、Phi-Plugin 资源及 APP 更新清单，再替换并重启服务。同一版本可以直接重复部署，已存在的 APK、更新清单和 Phi-Plugin 资源会安全替换；若失败，日志会显示具体失败步骤。后端启动时会幂等创建建议区数据表；成绩图持久保存在 `C:\Services\PhigrosScore\suggestion-media`，版本升级不会覆盖。
 
 健康检查、建议区鉴权路由、Caddy 或 APK 发布校验失败时会自动回滚程序文件。部署脚本不会提交 GitHub，也不会自动发布公告。
 

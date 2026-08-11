@@ -52,6 +52,45 @@ function Read-Utf8Json([string] $Path) {
     [IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8) | ConvertFrom-Json
 }
 
+function Assert-NormalDirectory([string] $Path, [string] $Description) {
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $item = Get-Item -LiteralPath $Path -Force
+    if (-not $item.PSIsContainer) {
+        throw "$Description must be a directory, but a file exists at: $Path"
+    }
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "$Description cannot be a junction or symbolic link: $Path"
+    }
+}
+
+function Ensure-NormalDirectory([string] $Path, [string] $Description) {
+    Assert-NormalDirectory $Path $Description
+    if (-not (Test-Path -LiteralPath $Path)) {
+        New-Item -ItemType Directory -Path $Path | Out-Null
+    }
+}
+
+function Copy-DirectoryContents([string] $Source, [string] $Destination, [bool] $ReplaceDestination = $false) {
+    Assert-NormalDirectory $Source 'Source directory'
+    if (-not (Test-Path -LiteralPath $Source)) {
+        throw "Source directory does not exist: $Source"
+    }
+    Assert-NormalDirectory $Destination 'Destination directory'
+    if ($ReplaceDestination -and (Test-Path -LiteralPath $Destination)) {
+        Remove-Item -LiteralPath $Destination -Recurse -Force
+    }
+    Ensure-NormalDirectory $Destination 'Destination directory'
+    Get-ChildItem -LiteralPath $Source -Force | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $Destination -Recurse -Force
+    }
+}
+
+$failedStep = 'preparing deployment'
+function Set-DeploymentStep([string] $Name) {
+    $script:failedStep = $Name
+    Write-Output "Deployment step: $Name"
+}
+
 foreach ($required in @(
     $manifestPath,
     $releaseNotesPath,
@@ -126,7 +165,9 @@ $hadPublishUpdate = Test-Path -LiteralPath $publishUpdateTarget
 $hadPublishAnnouncement = Test-Path -LiteralPath $publishAnnouncementTarget
 $hadSourceArchive = Test-Path -LiteralPath $sourceArchiveTarget
 if ($hadFont) { Copy-Item -LiteralPath $fontTarget -Destination (Join-Path $backupRoot 'Aldrich-Regular.ttf') -Force }
-if ($hadAssets) { Copy-Item -LiteralPath $assetsTarget -Destination (Join-Path $backupRoot 'phi_plugin_assets') -Recurse }
+if ($hadAssets) {
+    Copy-DirectoryContents $assetsTarget (Join-Path $backupRoot 'phi_plugin_assets') $true
+}
 if ($hadPublishUpdate) { Copy-Item -LiteralPath $publishUpdateTarget -Destination (Join-Path $backupRoot 'Publish-AppUpdate.ps1') -Force }
 if ($hadPublishAnnouncement) { Copy-Item -LiteralPath $publishAnnouncementTarget -Destination (Join-Path $backupRoot 'Publish-AppAnnouncement.ps1') -Force }
 if ($hadSourceArchive) { Copy-Item -LiteralPath $sourceArchiveTarget -Destination (Join-Path $backupRoot $sourceArchiveName) -Force }
@@ -166,19 +207,22 @@ function Restore-OptionalFile([bool] $Existed, [string] $BackupName, [string] $T
 }
 
 try {
+    Set-DeploymentStep 'stopping scheduled tasks'
     Stop-ScheduledTask -TaskName 'PhigrosScore-Caddy' -ErrorAction SilentlyContinue
     Stop-ScheduledTask -TaskName 'PhigrosScore-Backend' -ErrorAction SilentlyContinue
     Wait-AppTaskStopped 'PhigrosScore-Caddy'
     Wait-AppTaskStopped 'PhigrosScore-Backend'
 
+    Set-DeploymentStep 'installing backend executable'
     Copy-Item -LiteralPath $backendSource -Destination $backendTarget -Force
-    New-Item -ItemType Directory -Force -Path `
-        (Split-Path $fontTarget -Parent), `
-        (Split-Path $assetsTarget -Parent), `
-        (Split-Path $publishUpdateTarget -Parent) | Out-Null
+    Set-DeploymentStep 'preparing resource and script directories'
+    Ensure-NormalDirectory (Split-Path $fontTarget -Parent) 'Font directory'
+    Ensure-NormalDirectory (Split-Path $assetsTarget -Parent) 'Phi-Plugin image directory'
+    Ensure-NormalDirectory (Split-Path $publishUpdateTarget -Parent) 'Script directory'
+    Set-DeploymentStep 'installing Phi-Plugin resources'
     Copy-Item -LiteralPath $fontSource -Destination $fontTarget -Force
-    if (Test-Path -LiteralPath $assetsTarget) { Remove-Item -LiteralPath $assetsTarget -Recurse -Force }
-    Copy-Item -LiteralPath $assetsSource -Destination $assetsTarget -Recurse
+    Copy-DirectoryContents $assetsSource $assetsTarget $true
+    Set-DeploymentStep 'installing Caddy and service scripts'
     Copy-Item -LiteralPath $caddySource -Destination $caddyTarget -Force
     Copy-Item -LiteralPath $runBackendSource -Destination $runBackendTarget -Force
     Copy-Item -LiteralPath $runCaddySource -Destination $runCaddyTarget -Force
@@ -186,6 +230,7 @@ try {
     Copy-Item -LiteralPath $publishAnnouncementSource -Destination $publishAnnouncementTarget -Force
     Copy-Item -LiteralPath $sourceArchiveSource -Destination $sourceArchiveTarget -Force
 
+    Set-DeploymentStep 'starting backend and checking health'
     Start-ScheduledTask -TaskName 'PhigrosScore-Backend'
     $backendReady = $false
     $backendDeadline = (Get-Date).AddSeconds(60)
@@ -199,6 +244,7 @@ try {
         }
     } until ($backendReady)
 
+    Set-DeploymentStep 'checking suggestion API authentication'
     $suggestionStatus = 0
     try {
         Invoke-WebRequest 'http://127.0.0.1:3939/api/v2/suggestions/random' -UseBasicParsing -TimeoutSec 10 | Out-Null
@@ -210,12 +256,14 @@ try {
         throw "Suggestion API authentication probe failed: HTTP $suggestionStatus"
     }
 
+    Set-DeploymentStep 'starting Caddy'
     Start-ScheduledTask -TaskName 'PhigrosScore-Caddy'
     Start-Sleep -Seconds 3
     if ((Get-ScheduledTask -TaskName 'PhigrosScore-Caddy').State -ne 'Running') {
         throw 'Caddy task failed to start.'
     }
 
+    Set-DeploymentStep 'publishing APP update'
     & $publishUpdateTarget `
         -ApkPath $apkSource `
         -VersionCode 39 `
@@ -224,6 +272,7 @@ try {
         -InstallRoot $installRoot `
         -Changelog $changelog
 
+    Set-DeploymentStep 'verifying installed files and APP update'
     $latest = Read-Utf8Json $latestTarget
     $expectedHash = [string] $manifest.files.$apkName
     $actualHash = (Get-FileHash -LiteralPath $publishedApk -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -245,29 +294,45 @@ try {
     Write-Output "APK SHA256: $actualHash"
     Write-Output 'No announcement was published automatically.'
 } catch {
-    Stop-ScheduledTask -TaskName 'PhigrosScore-Caddy' -ErrorAction SilentlyContinue
-    Stop-ScheduledTask -TaskName 'PhigrosScore-Backend' -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
-    if ($backupReady) {
-        Copy-Item -LiteralPath (Join-Path $backupRoot 'phi-backend.exe') -Destination $backendTarget -Force
-        Copy-Item -LiteralPath (Join-Path $backupRoot 'Caddyfile') -Destination $caddyTarget -Force
-        Copy-Item -LiteralPath (Join-Path $backupRoot 'Run-Backend.ps1') -Destination $runBackendTarget -Force
-        Copy-Item -LiteralPath (Join-Path $backupRoot 'Run-Caddy.ps1') -Destination $runCaddyTarget -Force
-        Restore-OptionalFile $hadFont 'Aldrich-Regular.ttf' $fontTarget
-        Restore-OptionalFile $hadPublishUpdate 'Publish-AppUpdate.ps1' $publishUpdateTarget
-        Restore-OptionalFile $hadPublishAnnouncement 'Publish-AppAnnouncement.ps1' $publishAnnouncementTarget
-        Restore-OptionalFile $hadSourceArchive $sourceArchiveName $sourceArchiveTarget
-        if (Test-Path -LiteralPath $assetsTarget) { Remove-Item -LiteralPath $assetsTarget -Recurse -Force }
-        if ($hadAssets) { Copy-Item -LiteralPath (Join-Path $backupRoot 'phi_plugin_assets') -Destination $assetsTarget -Recurse }
-        if (Test-Path -LiteralPath $latestTarget) { Remove-Item -LiteralPath $latestTarget -Force }
-        if ($hadLatest) { Copy-Item -LiteralPath (Join-Path $backupUpdateRoot 'latest.json') -Destination $latestTarget -Force }
-        if (Test-Path -LiteralPath $publishedApk) { Remove-Item -LiteralPath $publishedApk -Force }
-        if ($hadNewApk) {
-            Copy-Item -LiteralPath (Join-Path $backupUpdateRoot ('preexisting-' + $apkName)) -Destination $publishedApk -Force
+    $originalError = $_
+    $originalType = $originalError.Exception.GetType().FullName
+    $originalMessage = $originalError.Exception.Message
+    $originalStack = $originalError.ScriptStackTrace
+    $rollbackError = $null
+    try {
+        Write-Output "Deployment failed during: $failedStep. Rolling back..."
+        Stop-ScheduledTask -TaskName 'PhigrosScore-Caddy' -ErrorAction SilentlyContinue
+        Stop-ScheduledTask -TaskName 'PhigrosScore-Backend' -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+        if ($backupReady) {
+            Copy-Item -LiteralPath (Join-Path $backupRoot 'phi-backend.exe') -Destination $backendTarget -Force
+            Copy-Item -LiteralPath (Join-Path $backupRoot 'Caddyfile') -Destination $caddyTarget -Force
+            Copy-Item -LiteralPath (Join-Path $backupRoot 'Run-Backend.ps1') -Destination $runBackendTarget -Force
+            Copy-Item -LiteralPath (Join-Path $backupRoot 'Run-Caddy.ps1') -Destination $runCaddyTarget -Force
+            Restore-OptionalFile $hadFont 'Aldrich-Regular.ttf' $fontTarget
+            Restore-OptionalFile $hadPublishUpdate 'Publish-AppUpdate.ps1' $publishUpdateTarget
+            Restore-OptionalFile $hadPublishAnnouncement 'Publish-AppAnnouncement.ps1' $publishAnnouncementTarget
+            Restore-OptionalFile $hadSourceArchive $sourceArchiveName $sourceArchiveTarget
+            if ($hadAssets) {
+                Copy-DirectoryContents (Join-Path $backupRoot 'phi_plugin_assets') $assetsTarget $true
+            } elseif (Test-Path -LiteralPath $assetsTarget) {
+                Remove-Item -LiteralPath $assetsTarget -Recurse -Force
+            }
+            if (Test-Path -LiteralPath $latestTarget) { Remove-Item -LiteralPath $latestTarget -Force }
+            if ($hadLatest) { Copy-Item -LiteralPath (Join-Path $backupUpdateRoot 'latest.json') -Destination $latestTarget -Force }
+            if (Test-Path -LiteralPath $publishedApk) { Remove-Item -LiteralPath $publishedApk -Force }
+            if ($hadNewApk) {
+                Copy-Item -LiteralPath (Join-Path $backupUpdateRoot ('preexisting-' + $apkName)) -Destination $publishedApk -Force
+            }
         }
+    } catch {
+        $rollbackError = $_.Exception.Message
     }
     Start-ScheduledTask -TaskName 'PhigrosScore-Backend' -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
     Start-ScheduledTask -TaskName 'PhigrosScore-Caddy' -ErrorAction SilentlyContinue
-    throw "Pre-0.9.7.8 deployment failed and was rolled back. Original error: $($_.Exception.Message)"
+    $failure = "Pre-0.9.7.8 deployment failed during '$failedStep'. Original error [$originalType]: $originalMessage"
+    if (-not [string]::IsNullOrWhiteSpace($originalStack)) { $failure += "`nScript stack:`n$originalStack" }
+    if ($rollbackError) { $failure += "`nRollback also reported: $rollbackError" } else { $failure += "`nRollback completed." }
+    throw $failure
 }
