@@ -256,13 +256,6 @@ try {
         throw "Suggestion API authentication probe failed: HTTP $suggestionStatus"
     }
 
-    Set-DeploymentStep 'starting Caddy'
-    Start-ScheduledTask -TaskName 'PhigrosScore-Caddy'
-    Start-Sleep -Seconds 3
-    if ((Get-ScheduledTask -TaskName 'PhigrosScore-Caddy').State -ne 'Running') {
-        throw 'Caddy task failed to start.'
-    }
-
     Set-DeploymentStep 'publishing APP update'
     & $publishUpdateTarget `
         -ApkPath $apkSource `
@@ -286,6 +279,13 @@ try {
         -not (Test-Path -LiteralPath $assetsTarget) -or
         -not (Test-Path -LiteralPath $sourceArchiveTarget)) {
         throw 'Phi-Plugin resources or backend source archive were not installed.'
+    }
+
+    Set-DeploymentStep 'starting Caddy'
+    Start-ScheduledTask -TaskName 'PhigrosScore-Caddy'
+    Start-Sleep -Seconds 3
+    if ((Get-ScheduledTask -TaskName 'PhigrosScore-Caddy').State -ne 'Running') {
+        throw 'Caddy task failed to start.'
     }
 
     Write-Output 'Pre-0.9.7.8 backend, suggestion API, Phi-Plugin renderer, and APP update deployed.'

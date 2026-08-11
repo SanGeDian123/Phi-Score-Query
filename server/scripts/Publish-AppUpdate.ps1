@@ -18,14 +18,38 @@ function Publish-FileAtomically([string] $TemporaryPath, [string] $DestinationPa
         if ($destination.PSIsContainer) {
             throw "发布目标必须是文件，但当前是目录：$DestinationPath"
         }
-        $replaceBackup = "$DestinationPath.replace-backup-$([Guid]::NewGuid().ToString('N'))"
+
         try {
-            [IO.File]::Replace($TemporaryPath, $DestinationPath, $replaceBackup, $true)
-        } finally {
-            if (Test-Path -LiteralPath $replaceBackup) {
-                Remove-Item -LiteralPath $replaceBackup -Force
+            $temporary = Get-Item -LiteralPath $TemporaryPath -Force
+            if ($temporary.Length -eq $destination.Length) {
+                $temporaryHash = (Get-FileHash -LiteralPath $TemporaryPath -Algorithm SHA256).Hash
+                $destinationHash = (Get-FileHash -LiteralPath $DestinationPath -Algorithm SHA256).Hash
+                if ($temporaryHash -eq $destinationHash) {
+                    Remove-Item -LiteralPath $TemporaryPath -Force
+                    return
+                }
+            }
+        } catch {
+            # A short-lived reader can also block hashing. The replacement retry below handles it.
+        }
+
+        $lastReplaceError = $null
+        for ($attempt = 1; $attempt -le 20; $attempt++) {
+            $replaceBackup = "$DestinationPath.replace-backup-$([Guid]::NewGuid().ToString('N'))"
+            try {
+                [IO.File]::Replace($TemporaryPath, $DestinationPath, $replaceBackup, $true)
+                return
+            } catch {
+                $lastReplaceError = $_
+                if ($attempt -lt 20) { Start-Sleep -Milliseconds 500 }
+            } finally {
+                if (Test-Path -LiteralPath $replaceBackup) {
+                    Remove-Item -LiteralPath $replaceBackup -Force -ErrorAction SilentlyContinue
+                }
             }
         }
+
+        throw "发布文件在等待 10 秒后仍被占用：$DestinationPath。原始错误：$($lastReplaceError.Exception.Message)"
     } else {
         [IO.File]::Move($TemporaryPath, $DestinationPath)
     }
