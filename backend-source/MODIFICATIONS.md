@@ -22,7 +22,7 @@
 - 更新部署所用歌曲资料与别名数据。
 - 将两处一分钟回退值从 `Duration::from_mins(1)` 等价改写为 `Duration::from_secs(60)`，兼容部署构建工具链。
 
-完整逐行修改可以将本目录与上述基准提交进行比较。服务器升级包中的 `source/backend-source-Pre-0.9.7.8.zip` 与 Pre-0.9.7.8 服务端二进制对应；部署后也可通过公网 `/source` 获取。
+完整逐行修改可以将本目录与上述基准提交进行比较。Pre-0.9.7.8-Fix 服务器升级包中的 `source/backend-source-Pre-0.9.7.8.zip` 与当前服务端二进制对应；本次 Fix 仅修复 Android Release 启动崩溃，后端二进制未变。部署后也可通过公网 `/source` 获取。
 
 ## 构建
 

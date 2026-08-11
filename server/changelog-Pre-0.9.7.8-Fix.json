@@ -1,0 +1,7 @@
+{
+  "versionName": "Pre-0.9.7.8-Fix",
+  "changelog": [
+    "修复 Pre-0.9.7.8 Release 安装后打开即崩溃的问题。",
+    "保留 Pre-0.9.7.8 的 RKS 计算器、建议区、评论通知与 Phi-Plugin 金色光晕等更新。"
+  ]
+}

@@ -2,7 +2,7 @@
 
 本目录及其部署脚本使用 GNU Affero General Public License v3.0。线上修改版后端的完整对应源码位于：
 
-<https://github.com/SanGeDian123/Phi-Score-Query/tree/pre-0.9.7.1/backend-source>
+<https://github.com/SanGeDian123/Phi-Score-Query/tree/main/backend-source>
 
 生产 Caddy 配置会在响应头中提供源码地址，并通过 `/source` 路由跳转至该固定版本。分发服务器二进制时必须同时保留 `LICENSE` 和源码提供说明。
 

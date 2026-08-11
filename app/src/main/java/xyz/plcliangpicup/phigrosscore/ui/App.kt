@@ -289,6 +289,13 @@ private const val EXPERIENCE_SURVEY_URL = "https://wj.qq.com/s2/27522729/6kti/"
 
 private val changelogEntries = listOf(
     ChangelogEntry(
+        "Pre-0.9.7.8-Fix",
+        "启动修复",
+        listOf(
+            "修复 Pre-0.9.7.8 Release 安装后打开即崩溃的问题。",
+        ),
+    ),
+    ChangelogEntry(
         "Pre-0.9.7.8",
         "RKS 工具与建议区",
         listOf(

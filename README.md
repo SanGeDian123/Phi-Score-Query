@@ -1,6 +1,6 @@
 # Phi Score Query
 
-Phi Score Query 是一个面向 Android 8.0 及以上系统的非官方 Phigros 成绩查询客户端。当前版本为 **Pre-0.9.7.8 公开测试版**。
+Phi Score Query 是一个面向 Android 8.0 及以上系统的非官方 Phigros 成绩查询客户端。当前版本为 **Pre-0.9.7.8-Fix 公开测试版**。
 
 项目提供 Android 客户端，以及线上服务实际使用的 Next-Phi-Backend 修改版对应源码。
 
