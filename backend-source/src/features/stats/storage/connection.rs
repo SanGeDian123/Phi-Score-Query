@@ -1,6 +1,6 @@
 use std::{path::Path, time::Duration};
 
-use sqlx::{ConnectOptions, Row, SqlitePool, sqlite::SqliteConnectOptions};
+use sqlx::{sqlite::SqliteConnectOptions, ConnectOptions, Row, SqlitePool};
 
 use crate::error::AppError;
 
@@ -220,6 +220,42 @@ impl StatsStorage {
             created_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_moderation_flags_user_created ON moderation_flags(user_hash, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS suggestion_posts (
+            id TEXT PRIMARY KEY,
+            user_hash TEXT NOT NULL,
+            description TEXT NOT NULL,
+            image_name TEXT NOT NULL,
+            nickname TEXT NOT NULL,
+            avatar TEXT,
+            challenge_mode_rank INTEGER,
+            rks REAL NOT NULL DEFAULT 0.0,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_suggestion_posts_active_created
+            ON suggestion_posts(status, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_suggestion_posts_user_created
+            ON suggestion_posts(user_hash, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS suggestion_comments (
+            id TEXT PRIMARY KEY,
+            post_id TEXT NOT NULL,
+            user_hash TEXT NOT NULL,
+            text TEXT NOT NULL DEFAULT '',
+            image_name TEXT,
+            nickname TEXT NOT NULL,
+            avatar TEXT,
+            challenge_mode_rank INTEGER,
+            rks REAL NOT NULL DEFAULT 0.0,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(post_id) REFERENCES suggestion_posts(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_suggestion_comments_post_created
+            ON suggestion_comments(post_id, status, created_at ASC);
+        CREATE INDEX IF NOT EXISTS idx_suggestion_comments_user_created
+            ON suggestion_comments(user_hash, created_at DESC);
         ";
         sqlx::query(ddl)
             .execute(&self.pool)

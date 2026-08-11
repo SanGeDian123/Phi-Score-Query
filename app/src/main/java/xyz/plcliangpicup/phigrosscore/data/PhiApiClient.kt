@@ -9,6 +9,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -205,6 +206,74 @@ class PhiApiClient(
         )
     }
 
+    suspend fun createSuggestionPost(
+        accessToken: String,
+        description: String,
+        imageBytes: ByteArray,
+        imageMimeType: String,
+    ): SuggestionPost {
+        val multipart = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("description", description)
+            .addFormDataPart(
+                "image",
+                uploadFileName(imageMimeType),
+                imageBytes.toRequestBody(imageMimeType.toMediaType()),
+            )
+            .build()
+        return executeJson<SuggestionPost>(
+            Request.Builder()
+                .url(url("api/v2/suggestions/posts"))
+                .header("Authorization", "Bearer $accessToken")
+                .post(multipart)
+                .build(),
+        ).resolveMediaUrls()
+    }
+
+    suspend fun fetchRandomSuggestion(
+        accessToken: String,
+        excludeId: String? = null,
+    ): SuggestionPost {
+        val requestUrl = url("api/v2/suggestions/random").toHttpUrlOrNull()
+            ?.newBuilder()
+            ?.apply { excludeId?.takeIf(String::isNotBlank)?.let { addQueryParameter("exclude", it) } }
+            ?.build()
+            ?: throw IOException("建议接口地址无效")
+        return executeJson<SuggestionPost>(
+            Request.Builder()
+                .url(requestUrl)
+                .header("Authorization", "Bearer $accessToken")
+                .get()
+                .build(),
+        ).resolveMediaUrls()
+    }
+
+    suspend fun createSuggestionComment(
+        accessToken: String,
+        postId: String,
+        text: String,
+        imageBytes: ByteArray? = null,
+        imageMimeType: String? = null,
+    ): SuggestionComment {
+        val builder = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("text", text)
+        if (imageBytes != null && imageMimeType != null) {
+            builder.addFormDataPart(
+                "image",
+                uploadFileName(imageMimeType),
+                imageBytes.toRequestBody(imageMimeType.toMediaType()),
+            )
+        }
+        return executeJson<SuggestionComment>(
+            Request.Builder()
+                .url(url("api/v2/suggestions/posts/$postId/comments"))
+                .header("Authorization", "Bearer $accessToken")
+                .post(builder.build())
+                .build(),
+        ).resolveMediaUrls()
+    }
+
     suspend fun fetchAppUpdate(): AppUpdateManifest = executeJson(
         Request.Builder()
             .url(url("app-update/latest.json"))
@@ -296,6 +365,24 @@ class PhiApiClient(
     }
 
     private fun url(path: String): String = baseUrl.trimEnd('/') + "/" + path.trimStart('/')
+
+    private fun resolveMediaUrl(value: String?): String? = value?.let {
+        if (it.startsWith("http://") || it.startsWith("https://")) it else url(it)
+    }
+
+    private fun SuggestionComment.resolveMediaUrls(): SuggestionComment =
+        copy(imageUrl = resolveMediaUrl(imageUrl))
+
+    private fun SuggestionPost.resolveMediaUrls(): SuggestionPost = copy(
+        imageUrl = resolveMediaUrl(imageUrl).orEmpty(),
+        comments = comments.map { it.resolveMediaUrls() },
+    )
+
+    private fun uploadFileName(mimeType: String): String = when (mimeType.lowercase()) {
+        "image/jpeg" -> "score.jpg"
+        "image/webp" -> "score.webp"
+        else -> "score.png"
+    }
 
     private suspend inline fun <reified T> executeJson(
         request: Request,

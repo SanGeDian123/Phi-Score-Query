@@ -115,4 +115,67 @@ class PhiApiClientTest {
         assertEquals("测试公告", announcement.title)
         assertEquals("公告正文", announcement.body)
     }
+
+    @Test
+    fun `suggestion upload is authenticated multipart and resolves media urls`() = runTest {
+        server.enqueue(
+            MockResponse().setBody(
+                """
+                    {
+                      "id":"post-1",
+                      "description":"求建议！",
+                      "imageUrl":"/suggestion-media/score.png",
+                      "author":{"nickname":"Alice","rks":15.5},
+                      "createdAt":"2026-08-11T00:00:00Z",
+                      "comments":[]
+                    }
+                """.trimIndent(),
+            ),
+        )
+        server.start()
+
+        val client = PhiApiClient(server.url("/").toString(), json)
+        val post = client.createSuggestionPost(
+            accessToken = "access",
+            description = "求建议！",
+            imageBytes = byteArrayOf(0x01, 0x02, 0x03),
+            imageMimeType = "image/png",
+        )
+        val request = server.takeRequest()
+        val body = request.body.readUtf8()
+
+        assertEquals("/api/v2/suggestions/posts", request.path)
+        assertEquals("Bearer access", request.getHeader("Authorization"))
+        assertTrue(request.getHeader("Content-Type")?.startsWith("multipart/form-data") == true)
+        assertTrue(body.contains("name=\"description\""))
+        assertTrue(body.contains("求建议！"))
+        assertTrue(body.contains("filename=\"score.png\""))
+        assertEquals(server.url("/suggestion-media/score.png").toString(), post.imageUrl)
+    }
+
+    @Test
+    fun `random suggestion excludes current post`() = runTest {
+        server.enqueue(
+            MockResponse().setBody(
+                """
+                    {
+                      "id":"post-2",
+                      "description":"建议",
+                      "imageUrl":"/suggestion-media/next.webp",
+                      "author":{"nickname":"Bob","rks":14.0},
+                      "createdAt":"2026-08-11T00:00:00Z",
+                      "comments":[]
+                    }
+                """.trimIndent(),
+            ),
+        )
+        server.start()
+
+        val client = PhiApiClient(server.url("/").toString(), json)
+        client.fetchRandomSuggestion("access", excludeId = "post-1")
+        val request = server.takeRequest()
+
+        assertEquals("/api/v2/suggestions/random?exclude=post-1", request.path)
+        assertEquals("Bearer access", request.getHeader("Authorization"))
+    }
 }

@@ -1,10 +1,10 @@
 use super::urls::{
-    ExternalIllustrationDirMode, build_remote_illustration_url_with_options,
-    remote_illustration_dir_for_category, to_public_url_for_base, to_somnia_public_url_for_base,
+    build_remote_illustration_url_with_options, remote_illustration_dir_for_category,
+    to_public_url_for_base, to_somnia_public_url_for_base, ExternalIllustrationDirMode,
 };
 use super::{
-    PlayerStats, RenderRecord, SongRenderData, Theme, generate_song_svg_string,
-    generate_svg_string, render_svg_unified,
+    generate_song_svg_string, generate_svg_string, render_svg_unified, PlayerStats, RenderRecord,
+    SongRenderData, Theme,
 };
 use chrono::Utc;
 use sha2::{Digest as _, Sha256};
@@ -409,6 +409,11 @@ fn generate_bn_svg_renders_phi_plugin_b30_with_overflow() {
 
     assert!(svg.contains("OVER FLOW"));
     assert!(svg.contains(">P1</text>"));
+    assert_eq!(
+        svg.matches("filter=\"url(#card-edge-halo-gold)\"").count(),
+        3
+    );
+    assert_eq!(svg.matches("filter=\"url(#card-edge-halo)\"").count(), 33);
     assert!(svg.contains(">#33</text>"));
     assert!(svg.contains(">48</text>"));
     assert!(svg.contains("Phi Score Query · Pre-0.9.7.7"));
@@ -462,6 +467,16 @@ fn generate_bn_svg_renders_phi_plugin_b30_with_overflow() {
     .unwrap();
     assert!(p30_svg.contains(">P1</text>"));
     assert!(p30_svg.contains(">P3</text>"));
+    assert_eq!(
+        p30_svg
+            .matches("filter=\"url(#card-edge-halo-gold)\"")
+            .count(),
+        3
+    );
+    assert_eq!(
+        p30_svg.matches("filter=\"url(#card-edge-halo)\"").count(),
+        30
+    );
     assert!(p30_svg.contains(">#30</text>"));
     assert!(p30_svg.contains(">15.7500</text>"));
     if let Ok(preview_svg_path) = std::env::var("PHI_PLUGIN_P30_PREVIEW_SVG_PATH") {

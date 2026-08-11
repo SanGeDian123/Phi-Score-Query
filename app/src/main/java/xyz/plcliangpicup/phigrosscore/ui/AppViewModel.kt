@@ -26,8 +26,10 @@ import xyz.plcliangpicup.phigrosscore.data.LoginProgress
 import xyz.plcliangpicup.phigrosscore.data.LeaderboardSnapshot
 import xyz.plcliangpicup.phigrosscore.data.QrCodeCreateResponse
 import xyz.plcliangpicup.phigrosscore.data.RankingImageKind
+import xyz.plcliangpicup.phigrosscore.data.RksCalculatorDraft
 import xyz.plcliangpicup.phigrosscore.data.SongScoreResult
 import xyz.plcliangpicup.phigrosscore.data.SongScoreImageStyle
+import xyz.plcliangpicup.phigrosscore.data.SuggestionPost
 import java.io.File
 
 enum class AppPage { HOME, B30, SONG, CONSTANT_TABLE, LEADERBOARD, IMAGE, MORE, SETTINGS }
@@ -59,6 +61,10 @@ data class AppUiState(
     val constantTableEntries: List<ConstantTableEntry> = emptyList(),
     val leaderboard: LeaderboardSnapshot? = null,
     val isLeaderboardLoading: Boolean = false,
+    val suggestionPost: SuggestionPost? = null,
+    val isSuggestionLoading: Boolean = false,
+    val isSuggestionSubmitting: Boolean = false,
+    val rksCalculatorDraft: RksCalculatorDraft = RksCalculatorDraft(),
     val isGeneratingB30Image: Boolean = false,
     val b30ImageGenerationElapsedSeconds: Int = 0,
     val isGeneratingP30Image: Boolean = false,
@@ -93,6 +99,7 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
             showExperienceSurveyPrompt = repository.shouldShowExperienceSurveyPrompt,
             showImagePagerGuide = repository.shouldShowImagePagerGuide,
             constantTableEntries = repository.constantTableEntries(),
+            rksCalculatorDraft = repository.rksCalculatorDraft,
         ),
     )
     val state: StateFlow<AppUiState> = _state.asStateFlow()
@@ -152,6 +159,12 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
     fun selectPage(page: AppPage) {
         _state.update { it.copy(page = page) }
         if (page == AppPage.LEADERBOARD && _state.value.leaderboard == null) refreshLeaderboard()
+    }
+
+    fun setRksCalculatorDraft(draft: RksCalculatorDraft) {
+        val normalized = draft.normalized()
+        repository.setRksCalculatorDraft(normalized)
+        _state.update { it.copy(rksCalculatorDraft = normalized) }
     }
 
     fun dismissNavigationGuide() {
@@ -484,6 +497,96 @@ class AppViewModel(private val repository: AppRepository) : ViewModel() {
                         )
                     }
                 }
+        }
+    }
+
+    fun loadRandomSuggestion(useCurrentAsExclusion: Boolean = false) {
+        if (_state.value.isSuggestionLoading) return
+        viewModelScope.launch {
+            val exclude = _state.value.suggestionPost?.id.takeIf { useCurrentAsExclusion }
+            _state.update { it.copy(isSuggestionLoading = true, message = null) }
+            runCatching { repository.fetchRandomSuggestion(exclude) }
+                .onSuccess { post ->
+                    _state.update {
+                        it.copy(
+                            suggestionPost = post,
+                            isSuggestionLoading = false,
+                            isOffline = false,
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _state.update {
+                        it.copy(
+                            isSuggestionLoading = false,
+                            message = if (error.message?.contains("未找到") == true) {
+                                "还没有人发布成绩图"
+                            } else {
+                                readableError(error)
+                            },
+                        )
+                    }
+                }
+        }
+    }
+
+    fun submitSuggestionPost(
+        description: String,
+        imageBytes: ByteArray,
+        imageMimeType: String,
+        onComplete: (Boolean) -> Unit = {},
+    ) {
+        if (_state.value.isSuggestionSubmitting) return
+        viewModelScope.launch {
+            _state.update { it.copy(isSuggestionSubmitting = true, message = null) }
+            runCatching {
+                repository.createSuggestionPost(description, imageBytes, imageMimeType)
+            }.onSuccess { post ->
+                _state.update {
+                    it.copy(
+                        suggestionPost = post,
+                        isSuggestionSubmitting = false,
+                        message = "已发送，等待建议",
+                    )
+                }
+                onComplete(true)
+            }.onFailure { error ->
+                _state.update {
+                    it.copy(isSuggestionSubmitting = false, message = readableError(error))
+                }
+                onComplete(false)
+            }
+        }
+    }
+
+    fun submitSuggestionComment(
+        text: String,
+        imageBytes: ByteArray? = null,
+        imageMimeType: String? = null,
+        onComplete: (Boolean) -> Unit = {},
+    ) {
+        val post = _state.value.suggestionPost ?: return
+        if (_state.value.isSuggestionSubmitting) return
+        viewModelScope.launch {
+            _state.update { it.copy(isSuggestionSubmitting = true, message = null) }
+            runCatching {
+                repository.createSuggestionComment(post.id, text, imageBytes, imageMimeType)
+            }.onSuccess { comment ->
+                _state.update { current ->
+                    current.copy(
+                        suggestionPost = current.suggestionPost?.copy(
+                            comments = current.suggestionPost.comments + comment,
+                        ),
+                        isSuggestionSubmitting = false,
+                    )
+                }
+                onComplete(true)
+            }.onFailure { error ->
+                _state.update {
+                    it.copy(isSuggestionSubmitting = false, message = readableError(error))
+                }
+                onComplete(false)
+            }
         }
     }
 

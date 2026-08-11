@@ -58,6 +58,14 @@ class AppRepository(
     val cachedP30Image: File get() = cacheStore.p30ImageFile
     val shouldShowImagePagerGuide: Boolean
         get() = !preferences.getBoolean("image_pager_guide_pre0976_shown", false)
+    val rksCalculatorDraft: RksCalculatorDraft
+        get() = preferences.getString("rks_calculator_draft_pre0978", null)
+            ?.let { encoded ->
+                runCatching {
+                    json.decodeFromString(RksCalculatorDraft.serializer(), encoded).normalized()
+                }.getOrNull()
+            }
+            ?: RksCalculatorDraft()
 
     suspend fun fetchPendingAnnouncement(): AppAnnouncement? {
         val announcement = api.fetchAppAnnouncement()
@@ -145,6 +153,11 @@ class AppRepository(
 
     fun setNavigationHandlePosition(position: Float) {
         preferences.edit().putFloat("navigation_handle_position", position.coerceIn(0f, 1f)).apply()
+    }
+
+    fun setRksCalculatorDraft(draft: RksCalculatorDraft) {
+        val encoded = json.encodeToString(RksCalculatorDraft.serializer(), draft.normalized())
+        preferences.edit().putString("rks_calculator_draft_pre0978", encoded).apply()
     }
 
     fun markNavigationGuideShown() {
@@ -342,6 +355,27 @@ class AppRepository(
         songCatalog.resetToBundled()
     }
 
+    suspend fun createSuggestionPost(
+        description: String,
+        imageBytes: ByteArray,
+        imageMimeType: String,
+    ): SuggestionPost = authenticatedCall { token ->
+        api.createSuggestionPost(token, description, imageBytes, imageMimeType)
+    }
+
+    suspend fun fetchRandomSuggestion(excludeId: String? = null): SuggestionPost =
+        authenticatedCall { token -> api.fetchRandomSuggestion(token, excludeId) }
+
+    suspend fun createSuggestionComment(
+        postId: String,
+        text: String,
+        imageBytes: ByteArray? = null,
+        imageMimeType: String? = null,
+    ): SuggestionComment = authenticatedCall { token ->
+        api.createSuggestionComment(token, postId, text, imageBytes, imageMimeType)
+    }
+
+    @OptIn(coil.annotation.ExperimentalCoilApi::class)
     suspend fun clearCache() {
         cacheStore.clear()
         songScoreImageRenderer.clear()

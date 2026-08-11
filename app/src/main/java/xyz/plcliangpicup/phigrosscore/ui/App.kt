@@ -231,6 +231,7 @@ import xyz.plcliangpicup.phigrosscore.data.AppUpdateManifest
 import xyz.plcliangpicup.phigrosscore.data.ConstantTableEntry
 import xyz.plcliangpicup.phigrosscore.data.LoginProgress
 import xyz.plcliangpicup.phigrosscore.data.LeaderboardEntry
+import xyz.plcliangpicup.phigrosscore.data.RksCalculatorDraft
 import xyz.plcliangpicup.phigrosscore.data.ScoreSnapshotEntry
 import xyz.plcliangpicup.phigrosscore.data.SongDifficultyScore
 import xyz.plcliangpicup.phigrosscore.data.SongScoreResult
@@ -287,6 +288,18 @@ private const val BACKEND_REPOSITORY_URL = "https://github.com/Sczr0/Next-Phi-Ba
 private const val EXPERIENCE_SURVEY_URL = "https://wj.qq.com/s2/27522729/6kti/"
 
 private val changelogEntries = listOf(
+    ChangelogEntry(
+        "Pre-0.9.7.8",
+        "RKS 工具与建议区",
+        listOf(
+            "更多页新增 RKS 计算器，提升估算会读取账号真实 B27 与 AP3 并按替换线重新计算。",
+            "更多页主体色跟随 APP 主题，浅色模式使用蓝色，深色模式使用青色。",
+            "RKS 计算器输入保存在 APP 内，退出页面或重启后仍会恢复。",
+            "新增求建议/给建议，可发布成绩图、随机浏览并评论或附上自己的成绩图。",
+            "建议区只能选择 APP 内生成的 B30/P30 成绩图，不再调用系统相册。",
+            "Phi-Plugin B30/P30 的 P1-P3 卡片光晕改为金色。",
+        ),
+    ),
     ChangelogEntry(
         "Pre-0.9.7.7",
         "筛选与成绩图体验优化",
@@ -674,6 +687,10 @@ fun PhigrosScoreApp(viewModel: AppViewModel) {
                 onPage = viewModel::selectPage,
                 onRefresh = { viewModel.refreshB30() },
                 onRefreshLeaderboard = viewModel::refreshLeaderboard,
+                onLoadRandomSuggestion = viewModel::loadRandomSuggestion,
+                onRksCalculatorDraftChange = viewModel::setRksCalculatorDraft,
+                onSubmitSuggestionPost = viewModel::submitSuggestionPost,
+                onSubmitSuggestionComment = viewModel::submitSuggestionComment,
                 onSearchSong = viewModel::searchSong,
                 onOpenConstantSong = viewModel::constantSongDetail,
                 onEnsureSongImage = viewModel::ensureSongImage,
@@ -1390,6 +1407,10 @@ private fun MainShell(
     onPage: (AppPage) -> Unit,
     onRefresh: () -> Unit,
     onRefreshLeaderboard: () -> Unit,
+    onLoadRandomSuggestion: (Boolean) -> Unit,
+    onRksCalculatorDraftChange: (RksCalculatorDraft) -> Unit,
+    onSubmitSuggestionPost: (String, ByteArray, String, (Boolean) -> Unit) -> Unit,
+    onSubmitSuggestionComment: (String, ByteArray?, String?, (Boolean) -> Unit) -> Unit,
     onSearchSong: (String) -> Unit,
     onOpenConstantSong: (String) -> SongScoreResult?,
     onEnsureSongImage: (SongScoreResult) -> Unit,
@@ -1469,6 +1490,10 @@ private fun MainShell(
                     onPage = onPage,
                     onRefresh = onRefresh,
                     onRefreshLeaderboard = onRefreshLeaderboard,
+                    onLoadRandomSuggestion = onLoadRandomSuggestion,
+                    onRksCalculatorDraftChange = onRksCalculatorDraftChange,
+                    onSubmitSuggestionPost = onSubmitSuggestionPost,
+                    onSubmitSuggestionComment = onSubmitSuggestionComment,
                     onSearchSong = onSearchSong,
                     onOpenConstantSong = onOpenConstantSong,
                     onEnsureSongImage = onEnsureSongImage,
@@ -1524,6 +1549,10 @@ private fun PageContent(
     onPage: (AppPage) -> Unit,
     onRefresh: () -> Unit,
     onRefreshLeaderboard: () -> Unit,
+    onLoadRandomSuggestion: (Boolean) -> Unit,
+    onRksCalculatorDraftChange: (RksCalculatorDraft) -> Unit,
+    onSubmitSuggestionPost: (String, ByteArray, String, (Boolean) -> Unit) -> Unit,
+    onSubmitSuggestionComment: (String, ByteArray?, String?, (Boolean) -> Unit) -> Unit,
     onSearchSong: (String) -> Unit,
     onOpenConstantSong: (String) -> SongScoreResult?,
     onEnsureSongImage: (SongScoreResult) -> Unit,
@@ -1578,7 +1607,14 @@ private fun PageContent(
                     onOpenDrawer = onOpenDrawer,
                     onDismissGuide = onDismissImagePagerGuide,
                 )
-                AppPage.MORE -> MorePage()
+                AppPage.MORE -> MorePage(
+                    state = state,
+                    onRefreshB30 = onRefresh,
+                    onLoadRandomSuggestion = onLoadRandomSuggestion,
+                    onRksCalculatorDraftChange = onRksCalculatorDraftChange,
+                    onSubmitSuggestionPost = onSubmitSuggestionPost,
+                    onSubmitSuggestionComment = onSubmitSuggestionComment,
+                )
                 AppPage.SETTINGS -> SettingsPage(
                     state = state,
                     onClearCache = onClearCache,
@@ -3860,56 +3896,25 @@ private fun ZoomableB30ImageDialog(
 }
 
 @Composable
-private fun MorePage() {
-    val illustration = ImageBitmap.imageResource(R.drawable.more_under_construction)
-    val lineColor = MaterialTheme.colorScheme.onBackground
-    val lineColorFilter = remember(lineColor) {
-        ColorFilter.colorMatrix(
-            ColorMatrix(
-                floatArrayOf(
-                    0f, 0f, 0f, 0f, lineColor.red * 255f,
-                    0f, 0f, 0f, 0f, lineColor.green * 255f,
-                    0f, 0f, 0f, 0f, lineColor.blue * 255f,
-                    -.299f, -.587f, -.114f, 0f, 255f,
-                ),
-            ),
-        )
-    }
+private fun MorePage(
+    state: AppUiState,
+    onRefreshB30: () -> Unit,
+    onLoadRandomSuggestion: (Boolean) -> Unit,
+    onRksCalculatorDraftChange: (RksCalculatorDraft) -> Unit,
+    onSubmitSuggestionPost: (String, ByteArray, String, (Boolean) -> Unit) -> Unit,
+    onSubmitSuggestionComment: (String, ByteArray?, String?, (Boolean) -> Unit) -> Unit,
+) {
     Column(Modifier.fillMaxSize()) {
         PageHeader("更多")
-        Box(
-            Modifier.fillMaxWidth().weight(1f).padding(horizontal = 20.dp, vertical = 18.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Column(
-                Modifier.fillMaxWidth().widthIn(max = 900.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Canvas(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(16f / 9f)
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(AppBackground),
-                ) {
-                    drawImage(
-                        image = illustration,
-                        dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()),
-                        colorFilter = lineColorFilter,
-                        filterQuality = FilterQuality.Medium,
-                    )
-                }
-                Spacer(Modifier.height(22.dp))
-                Text("页面装修中...", fontSize = 23.sp, fontWeight = FontWeight.Black)
-                Spacer(Modifier.height(7.dp))
-                Text(
-                    "本页面暂未开放，具体开放时间待定。",
-                    color = AppTextMuted,
-                    fontSize = 12.sp,
-                    textAlign = TextAlign.Center,
-                )
-            }
-        }
+        MoreFeaturesPage(
+            state = state,
+            onRefreshB30 = onRefreshB30,
+            onLoadRandomSuggestion = onLoadRandomSuggestion,
+            onRksCalculatorDraftChange = onRksCalculatorDraftChange,
+            onSubmitSuggestionPost = onSubmitSuggestionPost,
+            onSubmitSuggestionComment = onSubmitSuggestionComment,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 

@@ -4,9 +4,9 @@ Phi Score Query 的公网服务使用了修改后的 Next-Phi-Backend。任何�
 
 ## 对应源码位置
 
-- 固定发布标签：<https://github.com/SanGeDian123/Phi-Score-Query/tree/pre-0.9.7.1/backend-source>
+- 当前对应源码：Pre-0.9.7.8 服务器升级包内的 `source/backend-source-Pre-0.9.7.8.zip`
 - 上游项目：<https://github.com/Sczr0/Next-Phi-Backend>
-- 修改说明：<https://github.com/SanGeDian123/Phi-Score-Query/blob/pre-0.9.7.1/backend-source/MODIFICATIONS.md>
+- 修改说明：源码归档内的 `MODIFICATIONS.md`
 
 `backend-source/` 包含生成、修改和运行后端所需的源代码、锁定依赖、模板与测试。部署所需的配置模板、构建和安装脚本位于 `server/`。
 
@@ -14,6 +14,6 @@ Phi Score Query 的公网服务使用了修改后的 Next-Phi-Backend。任何�
 
 ## 网络入口
 
-生产 Caddy 配置在 API 响应中加入 `Link` 和 `X-Source-Code` 响应头，并提供 `/source` 路由跳转至上述固定标签。
+生产 Caddy 配置在 API 响应中加入 `Link` 和 `X-Source-Code` 响应头，并通过 `/source` 直接提供当前部署版本的源码归档。
 
 本说明不限制用户依据 GNU AGPL v3 获得的任何权利。

@@ -19,8 +19,8 @@ api.plc-liangpi-cup.xyz {
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"
 		Cache-Control "no-store"
-		Link "<https://github.com/SanGeDian123/Phi-Score-Query/tree/pre-0.9.7.1/backend-source>; rel=source"
-		X-Source-Code "https://github.com/SanGeDian123/Phi-Score-Query/tree/pre-0.9.7.1/backend-source"
+		Link "<https://api.plc-liangpi-cup.xyz/source>; rel=source"
+		X-Source-Code "https://api.plc-liangpi-cup.xyz/source"
 	}
 
 	log {
@@ -34,7 +34,10 @@ api.plc-liangpi-cup.xyz {
 
 	@source path /source
 	handle @source {
-		redir https://github.com/SanGeDian123/Phi-Score-Query/tree/pre-0.9.7.1/backend-source 302
+		header Content-Disposition "attachment; filename=backend-source-Pre-0.9.7.8.zip"
+		root * {$APP_SOURCE_DIR}
+		rewrite * /backend-source-Pre-0.9.7.8.zip
+		file_server
 	}
 
 	@sessionExchange path /api/v2/auth/session/exchange /api/v2/auth/session/refresh
@@ -72,6 +75,26 @@ api.plc-liangpi-cup.xyz {
 		header Cache-Control "public, max-age=604800, immutable"
 		root * {$APP_AVATAR_DIR}
 		file_server
+	}
+
+	@suggestionMedia path /suggestion-media/*
+	handle @suggestionMedia {
+		header Cache-Control "public, max-age=604800, immutable"
+		reverse_proxy 127.0.0.1:3939 {
+			header_up -X-Exchange-Secret
+			header_up -X-OpenApi-Token
+		}
+	}
+
+	@suggestionApi path /api/v2/suggestions /api/v2/suggestions/*
+	handle @suggestionApi {
+		request_body {
+			max_size 10MB
+		}
+		reverse_proxy 127.0.0.1:3939 {
+			header_up -X-Exchange-Secret
+			header_up -X-OpenApi-Token
+		}
 	}
 
 	@allowed path \

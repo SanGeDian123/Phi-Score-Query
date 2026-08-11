@@ -3,10 +3,10 @@
 //! 将 route 注册、middleware 层叠、压缩策略等横切关注点从 main.rs 中提取，
 //! 保持 main.rs 专注于进程初始化与生命周期管理。
 
-use axum::http::{HeaderValue, header};
+use axum::http::{header, HeaderValue};
 use axum::middleware::Next;
 use axum::response::Response;
-use axum::{Router, extract::Request, routing::get};
+use axum::{extract::Request, routing::get, Router};
 use tower_http::compression::CompressionLayer;
 use tower_http::services::ServeDir;
 use utoipa::OpenApi;
@@ -18,8 +18,8 @@ use crate::features::health::handler::health_check;
 use crate::features::leaderboard::handler::create_leaderboard_router;
 use crate::features::open_platform;
 use crate::features::stats::{
+    middleware::{stats_middleware, StateWithStats},
     StatsHandle,
-    middleware::{StateWithStats, stats_middleware},
 };
 use crate::features::{auth, save, song};
 use crate::openapi::ApiDoc;
@@ -64,7 +64,8 @@ fn build_api_router(state: &AppState, config: &AppConfig) -> Router<AppState> {
         .merge(crate::features::image::create_image_router())
         .merge(create_leaderboard_router())
         .merge(crate::features::rks::handler::create_rks_router())
-        .merge(crate::features::stats::handler::create_stats_router());
+        .merge(crate::features::stats::handler::create_stats_router())
+        .merge(crate::features::suggestion::create_suggestion_router());
 
     if config.open_platform.enabled {
         api_router = api_router
@@ -86,6 +87,9 @@ pub fn build_app(
     stats_handle: Option<&StatsHandle>,
 ) -> Router {
     let ill_root = config.illustration_path();
+    let suggestion_media_root = std::env::var_os("APP_SUGGESTION_MEDIA_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("resources/suggestion-media"));
     let api_router = build_api_router(&state, config);
 
     let mut app = Router::<AppState>::new()
@@ -93,6 +97,7 @@ pub fn build_app(
         .nest_service("/_ill/ill", ServeDir::new(ill_root.join("ill")))
         .nest_service("/_ill/illLow", ServeDir::new(ill_root.join("illLow")))
         .nest_service("/_ill/illBlur", ServeDir::new(ill_root.join("illBlur")))
+        .nest_service("/suggestion-media", ServeDir::new(suggestion_media_root))
         .nest(&config.api.prefix, api_router)
         .merge(SwaggerUi::new("/docs").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .with_state(state);
@@ -129,7 +134,7 @@ pub fn build_app(
 mod compression_predicate_tests {
     use super::compression_predicate;
     use axum::body::Body;
-    use axum::http::{Response as HttpResponse, header};
+    use axum::http::{header, Response as HttpResponse};
     use tower_http::compression::predicate::Predicate;
 
     fn should_compress_for(ct: &str) -> bool {

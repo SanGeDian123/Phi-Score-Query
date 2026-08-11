@@ -4,7 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chrono::Duration;
 use sha2::{Digest as _, Sha256};
 
@@ -21,7 +21,7 @@ use super::score::to_engine_record;
 use super::svg_error::svg_fmt_error;
 use super::template_shared::truncate_with_ellipsis;
 use super::text::escape_xml;
-use super::{MAIN_FONT_NAME, PlayerStats, RenderRecord};
+use super::{PlayerStats, RenderRecord, MAIN_FONT_NAME};
 
 // The upstream Phi-Plugin HTML is authored on a 1200 px canvas. These values
 // intentionally mirror b19.css instead of sharing the dimensions of the other
@@ -186,6 +186,17 @@ fn write_defs(svg: &mut String) -> Result<(), AppError> {
   <feComposite in="halo-wide-color" in2="halo-wide-blur" operator="in" result="halo-wide"/>
   <feMerge result="halo-merged"><feMergeNode in="halo-wide"/><feMergeNode in="halo-near"/></feMerge>
   <feComposite in="halo-merged" in2="SourceAlpha" operator="out"/>
+</filter>
+<filter id="card-edge-halo-gold" x="-40%" y="-85%" width="190%" height="270%" color-interpolation-filters="sRGB">
+  <feMorphology in="SourceAlpha" operator="dilate" radius=".8" result="halo-edge-gold"/>
+  <feGaussianBlur in="halo-edge-gold" stdDeviation="5.5" result="halo-near-blur-gold"/>
+  <feGaussianBlur in="halo-edge-gold" stdDeviation="14" result="halo-wide-blur-gold"/>
+  <feFlood flood-color="#ffd700" flood-opacity=".55" result="halo-near-color-gold"/>
+  <feFlood flood-color="#ffd700" flood-opacity=".34" result="halo-wide-color-gold"/>
+  <feComposite in="halo-near-color-gold" in2="halo-near-blur-gold" operator="in" result="halo-near-gold"/>
+  <feComposite in="halo-wide-color-gold" in2="halo-wide-blur-gold" operator="in" result="halo-wide-gold"/>
+  <feMerge result="halo-merged-gold"><feMergeNode in="halo-wide-gold"/><feMergeNode in="halo-near-gold"/></feMerge>
+  <feComposite in="halo-merged-gold" in2="SourceAlpha" operator="out"/>
 </filter>
 <filter id="icon-glow" x="-70%" y="-70%" width="240%" height="240%"><feDropShadow dx="0" dy="0" stdDeviation="4" flood-color="#fff" flood-opacity=".78"/></filter>
 <filter id="ap-icon-glow" x="-70%" y="-70%" width="240%" height="240%"><feDropShadow dx="0" dy="0" stdDeviation="4" flood-color="#fff700" flood-opacity=".72"/></filter>
@@ -441,15 +452,21 @@ where
     } else {
         "icon-glow"
     };
+    let card_halo_filter = if is_ap_card {
+        "card-edge-halo-gold"
+    } else {
+        "card-edge-halo"
+    };
 
     writeln!(svg, r##"<g transform="translate({x:.1} {y:.1})">"##).map_err(svg_fmt_error)?;
 
-    // Render the white glow from a dedicated card silhouette. The filter
-    // explicitly removes SourceAlpha, so no glow is painted inside the score
-    // panel or over its text and icons.
+    // Render the edge glow from a dedicated card silhouette. P1-P3 use the
+    // gold variant; both filters share the same bounds, blur and opacity.
+    // SourceAlpha is removed so no glow is painted inside the score panel or
+    // over its text and icons.
     writeln!(
         svg,
-        r##"<g filter="url(#card-edge-halo)"><path d="M28.476 2.54 H180 L151.524 97.46 H0 Z" fill="#fff"/><rect x="141" y="5" width="204.6" height="90" fill="#fff"/></g>"##
+        r##"<g filter="url(#{card_halo_filter})"><path d="M28.476 2.54 H180 L151.524 97.46 H0 Z" fill="#fff"/><rect x="141" y="5" width="204.6" height="90" fill="#fff"/></g>"##
     )
     .map_err(svg_fmt_error)?;
 

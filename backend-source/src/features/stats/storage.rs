@@ -11,6 +11,7 @@ mod profile;
 mod public_leaderboard;
 mod session;
 mod submission;
+mod suggestion;
 mod summary;
 
 /// 保存提交入库参数，减少函数参数数量

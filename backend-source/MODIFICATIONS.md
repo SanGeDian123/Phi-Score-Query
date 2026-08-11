@@ -16,16 +16,18 @@
 - 扩展排行榜轻量返回字段和相关数据库查询。
 - 扩展存档响应，提供客户端成绩比较需要的数据。
 - 增加经典与简约 B30 图片模板、版本水印及渲染参数。
+- 增加“求建议/给建议”成绩图发布、随机抽取、评论与持久化媒体接口。
+- 将 Phi-Plugin B30/P30 的 P1-P3 卡片光晕改为金色，并保持原光晕范围和强度。
 - 补充相关 API、渲染和排行榜回归测试。
 - 更新部署所用歌曲资料与别名数据。
 - 将两处一分钟回退值从 `Duration::from_mins(1)` 等价改写为 `Duration::from_secs(60)`，兼容部署构建工具链。
 
-完整逐行修改可以将本目录与上述基准提交进行比较。发布标签 `pre-0.9.7.1` 对应 Pre-0.9.7.1 公测服务端构建。
+完整逐行修改可以将本目录与上述基准提交进行比较。服务器升级包中的 `source/backend-source-Pre-0.9.7.8.zip` 与 Pre-0.9.7.8 服务端二进制对应；部署后也可通过公网 `/source` 获取。
 
 ## 构建
 
 ```powershell
-$env:CARGO_TARGET_DIR='D:\PhigrosScoreBuild\backend-target-pre0971'
+$env:CARGO_TARGET_DIR='D:\CodexBuild\PhigrosApp0978'
 cargo test --locked
 cargo build --locked --profile release-dist --target x86_64-pc-windows-msvc
 ```
