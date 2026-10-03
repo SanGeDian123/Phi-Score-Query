@@ -1,10 +1,12 @@
 # Phi Score Query
 
+本项目为非官方玩家项目，与南京鸽游网络有限公司及《Phigros》官方不存在授权、合作或运营关系。
+
 Phi Score Query 是一个面向 Android 8.0 及以上系统的非官方 Phigros 成绩查询客户端。当前客户端源码版本为 **Pre-0.9.7.11-Fix（versionCode 98）**。
 
 项目提供 Android 客户端，以及线上服务实际使用的 Next-Phi-Backend 修改版对应源码。
 
-> 本项目与 Pigeon Games、TapTap 无隶属或授权关系。请勿在 Issue、日志、截图或其他公开位置提交 SessionToken、Access Token 或其他账号凭据。
+> 请勿在 Issue、日志、截图或其他公开位置提交 SessionToken、Access Token 或其他账号凭据。
 
 ## 功能
 
