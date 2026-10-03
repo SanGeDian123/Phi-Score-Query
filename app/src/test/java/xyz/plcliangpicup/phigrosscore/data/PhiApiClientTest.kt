@@ -66,6 +66,36 @@ class PhiApiClientTest {
     }
 
     @Test
+    fun `song search sends aliases to backend search endpoint`() = runTest {
+        server.enqueue(
+            MockResponse().setBody(
+                """
+                    {
+                      "items":[{
+                        "id":"Anomaly.D_AAN",
+                        "name":"Anomaly",
+                        "composer":"D_AAN",
+                        "illustrator":"dummy",
+                        "chartConstants":{"in":14.0}
+                      }],
+                      "total":1
+                    }
+                """.trimIndent(),
+            ),
+        )
+        server.start()
+
+        val client = PhiApiClient(server.url("/").toString(), json)
+        val result = client.searchSongs("access", "异常")
+        val request = server.takeRequest()
+
+        assertEquals("异常", request.requestUrl?.queryParameter("q"))
+        assertEquals("100", request.requestUrl?.queryParameter("limit"))
+        assertEquals("Bearer access", request.getHeader("Authorization"))
+        assertEquals("Anomaly.D_AAN", result.items.single().id)
+    }
+
+    @Test
     fun `Phi Plugin B30 requests Best 33 without changing P30 semantics`() = runTest {
         server.enqueue(MockResponse().setBody("b30-png"))
         server.enqueue(MockResponse().setBody("p30-png"))
@@ -117,6 +147,41 @@ class PhiApiClientTest {
     }
 
     @Test
+    fun `announcement history uses the static index endpoint and preserves newest first order`() = runTest {
+        server.enqueue(
+            MockResponse().setBody(
+                """
+                    {
+                      "items": [
+                        {
+                          "id": "notice-2",
+                          "title": "最新公告",
+                          "body": "第二条正文",
+                          "publishedAt": "2026-08-30 20:00:00 +08:00"
+                        },
+                        {
+                          "id": "notice-1",
+                          "title": "历史公告",
+                          "body": "第一条正文",
+                          "publishedAt": "2026-08-29 20:00:00 +08:00"
+                        }
+                      ]
+                    }
+                """.trimIndent(),
+            ),
+        )
+        server.start()
+
+        val client = PhiApiClient(server.url("/").toString(), json)
+        val history = client.fetchAppAnnouncementHistory()
+        val request = server.takeRequest()
+
+        assertEquals("/app-announcement/index.json", request.path)
+        assertEquals("no-cache", request.getHeader("Cache-Control"))
+        assertEquals(listOf("notice-2", "notice-1"), history.items.map(AppAnnouncement::id))
+    }
+
+    @Test
     fun `suggestion upload is authenticated multipart and resolves media urls`() = runTest {
         server.enqueue(
             MockResponse().setBody(
@@ -154,7 +219,7 @@ class PhiApiClientTest {
     }
 
     @Test
-    fun `random suggestion excludes current post`() = runTest {
+    fun `random suggestion excludes recently viewed posts`() = runTest {
         server.enqueue(
             MockResponse().setBody(
                 """
@@ -172,11 +237,54 @@ class PhiApiClientTest {
         server.start()
 
         val client = PhiApiClient(server.url("/").toString(), json)
-        client.fetchRandomSuggestion("access", excludeId = "post-1")
+        client.fetchRandomSuggestion(
+            "access",
+            excludedIds = listOf("post-1", " post-2 ", "post-1", ""),
+        )
         val request = server.takeRequest()
 
-        assertEquals("/api/v2/suggestions/random?exclude=post-1", request.path)
+        assertEquals("/api/v2/suggestions/random?exclude_ids=post-1%2Cpost-2", request.path)
         assertEquals("Bearer access", request.getHeader("Authorization"))
+    }
+
+    @Test
+    fun `chart achievement rates encode chart identity and decode exclusive grades`() = runTest {
+        server.enqueue(
+            MockResponse().setBody(
+                """
+                    {
+                      "songId":"song.with space",
+                      "songName":"Test Song",
+                      "difficulty":"AT",
+                      "total":8,
+                      "rates":[
+                        {"grade":"F","count":1,"rate":0.125},
+                        {"grade":"C","count":1,"rate":0.125},
+                        {"grade":"B","count":1,"rate":0.125},
+                        {"grade":"A","count":1,"rate":0.125},
+                        {"grade":"S","count":1,"rate":0.125},
+                        {"grade":"V","count":1,"rate":0.125},
+                        {"grade":"FC","count":1,"rate":0.125},
+                        {"grade":"AP","count":1,"rate":0.125}
+                      ]
+                    }
+                """.trimIndent(),
+            ),
+        )
+        server.start()
+
+        val response = PhiApiClient(server.url("/").toString(), json)
+            .fetchChartAchievementRates("access", "song.with space", "at")
+        val request = server.takeRequest()
+
+        assertEquals(
+            "/api/v2/songs/achievement-rates?song_id=song.with%20space&difficulty=at",
+            request.path,
+        )
+        assertEquals("Bearer access", request.getHeader("Authorization"))
+        assertEquals(8, response.total)
+        assertEquals(listOf("F", "C", "B", "A", "S", "V", "FC", "AP"), response.rates.map { it.grade })
+        assertTrue(response.rates.all { it.count == 1 && it.rate == 0.125 })
     }
 
     @Test

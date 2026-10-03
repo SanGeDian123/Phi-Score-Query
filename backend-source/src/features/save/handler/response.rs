@@ -33,6 +33,8 @@ struct SaveDataBody<'a> {
 pub struct SaveAndRksResponse {
     pub save: provider::ParsedSave,
     pub rks: PlayerRksResult,
+    #[serde(rename = "unknownSongIds")]
+    pub unknown_song_ids: Vec<String>,
     #[serde(rename = "gradeCounts")]
     pub grade_counts: super::super::models::CfcPCountsByDifficulty,
     #[serde(rename = "playerNickname", skip_serializing_if = "Option::is_none")]
@@ -61,10 +63,12 @@ pub(super) fn build_save_response(
     player_nickname: Option<String>,
 ) -> Result<Response, AppError> {
     let (body, calc_rks, calc_ms) = if let Some((rks_result, full_save)) = rks_opt {
-        let grade_counts = compute_grade_counts(&rks_result.game_record);
+        let grade_counts = compute_grade_counts(&rks_result.rks_game_record);
         let resp = SaveAndRksResponse {
             save: provider::ParsedSave {
-                game_record: rks_result.game_record.clone(),
+                // 未被当前后端曲库识别的歌曲仍通过 unknownSongIds 通知客户端，
+                // 但不进入存档展示、成绩更新对比或任何基于已知曲目的客户端计算。
+                game_record: rks_result.rks_game_record.clone(),
                 game_progress: full_save.game_progress.clone(),
                 user: full_save.user.clone(),
                 settings: full_save.settings.clone(),
@@ -73,6 +77,7 @@ pub(super) fn build_save_response(
                 updated_at: full_save.updated_at.clone(),
             },
             rks: rks_result.rks.clone(),
+            unknown_song_ids: rks_result.unknown_song_ids.clone(),
             grade_counts,
             player_nickname,
         };
@@ -196,10 +201,10 @@ pub(super) fn build_textual_details_from_rks(
 
     let best_slice = &rks_result.b30_charts[..best27_len];
     let ap_slice = &rks_result.b30_charts[best27_len..best27_len + ap3_len];
+    let catalog = state.song_catalog.snapshot();
 
     let name_of = |sid: &str| -> String {
-        state
-            .song_catalog
+        catalog
             .by_id
             .get(sid)
             .map_or_else(|| sid.to_string(), |s| s.name.clone())

@@ -27,14 +27,24 @@ data class AppAnnouncement(
     val publishedAt: String? = null,
 )
 
-internal fun AppAnnouncement.isDisplayableAfter(lastSeenId: String?): Boolean =
+@Serializable
+data class AppAnnouncementFeed(
+    val items: List<AppAnnouncement> = emptyList(),
+)
+
+internal fun AppAnnouncement.isDisplayable(): Boolean =
     id.isNotBlank() &&
-        id != lastSeenId &&
         title.isNotBlank() &&
         body.isNotBlank() &&
         id.length <= 128 &&
         title.length <= 120 &&
         body.length <= 8_000
+
+internal fun AppAnnouncement.isDisplayableAfter(lastSeenId: String?): Boolean =
+    id != lastSeenId && isDisplayable()
+
+internal fun AppAnnouncementFeed.displayableItems(): List<AppAnnouncement> =
+    items.filter(AppAnnouncement::isDisplayable).distinctBy(AppAnnouncement::id)
 
 enum class B30ImageStyle(val preferenceValue: String) {
     CLASSIC("classic"),
@@ -51,6 +61,13 @@ enum class RankingImageKind {
     B30,
     P30,
 }
+
+data class CustomRankingImageScore(
+    val songId: String,
+    val difficulty: String,
+    val score: Int?,
+    val accuracy: Double,
+)
 
 enum class SongScoreImageStyle(val preferenceValue: String) {
     DEFAULT("default"),
@@ -89,6 +106,7 @@ data class QrCodeStatusResponse(
 data class SaveAndRksResponse(
     val save: ParsedSave,
     val rks: PlayerRks,
+    val unknownSongIds: List<String> = emptyList(),
     val gradeCounts: Map<String, GradeCounts> = emptyMap(),
     val playerNickname: String? = null,
 )
@@ -120,6 +138,32 @@ data class RemoteChartConstants(
 data class RemoteSongCatalog(
     val version: String,
     val items: List<RemoteSongInfo> = emptyList(),
+)
+
+@Serializable
+data class ChartAchievementRate(
+    val grade: String,
+    val count: Int = 0,
+    val rate: Double = 0.0,
+)
+
+@Serializable
+data class ChartAchievementResponse(
+    val songId: String,
+    val songName: String,
+    val difficulty: String,
+    val total: Int = 0,
+    val rates: List<ChartAchievementRate> = emptyList(),
+    val mine: MyChartAchievement? = null,
+)
+
+@Serializable
+data class MyChartAchievement(
+    val score: Int,
+    val grade: String,
+    val exceededCount: Int = 0,
+    val exceededRate: Double = 0.0,
+    val topRate: Double = 0.0,
 )
 
 @Serializable
@@ -185,6 +229,7 @@ data class B30Snapshot(
     val scoreRecords: List<ScoreSnapshotEntry> = emptyList(),
     val updatedScores: List<ScoreSnapshotEntry> = emptyList(),
     val hasUpdateComparison: Boolean = false,
+    val unknownSongIds: List<String> = emptyList(),
     val playerProfile: PlayerProfile? = null,
 )
 
@@ -229,6 +274,63 @@ data class B30Item(
     val isFullCombo: Boolean = false,
     val pushAcc: Double? = null,
     val pushAccHint: String? = null,
+)
+
+@Serializable
+data class RksGuessClue(
+    val slot: String,
+    val songId: String,
+    val songName: String,
+    val difficulty: String,
+    val score: Int,
+    val accuracy: Double,
+    val chartConstant: Double? = null,
+    val rks: Double,
+)
+
+@Serializable
+data class RksGuessClueGroup(
+    val round: Int,
+    val clues: List<RksGuessClue> = emptyList(),
+)
+
+@Serializable
+data class RksGuessRoundResult(
+    val round: Int,
+    val myAnswer: Double? = null,
+    val opponentAnswer: Double? = null,
+    val myElapsedMs: Long? = null,
+    val opponentElapsedMs: Long? = null,
+    val outcome: String,
+    val resolution: String,
+)
+
+@Serializable
+data class RksGuessStatus(
+    val gameId: String,
+    val mode: String,
+    val status: String,
+    val role: String,
+    val myNickname: String,
+    val opponentReady: Boolean,
+    val myRoundReady: Boolean = false,
+    val opponentRoundReady: Boolean = false,
+    val round: Int,
+    val totalRounds: Int,
+    val deadlineAtEpochMs: Long? = null,
+    val clues: List<RksGuessClue> = emptyList(),
+    val clueHistory: List<RksGuessClueGroup> = emptyList(),
+    val myAnswer: Double? = null,
+    val opponentAnswer: Double? = null,
+    val opponentSubmitted: Boolean = false,
+    val myScore: Int = 0,
+    val opponentScore: Int = 0,
+    val lastRound: RksGuessRoundResult? = null,
+    val winner: String? = null,
+    val finishReason: String? = null,
+    val myRks: Double? = null,
+    val opponentRks: Double? = null,
+    val targetRks: Double? = null,
 )
 
 data class SongInfo(

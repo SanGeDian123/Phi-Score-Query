@@ -7,6 +7,48 @@ import org.junit.Test
 
 class RksCalculatorTest {
     @Test
+    fun `play score and accuracy follow judgement and combo formulas`() {
+        val result = calculatePlayScoreAndAccuracy(
+            noteCount = 1000,
+            perfectCount = 900,
+            goodCount = 50,
+            badCount = 30,
+            missCount = 20,
+            maxCombo = 600,
+        )
+        assertEquals(899250, result.score)
+        assertEquals(93.25, result.accuracy, 1e-12)
+    }
+
+    @Test
+    fun `all perfect with full combo reaches one million`() {
+        val result = calculatePlayScoreAndAccuracy(1214, 1214, 0, 0, 0, 1214)
+        assertEquals(1_000_000, result.score)
+        assertEquals(100.0, result.accuracy, 1e-12)
+    }
+
+    @Test
+    fun `play score rounds fractional result upward`() {
+        val result = calculatePlayScoreAndAccuracy(
+            noteCount = 3,
+            perfectCount = 2,
+            goodCount = 0,
+            badCount = 0,
+            missCount = 1,
+            maxCombo = 1,
+        )
+        assertEquals(633_334, result.score)
+        assertEquals(200.0 / 3.0, result.accuracy, 1e-12)
+    }
+
+    @Test
+    fun `play calculator rejects inconsistent judgement total`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            calculatePlayScoreAndAccuracy(100, 90, 5, 3, 1, 90)
+        }
+    }
+
+    @Test
     fun `two known values solve the missing chart value`() {
         val rks = solveChartRks(15.0, 98.5, null)
         val acc = solveChartRks(15.0, null, rks.chartRks)
@@ -98,7 +140,7 @@ class RksCalculatorTest {
     }
 
     @Test
-    fun `calculator draft normalizes corrupt preferences and keeps thirty slots`() {
+    fun `calculator draft normalizes corrupt preferences and keeps the extended slot buffer`() {
         val draft = RksCalculatorDraft(
             mode = "broken",
             threeAccuracy = "99.25",
@@ -112,10 +154,10 @@ class RksCalculatorTest {
         assertEquals("99.25", draft.threeAccuracy)
         assertEquals("acc", draft.growthMetric)
         assertEquals("b30", draft.customRanking)
-        assertEquals(30, draft.b30Values.size)
+        assertEquals(36, draft.b30Values.size)
         assertEquals("15.5", draft.b30Values[0])
         assertEquals("", draft.b30Values[1])
-        assertEquals(30, draft.p30Values.size)
+        assertEquals(36, draft.p30Values.size)
     }
 
     @Test

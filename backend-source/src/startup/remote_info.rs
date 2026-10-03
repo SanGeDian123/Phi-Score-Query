@@ -4,8 +4,11 @@
 //! 通过 ETag 版本检测避免重复下载；网络不可达时静默 fallback 到本地文件。
 
 use std::collections::HashMap;
-use std::io::Cursor;
-use std::path::Path;
+use std::{
+    fs,
+    io::Cursor,
+    path::{Path, PathBuf},
+};
 
 use crate::error::AppError;
 use crate::features::song::models::SongCatalog;
@@ -129,6 +132,15 @@ pub async fn try_load_remote_info(
     let chart_constants = parse_chart_constants(Cursor::new(&difficulty_bytes))?;
     let song_catalog = parse_song_catalog(Cursor::new(&info_bytes), Cursor::new(&nicklist_bytes))?;
 
+    // 只有三份文件都解析成功后才持久化。否则下一次重启仍会从旧的完整
+    // 本地目录启动，不会因为远端半套数据而回退或污染曲库。
+    persist_remote_files(
+        info_dir,
+        &difficulty_bytes,
+        &info_bytes,
+        &nicklist_bytes,
+    )?;
+
     // 保存新 ETag 缓存
     save_etag_cache(&etag_path, &remote_etags);
 
@@ -137,6 +149,55 @@ pub async fn try_load_remote_info(
         chart_constants,
         song_catalog,
     }))
+}
+
+fn persist_remote_files(
+    info_dir: &Path,
+    difficulty_bytes: &[u8],
+    info_bytes: &[u8],
+    nicklist_bytes: &[u8],
+) -> Result<(), AppError> {
+    let files = [
+        ("difficulty.csv", difficulty_bytes),
+        ("info.csv", info_bytes),
+        ("nicklist.yaml", nicklist_bytes),
+    ];
+
+    for (name, bytes) in files {
+        let target = info_dir.join(name);
+        let temp = temporary_path(&target);
+        fs::write(&temp, bytes).map_err(|error| {
+            AppError::Internal(format!("写入远端曲库临时文件 {} 失败: {error}", temp.display()))
+        })?;
+
+        // Unix 可以直接 rename 覆盖；Windows 需要先移除旧文件。临时文件
+        // 始终先完整写入，服务内存快照仍只在全部解析成功后才会切换。
+        if let Err(rename_error) = fs::rename(&temp, &target) {
+            if target.exists() {
+                fs::remove_file(&target).map_err(|error| {
+                    AppError::Internal(format!("替换远端曲库文件 {} 失败: {error}", target.display()))
+                })?;
+                fs::rename(&temp, &target).map_err(|error| {
+                    AppError::Internal(format!("替换远端曲库文件 {} 失败: {error}", target.display()))
+                })?;
+            } else {
+                let _ = fs::remove_file(&temp);
+                return Err(AppError::Internal(format!(
+                    "替换远端曲库文件 {} 失败: {rename_error}",
+                    target.display()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn temporary_path(target: &Path) -> PathBuf {
+    let file_name = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("info");
+    target.with_file_name(format!(".{file_name}.sync-{}.tmp", std::process::id()))
 }
 
 fn load_etag_cache(path: &Path) -> HashMap<String, String> {

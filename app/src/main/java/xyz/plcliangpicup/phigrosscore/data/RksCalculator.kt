@@ -24,6 +24,42 @@ data class AccountRksProjection(
     val entersAp3: Boolean,
 )
 
+data class PlayScoreAndAccuracy(
+    val score: Int,
+    val accuracy: Double,
+    val noteCount: Int,
+)
+
+/** 根据 Phigros 的 90 万判定分、10 万连击分规则计算单次游玩的分数与 ACC。 */
+fun calculatePlayScoreAndAccuracy(
+    noteCount: Int,
+    perfectCount: Int,
+    goodCount: Int,
+    badCount: Int,
+    missCount: Int,
+    maxCombo: Int,
+): PlayScoreAndAccuracy {
+    require(noteCount > 0) { "谱面物量必须大于 0" }
+    require(listOf(perfectCount, goodCount, badCount, missCount, maxCombo).all { it >= 0 }) {
+        "各项数量不能小于 0"
+    }
+    require(perfectCount + goodCount + badCount + missCount == noteCount) {
+        "Perfect、Good、Bad、Miss 数量之和必须等于谱面物量"
+    }
+    require(maxCombo <= noteCount) { "Max Combo 不能超过谱面物量" }
+    require(maxCombo <= perfectCount + goodCount) { "Max Combo 不能超过 Perfect 与 Good 数量之和" }
+    val judgementRatio = (perfectCount + goodCount * 0.65) / noteCount.toDouble()
+    val scoreNumerator = maxCombo.toLong() * 100_000L +
+        perfectCount.toLong() * 900_000L +
+        goodCount.toLong() * 585_000L
+    val roundedUpScore = (scoreNumerator + noteCount - 1L) / noteCount
+    return PlayScoreAndAccuracy(
+        score = roundedUpScore.toInt().coerceIn(0, 1_000_000),
+        accuracy = judgementRatio * 100.0,
+        noteCount = noteCount,
+    )
+}
+
 /** Phigros 单曲 RKS；ACC 低于 70% 时贡献为 0。 */
 fun calculateChartRks(chartConstant: Double, accuracy: Double): Double {
     require(chartConstant > 0.0) { "谱面定数必须大于 0" }

@@ -16,7 +16,7 @@ use phi_backend::features::stats;
 use phi_backend::router::build_app;
 use phi_backend::startup::chart_loader::{ChartConstantsMap, load_chart_constants};
 use phi_backend::startup::{run_startup_checks, song_loader};
-use phi_backend::state::AppState;
+use phi_backend::state::{AppState, Reloadable};
 use phi_backend::{ShutdownManager, SystemdWatchdog, config::AppConfig};
 use std::sync::Arc;
 use std::time::Duration;
@@ -88,6 +88,11 @@ async fn main() {
 
     if let Err(e) = run_startup_checks(config).await {
         tracing::error!("Startup checks failed: {}", e);
+        std::process::exit(1);
+    }
+
+    if let Err(e) = phi_backend::features::leaderboard::handler::ensure_announcement_index() {
+        tracing::error!("公告历史清单初始化失败: {}", e);
         std::process::exit(1);
     }
 
@@ -195,9 +200,11 @@ async fn main() {
             .build()
     };
 
+    let chart_constants = Reloadable::new(chart_map);
+    let song_catalog = Reloadable::new(song_catalog);
     let app_state = AppState {
-        chart_constants: Arc::new(chart_map),
-        song_catalog: Arc::new(song_catalog),
+        chart_constants: chart_constants.clone(),
+        song_catalog: song_catalog.clone(),
         taptap_client,
         qrcode_service,
         stats: stats_handle_opt.clone(),
@@ -209,6 +216,15 @@ async fn main() {
         bn_image_cache,
         song_image_cache,
     };
+
+    // 曲库支持运行时热同步：info 文件被替换或远端 ETag 变化后，下一轮
+    // 检查会在完整解析成功后原子切换快照，无需重启后端。
+    phi_backend::startup::catalog_sync::spawn(
+        info_dir,
+        config.resources.info_base_url.clone(),
+        chart_constants,
+        song_catalog,
+    );
 
     // 构建路由（含中间件）
     let app = build_app(app_state, config, stats_handle_opt.as_ref());

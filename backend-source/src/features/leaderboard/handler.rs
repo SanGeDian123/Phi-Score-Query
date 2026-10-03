@@ -5,6 +5,7 @@ use axum::{
 use serde::Serialize;
 
 pub(crate) mod admin;
+pub(crate) mod announcement;
 mod cursor;
 pub(crate) mod profile;
 pub(crate) mod ranking;
@@ -18,6 +19,11 @@ pub use self::admin::{
     AdminUserStatusQuery, AdminUserStatusResponse, AdminUsersQuery, ForceAliasRequest,
     ResolveRequest, SuspiciousItem, get_admin_leaderboard_users, get_admin_user_status,
     get_suspicious, post_admin_user_status, post_alias_force, post_resolve,
+};
+pub use self::announcement::{
+    AdminAnnouncement, AnnouncementList, PublishAnnouncementRequest, delete_admin_announcement,
+    ensure_announcement_index, get_admin_announcement, get_admin_announcements,
+    post_admin_announcement, post_admin_announcements, put_admin_announcement,
 };
 pub use self::profile::{get_public_profile, put_alias, put_profile};
 pub use self::ranking::{RankQuery, TopQuery, get_by_rank, get_top, post_me};
@@ -128,6 +134,18 @@ pub fn create_leaderboard_router() -> Router<AppState> {
         .route("/admin/leaderboard/resolve", post(post_resolve))
         .route("/admin/users/status", get(get_admin_user_status))
         .route("/admin/users/status", post(post_admin_user_status))
+        .route(
+            "/admin/announcement",
+            get(get_admin_announcement).post(post_admin_announcement),
+        )
+        .route(
+            "/admin/announcements",
+            get(get_admin_announcements).post(post_admin_announcements),
+        )
+        .route(
+            "/admin/announcements/:id",
+            put(put_admin_announcement).delete(delete_admin_announcement),
+        )
         .route("/admin/leaderboard/alias/force", post(post_alias_force))
 }
 

@@ -3,6 +3,11 @@ package xyz.plcliangpicup.phigrosscore.data
 import android.content.Context
 
 class SongCatalog(context: Context) {
+    private data class CatalogSnapshot(
+        val songs: Map<String, SongInfo>,
+        val version: String?,
+    )
+
     private val details = context.assets.open("song_details.csv")
         .bufferedReader(Charsets.UTF_8)
         .useLines { lines ->
@@ -35,28 +40,38 @@ class SongCatalog(context: Context) {
         }
 
     @Volatile
-    private var activeSongs: Map<String, SongInfo> = bundledSongs
+    private var snapshot = CatalogSnapshot(bundledSongs, null)
 
     @Volatile
-    var version: String? = null
-        private set
+    private var hiddenSongIds: Set<String> = emptySet()
 
-    operator fun get(id: String): SongInfo? = activeSongs[id]
+    val version: String?
+        get() = snapshot.version
+
+    operator fun get(id: String): SongInfo? = if (isVisible(id)) snapshot.songs[id] else null
+
+    fun setHiddenSongIds(songIds: Collection<String>) {
+        hiddenSongIds = songIds.asSequence()
+            .filter(String::isNotBlank)
+            .map(String::lowercase)
+            .toSet()
+    }
+
+    fun isVisible(songId: String): Boolean = songId.lowercase() !in hiddenSongIds
 
     fun constantTableEntries(): List<ConstantTableEntry> =
-        buildConstantTableEntries(activeSongs.values)
+        buildConstantTableEntries(snapshot.songs.values.filter { isVisible(it.id) })
 
     fun applyRemoteCatalog(catalog: RemoteSongCatalog) {
         if (catalog.version.isBlank() || catalog.items.isEmpty()) return
-        activeSongs = catalog.items.associate { remote ->
+        val songs = catalog.items.associate { remote ->
             remote.id to resolveRemote(remote)
-        }
-        version = catalog.version
+        }.filterKeys(::isVisible)
+        snapshot = CatalogSnapshot(songs, catalog.version)
     }
 
     fun resetToBundled() {
-        activeSongs = bundledSongs
-        version = null
+        snapshot = CatalogSnapshot(bundledSongs, null)
     }
 
     fun resolveRemote(remote: RemoteSongInfo): SongInfo {
@@ -67,7 +82,8 @@ class SongCatalog(context: Context) {
     fun search(query: String, limit: Int = 30): List<SongInfo> {
         val needle = query.trim().lowercase()
         if (needle.isEmpty()) return emptyList()
-        return activeSongs.values.asSequence()
+        return snapshot.songs.values.asSequence()
+            .filter { isVisible(it.id) }
             .mapNotNull { song ->
                 val id = song.id.lowercase()
                 val name = song.name.lowercase()
@@ -100,12 +116,17 @@ internal fun RemoteChartConstants.toDifficultyMap(): Map<String, Double> = build
 }
 
 internal fun mergeRemoteSong(remote: RemoteSongInfo, bundled: SongInfo?): SongInfo {
-    val constants = remote.chartConstants.toDifficultyMap()
+    val constants = buildMap {
+        putAll(remote.chartConstants.toDifficultyMap())
+        bundled?.chartConstants?.forEach { (difficulty, constant) ->
+            if (difficulty !in this) put(difficulty, constant)
+        }
+    }
     return SongInfo(
         id = remote.id,
-        name = remote.name,
-        composer = remote.composer,
-        illustrator = remote.illustrator,
+        name = remote.name.ifBlank { bundled?.name.orEmpty() },
+        composer = remote.composer.ifBlank { bundled?.composer.orEmpty() },
+        illustrator = remote.illustrator.ifBlank { bundled?.illustrator.orEmpty() },
         chartConstants = constants,
         chapter = bundled?.chapter.orEmpty(),
         charts = listOf("EZ", "HD", "IN", "AT").mapNotNull { difficulty ->
@@ -129,7 +150,7 @@ internal fun buildConstantTableEntries(songs: Collection<SongInfo>): List<Consta
         .flatMap { song ->
             song.charts.asSequence().mapNotNull { chart ->
                 val constant = chart.chartConstant ?: return@mapNotNull null
-                if (constant < 1.0 || constant >= 18.0) return@mapNotNull null
+                if (!constant.isFinite() || constant <= 0.0) return@mapNotNull null
                 ConstantTableEntry(song = song, chart = chart)
             }
         }
@@ -139,6 +160,11 @@ internal fun buildConstantTableEntries(songs: Collection<SongInfo>): List<Consta
                 .thenBy { difficultyOrderForCatalog(it.chart.difficulty) },
         )
         .toList()
+
+internal fun constantTableLevels(entries: List<ConstantTableEntry>): List<Int> =
+    ((18 downTo 1).toList() + entries.mapNotNull { entry ->
+        entry.chart.chartConstant?.takeIf { it.isFinite() && it > 0.0 }?.toInt()
+    }).distinct().sortedDescending()
 
 private fun difficultyOrderForCatalog(difficulty: String): Int = when (difficulty.uppercase()) {
     "AT" -> 0

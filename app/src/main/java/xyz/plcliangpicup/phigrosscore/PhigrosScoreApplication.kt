@@ -8,6 +8,8 @@ import coil.disk.DiskCache
 import coil.memory.MemoryCache
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
+import xyz.plcliangpicup.phigrosscore.data.CachedImageTransition
+import xyz.plcliangpicup.phigrosscore.data.ResourceHttp
 
 class PhigrosScoreApplication : Application(), ImageLoaderFactory {
     override fun newImageLoader(): ImageLoader = ImageLoader.Builder(this)
@@ -19,14 +21,15 @@ class PhigrosScoreApplication : Application(), ImageLoaderFactory {
         .diskCache {
             DiskCache.Builder()
                 .directory(cacheDir.resolve("artwork_cache"))
-                .maxSizeBytes(192L * 1024L * 1024L)
+                .maxSizeBytes(384L * 1024L * 1024L)
                 .build()
         }
         .respectCacheHeaders(false)
         .allowRgb565(true)
-        .crossfade(120)
+        .transitionFactory(CachedImageTransition)
+        .addLastModifiedToFileCacheKey(true)
         .okHttpClient {
-            OkHttpClient.Builder()
+            ResourceHttp.builder()
                 .connectTimeout(15, TimeUnit.SECONDS)
                 .readTimeout(45, TimeUnit.SECONDS)
                 .writeTimeout(30, TimeUnit.SECONDS)

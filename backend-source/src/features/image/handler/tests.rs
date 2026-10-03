@@ -2,7 +2,6 @@ use super::{
     ImageOutputCacheSpec, ImageQueryOpts, content_type_from_fmt_code, format_code,
     parse_user_score_difficulty,
 };
-use axum::Json;
 use axum::extract::{Query, State};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
@@ -653,8 +652,8 @@ fn dummy_state() -> crate::state::AppState {
     let qrcode_service = Arc::new(crate::auth_services::QrCodeService::new());
 
     crate::state::AppState {
-        chart_constants,
-        song_catalog,
+        chart_constants: crate::state::Reloadable::from_arc(chart_constants),
+        song_catalog: crate::state::Reloadable::from_arc(song_catalog),
         taptap_client,
         qrcode_service,
         stats: None,
@@ -700,13 +699,26 @@ async fn user_bn_rejects_scores_over_limit() {
     let state = dummy_state();
     let q = ImageQueryOpts::default();
     let req = crate::features::image::types::RenderUserBnRequest {
+        auth: crate::auth_contract::UnifiedSaveRequest {
+            session_token: None,
+            external_credentials: None,
+            taptap_version: None,
+        },
+        custom: false,
+        ranking: crate::features::image::types::UserRanking::B30,
         theme: crate::features::image::Theme::default(),
         nickname: None,
         unlock_password: None,
         scores,
+        app_version: None,
     };
 
-    let res = super::render_bn_user(State(state), Query(q), Json(req)).await;
+    let body = serde_json::to_vec(&req).expect("serialize request");
+    let request = axum::http::Request::builder()
+        .header(axum::http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(body))
+        .expect("build request");
+    let res = super::render_bn_user(State(state), Query(q), request).await;
     match res {
         Err(crate::error::AppError::Validation(msg)) => {
             assert!(msg.contains("scores 条数超过上限"), "msg={msg}");

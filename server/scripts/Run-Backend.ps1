@@ -7,6 +7,7 @@ Get-Content "$installRoot\secrets.env" | ForEach-Object {
 }
 $env:RUST_LOG = 'info'
 $env:APP_SUGGESTION_MEDIA_DIR = ($installRoot -replace '\\', '/') + '/suggestion-media'
+$env:APP_ANNOUNCEMENT_DIR = ($installRoot -replace '\\', '/') + '/app-announcement'
 Set-Location "$current\backend"
 & "$current\backend\phi-backend.exe" *>> "$installRoot\logs\backend.log"
 exit $LASTEXITCODE

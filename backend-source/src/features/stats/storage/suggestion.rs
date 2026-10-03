@@ -91,25 +91,38 @@ impl StatsStorage {
 
     pub async fn random_suggestion_post(
         &self,
-        exclude: Option<&str>,
+        excluded_ids: &[String],
     ) -> Result<Option<SuggestionPostRecord>, AppError> {
-        let row = if let Some(exclude) = exclude {
-            sqlx::query(
-                "SELECT id,user_hash,description,image_name,nickname,avatar,challenge_mode_rank,rks,created_at
-                 FROM suggestion_posts WHERE status='active' AND id<>? ORDER BY RANDOM() LIMIT 1",
-            )
-            .bind(exclude)
-            .fetch_optional(&self.pool)
-            .await
+        let exclusion_cte = if excluded_ids.is_empty() {
+            String::new()
         } else {
-            sqlx::query(
-                "SELECT id,user_hash,description,image_name,nickname,avatar,challenge_mode_rank,rks,created_at
-                 FROM suggestion_posts WHERE status='active' ORDER BY RANDOM() LIMIT 1",
-            )
+            "WITH excluded AS (SELECT value FROM json_each(?))".to_string()
+        };
+        let exclusion_filter = if excluded_ids.is_empty() {
+            String::new()
+        } else {
+            " AND p.id NOT IN (SELECT value FROM excluded)".to_string()
+        };
+        let sql = format!(
+            "{exclusion_cte}
+             SELECT p.id,p.user_hash,p.description,p.image_name,p.nickname,p.avatar,
+                    p.challenge_mode_rank,p.rks,p.created_at
+             FROM suggestion_posts p
+             WHERE p.status='active'{exclusion_filter}
+             ORDER BY RANDOM()
+             LIMIT 1"
+        );
+        let mut query = sqlx::query(&sql);
+        if !excluded_ids.is_empty() {
+            query =
+                query.bind(serde_json::to_string(excluded_ids).map_err(|e| {
+                    AppError::Internal(format!("encode suggestion exclusions: {e}"))
+                })?);
+        }
+        let row = query
             .fetch_optional(&self.pool)
             .await
-        }
-        .map_err(|e| AppError::Internal(format!("query random suggestion post: {e}")))?;
+            .map_err(|e| AppError::Internal(format!("query random suggestion post: {e}")))?;
         Ok(row.map(|row| SuggestionPostRecord {
             id: row.try_get("id").unwrap_or_default(),
             description: row.try_get("description").unwrap_or_default(),
@@ -454,6 +467,84 @@ mod tests {
     use super::StatsStorage;
 
     #[tokio::test]
+    async fn random_suggestion_excludes_recent_posts_without_comment_priority() {
+        let path =
+            std::env::temp_dir().join(format!("phi-suggestion-random-{}.db", Uuid::new_v4()));
+        let storage = StatsStorage::connect_sqlite(path.to_string_lossy().as_ref(), false)
+            .await
+            .unwrap();
+        storage.init_schema().await.unwrap();
+        let author = SuggestionAuthor {
+            nickname: "Alice".into(),
+            avatar: None,
+            challenge_mode_rank: Some(405),
+            rks: 15.625,
+        };
+        for id in ["commented", "fresh", "recent"] {
+            storage
+                .insert_suggestion_post(
+                    id,
+                    "user-1",
+                    "求建议！",
+                    &format!("{id}.png"),
+                    &author,
+                    "2026-08-12T00:00:00Z",
+                )
+                .await
+                .unwrap();
+        }
+        storage
+            .insert_suggestion_comment(
+                "comment-1",
+                "commented",
+                "user-2",
+                "建议",
+                None,
+                &author,
+                "2026-08-12T00:01:00Z",
+            )
+            .await
+            .unwrap();
+
+        let excluded = vec!["recent".to_string()];
+        let mut selected = std::collections::HashSet::new();
+        for _ in 0..128 {
+            let post = storage
+                .random_suggestion_post(&excluded)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(post.id == "fresh" || post.id == "commented");
+            selected.insert(post.id);
+            if selected.len() == 2 {
+                break;
+            }
+        }
+        // Both posts remain eligible while the uncommented post exists.
+        // Missing either in 128 independent draws has probability 2^-127.
+        assert_eq!(selected.len(), 2);
+
+        let excluded = vec!["recent".to_string(), "fresh".to_string()];
+        let fallback = storage
+            .random_suggestion_post(&excluded)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fallback.id, "commented");
+
+        let excluded = vec![
+            "recent".to_string(),
+            "fresh".to_string(),
+            "commented".to_string(),
+        ];
+        let exhausted = storage.random_suggestion_post(&excluded).await.unwrap();
+        assert!(exhausted.is_none());
+
+        storage.pool.close().await;
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
     async fn suggestion_round_trip_uses_server_side_player_profile() {
         let path = std::env::temp_dir().join(format!("phi-suggestion-{}.db", Uuid::new_v4()));
         let storage = StatsStorage::connect_sqlite(path.to_string_lossy().as_ref(), false)
@@ -490,7 +581,7 @@ mod tests {
             .insert_suggestion_post("post-1", "user-1", "求建议！", "score.png", &author, now)
             .await
             .unwrap();
-        let post = storage.random_suggestion_post(None).await.unwrap().unwrap();
+        let post = storage.random_suggestion_post(&[]).await.unwrap().unwrap();
         assert_eq!(post.id, "post-1");
         assert_eq!(post.nickname, "Alice");
 

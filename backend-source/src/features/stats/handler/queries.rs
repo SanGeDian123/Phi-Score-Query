@@ -371,40 +371,43 @@ pub(super) async fn query_daily_dau(
     start: NaiveDate,
     end: NaiveDate,
 ) -> Result<Vec<DailyDauRow>, AppError> {
-    let today = Utc::now().date_naive();
+    let today = Utc::now().with_timezone(&tz).date_naive();
+    query_daily_dau_at(storage, tz, start, end, today).await
+}
+
+/// 查询指定展示时区的 DAU；`today` 单独传入以便回归测试跨日边界。
+pub(super) async fn query_daily_dau_at(
+    storage: &StatsStorage,
+    tz: chrono_tz::Tz,
+    start: NaiveDate,
+    end: NaiveDate,
+    today: NaiveDate,
+) -> Result<Vec<DailyDauRow>, AppError> {
     let mut map: HashMap<String, (i64, i64)> = HashMap::new();
 
-    // ── 历史日期（< today）─ 优先走 daily_dau，回退到 events
+    // ── 历史日期（< 展示时区的今天）─
+    // daily_dau 旧表按 UTC 日写入，不能直接用于 Asia/Shanghai 等非 UTC 展示时区；
+    // 这类请求必须按本地日窗口从 events 读取，避免跨日后把上一日显示为 0。
     if start < today {
         let agg_end = end.min(today - chrono::Duration::days(1));
         if agg_end >= start {
-            let agged = storage
-                .query_daily_dau_fast(&start.to_string(), &agg_end.to_string())
-                .await?;
-            if agged.is_empty() {
-                // daily_dau 无数据 → 回退到 events
-                let hist_utc_start = parse_date_bound_utc(&start.to_string(), tz, false)?;
-                let hist_utc_end = parse_date_bound_utc(&agg_end.to_string(), tz, true)?;
-                if let Some(off_min) = fixed_offset_minutes_for_range(tz, start, agg_end) {
-                    let modifier = sqlite_minutes_modifier(off_min);
-                    let rows = storage
-                        .query_daily_dau_with_offset(&modifier, &hist_utc_start, &hist_utc_end)
-                        .await?;
-                    for r in rows {
-                        map.insert(r.date, (r.active_users, r.active_ips));
-                    }
-                } else {
-                    let mut cur = start;
-                    while cur <= agg_end {
-                        let day_start = parse_date_bound_utc(&cur.to_string(), tz, false)?;
-                        let day_end = parse_date_bound_utc(&cur.to_string(), tz, true)?;
-                        let (u, ip) = storage.query_daily_dau_slice(&day_start, &day_end).await?;
-                        map.insert(cur.to_string(), (u, ip));
-                        cur += chrono::Duration::days(1);
+            if tz == chrono_tz::UTC {
+                // UTC 请求可以使用快速表；但只要表缺少任意日期，就回查 events，
+                // 防止“有部分预聚合 → 其他历史日被错误补零”。
+                let agged = storage
+                    .query_daily_dau_fast(&start.to_string(), &agg_end.to_string())
+                    .await?;
+                for r in &agged {
+                    map.insert(r.date.clone(), (r.active_users, r.active_ips));
+                }
+                let expected_days = (agg_end - start).num_days() + 1;
+                if i64::try_from(agged.len()).unwrap_or(i64::MAX) < expected_days {
+                    for r in query_daily_dau_events(storage, tz, start, agg_end).await? {
+                        map.entry(r.date).or_insert((r.active_users, r.active_ips));
                     }
                 }
             } else {
-                for r in agged {
+                for r in query_daily_dau_events(storage, tz, start, agg_end).await? {
                     map.insert(r.date, (r.active_users, r.active_ips));
                 }
             }
@@ -414,13 +417,8 @@ pub(super) async fn query_daily_dau(
     // ── 今天及之后 — 逐天从 events 表读取
     let hot_start = today.max(start);
     if hot_start <= end {
-        let mut cur = hot_start;
-        while cur <= end {
-            let day_start = parse_date_bound_utc(&cur.to_string(), tz, false)?;
-            let day_end = parse_date_bound_utc(&cur.to_string(), tz, true)?;
-            let (u, ip) = storage.query_daily_dau_slice(&day_start, &day_end).await?;
-            map.insert(cur.to_string(), (u, ip));
-            cur += chrono::Duration::days(1);
+        for r in query_daily_dau_events(storage, tz, hot_start, end).await? {
+            map.insert(r.date, (r.active_users, r.active_ips));
         }
     }
 
@@ -434,6 +432,38 @@ pub(super) async fn query_daily_dau(
             date: key,
             active_users: u,
             active_ips: ip,
+        });
+        cur += chrono::Duration::days(1);
+    }
+    Ok(out)
+}
+
+async fn query_daily_dau_events(
+    storage: &StatsStorage,
+    tz: chrono_tz::Tz,
+    start: NaiveDate,
+    end: NaiveDate,
+) -> Result<Vec<super::super::storage::DailyDauDateRow>, AppError> {
+    let hist_utc_start = parse_date_bound_utc(&start.to_string(), tz, false)?;
+    let hist_utc_end = parse_date_bound_utc(&end.to_string(), tz, true)?;
+    if let Some(off_min) = fixed_offset_minutes_for_range(tz, start, end) {
+        let modifier = sqlite_minutes_modifier(off_min);
+        return storage
+            .query_daily_dau_with_offset(&modifier, &hist_utc_start, &hist_utc_end)
+            .await;
+    }
+
+    let mut out = Vec::new();
+    let mut cur = start;
+    while cur <= end {
+        let day_start = parse_date_bound_utc(&cur.to_string(), tz, false)?;
+        let day_end = parse_date_bound_utc(&cur.to_string(), tz, true)?;
+        let (active_users, active_ips) =
+            storage.query_daily_dau_slice(&day_start, &day_end).await?;
+        out.push(super::super::storage::DailyDauDateRow {
+            date: cur.to_string(),
+            active_users,
+            active_ips,
         });
         cur += chrono::Duration::days(1);
     }

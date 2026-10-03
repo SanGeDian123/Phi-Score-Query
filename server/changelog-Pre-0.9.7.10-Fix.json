@@ -1,0 +1,6 @@
+{
+  "versionName": "Pre-0.9.7.10-Fix",
+  "changelog": [
+    "修复存档更新详情中曲目名显示为曲目 ID 的问题。"
+  ]
+}

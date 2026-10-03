@@ -11,6 +11,7 @@ use crate::state::AppState;
 
 use super::models::DailyAggRow;
 
+pub(crate) mod admin_dashboard;
 pub(crate) mod archive_now;
 mod cache;
 pub use cache::invalidate_all_stats_summary_cache;
@@ -21,6 +22,7 @@ mod queries;
 pub(crate) mod summary;
 mod time;
 
+pub use self::admin_dashboard::{AdminDashboardQuery, AdminDashboardResponse, get_admin_dashboard};
 pub use self::archive_now::{ArchiveNowResponse, ArchiveQuery, trigger_archive_now};
 pub use self::daily_http::{
     DailyHttpQuery, DailyHttpResponse, DailyHttpRouteRow, DailyHttpTotalRow, get_daily_http,
@@ -281,6 +283,7 @@ pub async fn get_daily_dau(
 
 pub fn create_stats_router() -> Router<AppState> {
     Router::new()
+        .route("/admin/dashboard", get(get_admin_dashboard))
         .route("/stats/daily", get(get_daily_stats))
         .route("/stats/daily/features", get(get_daily_features))
         .route("/stats/daily/dau", get(get_daily_dau))

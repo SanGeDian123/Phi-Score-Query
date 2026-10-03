@@ -1,5 +1,7 @@
 use sqlx::SqlitePool;
 
+mod chart_achievement;
+mod checkin;
 mod connection;
 mod daily;
 mod events;
@@ -9,6 +11,8 @@ mod leaderboard;
 mod moderation;
 mod profile;
 mod public_leaderboard;
+mod rks_guess;
+mod rks_guess_wins;
 mod session;
 mod submission;
 mod suggestion;
@@ -24,6 +28,21 @@ pub struct SubmissionRecord<'a> {
     pub details_json: Option<&'a str>,
     pub suspicion_score: f64,
     pub now_rfc3339: &'a str,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChartAchievementSample {
+    pub song_id: String,
+    pub difficulty: String,
+    pub score: i64,
+    pub is_full_combo: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RksGuessSnapshot {
+    pub user_hash: String,
+    pub total_rks: f64,
+    pub clues_json: String,
 }
 
 #[derive(Debug, Clone, Copy)]

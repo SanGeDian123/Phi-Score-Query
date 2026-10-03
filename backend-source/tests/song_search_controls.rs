@@ -49,8 +49,10 @@ fn new_test_state(song_catalog: SongCatalog) -> AppState {
     let song_image_cache: Cache<String, Bytes> = Cache::builder().max_capacity(1024).build();
 
     AppState {
-        chart_constants: Arc::new(std::collections::HashMap::default()),
-        song_catalog: Arc::new(song_catalog),
+        chart_constants: phi_backend::state::Reloadable::new(
+            std::collections::HashMap::default(),
+        ),
+        song_catalog: phi_backend::state::Reloadable::new(song_catalog),
         taptap_client: Arc::new(taptap_client),
         qrcode_service: Arc::new(
             phi_backend::features::auth::qrcode_service::QrCodeService::default(),
@@ -982,4 +984,19 @@ async fn songs_search_unique_candidates_are_limited_but_total_is_reported() {
     assert_eq!(candidates.len(), 10);
     assert_eq!(candidates[0]["id"].as_str().expect("id"), "id-000");
     assert_eq!(candidates[9]["id"].as_str().expect("id"), "id-009");
+}
+#[tokio::test]
+async fn practice_catalog_query_is_public_and_separate_from_song_etag() {
+    let app = build_app(new_test_state(SongCatalog::default()));
+    let normal = app.clone().oneshot(Request::builder().uri("/api/v2/songs/catalog").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(normal.status(), StatusCode::OK);
+    let etag = normal.headers()["etag"].clone();
+    let practice = app.oneshot(Request::builder().uri("/api/v2/songs/catalog?practice=true")
+        .header("If-None-Match", etag).body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(practice.status(), StatusCode::OK);
+    assert_eq!(practice.headers()["cache-control"], "no-store");
+    let body = axum::body::to_bytes(practice.into_body(), 1024 * 1024).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(value["practiceCharts"].is_array());
+    assert!(value.get("items").is_none());
 }

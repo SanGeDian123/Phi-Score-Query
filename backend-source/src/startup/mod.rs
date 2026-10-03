@@ -4,6 +4,8 @@ pub mod chart_loader;
 pub mod checks;
 /// 远端 info 文件加载器
 pub mod remote_info;
+/// 运行时曲库同步
+pub mod catalog_sync;
 /// 歌曲与别名加载器（info.csv / nicklist.yaml）
 pub mod song_loader;
 

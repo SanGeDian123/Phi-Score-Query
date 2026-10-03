@@ -1,5 +1,5 @@
 use axum::{
-    Router,
+    Extension, Router,
     extract::{Query, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Json},
@@ -51,6 +51,41 @@ pub enum SongSearchResult {
 pub struct SongCatalogResponse {
     pub version: String,
     pub items: Vec<SongInfo>,
+}
+
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AchievementRateItem {
+    pub grade: &'static str,
+    pub count: i64,
+    pub rate: f64,
+}
+
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartAchievementResponse {
+    pub song_id: String,
+    pub song_name: String,
+    pub difficulty: String,
+    pub total: i64,
+    pub rates: Vec<AchievementRateItem>,
+    pub mine: Option<MyChartAchievement>,
+}
+
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MyChartAchievement {
+    pub score: i64,
+    pub grade: &'static str,
+    pub exceeded_count: i64,
+    pub exceeded_rate: f64,
+    pub top_rate: f64,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ChartAchievementQuery {
+    song_id: String,
+    difficulty: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -194,8 +229,11 @@ pub async fn search_songs(
         stats_handle.track_feature("song_search", "search", None, Some(extra));
     }
 
+    // 固定本次请求使用的曲库快照，避免热更新过程中同一个响应混用新旧数据。
+    let catalog = state.song_catalog.snapshot();
+
     if let Some(mode) = multi_mode {
-        let results = state.song_catalog.search_multi(
+        let results = catalog.search_multi(
             q,
             mode,
             crate::features::song::models::SearchOptions::default(),
@@ -229,18 +267,18 @@ pub async fn search_songs(
             Ok(Json(build_song_page(page_items, total, limit, offset)).into_response())
         }
     } else if unique {
-        let item = state.song_catalog.search_unique(q)?;
+        let item = catalog.search_unique(q)?;
         Ok(Json::<SongInfo>(item.as_ref().clone()).into_response())
     } else {
-        let (items, total) = state.song_catalog.search_page(q, offset, limit);
+        let (items, total) = catalog.search_page(q, offset, limit);
         let page_items: Vec<SongInfo> = items.iter().map(|a| a.as_ref().clone()).collect();
         Ok(Json(build_song_page(page_items, total, limit, offset)).into_response())
     }
 }
 
 fn build_catalog_response(state: &AppState) -> SongCatalogResponse {
-    let items: Vec<SongInfo> = state
-        .song_catalog
+    let catalog = state.song_catalog.snapshot();
+    let items: Vec<SongInfo> = catalog
         .by_id
         .values()
         .map(|song| song.as_ref().clone())
@@ -268,8 +306,12 @@ fn build_catalog_response_from_items(mut items: Vec<SongInfo>) -> SongCatalogRes
 )]
 pub async fn get_song_catalog(
     State(state): State<AppState>,
+    Query(options): Query<std::collections::HashMap<String, String>>,
     request_headers: HeaderMap,
 ) -> axum::response::Response {
+    if options.get("practice").is_some_and(|value| parse_bool(value)) {
+        return crate::features::practice::catalog(state.song_catalog.snapshot(), request_headers).await;
+    }
     let catalog = build_catalog_response(&state);
     let etag = format!("\"{}\"", catalog.version);
     if request_headers
@@ -301,15 +343,140 @@ pub async fn get_song_catalog(
         .into_response()
 }
 
+#[utoipa::path(
+    get,
+    path = "/songs/achievement-rates",
+    summary = "获取谱面评级达成率",
+    description = "按每个账号最近一次上传的该谱面成绩统计互斥的 F/C/B/A/S/V/FC/AP 评级分布。",
+    params(
+        ("song_id" = String, Query, description = "歌曲 ID"),
+        ("difficulty" = String, Query, description = "谱面难度 EZ/HD/IN/AT")
+    ),
+    responses(
+        (status = 200, description = "评级达成率", body = ChartAchievementResponse),
+        (status = 404, description = "曲目或谱面不存在", body = crate::error::ProblemDetails, content_type = "application/problem+json"),
+        (status = 422, description = "难度参数无效", body = crate::error::ProblemDetails, content_type = "application/problem+json")
+    ),
+    tag = "Song"
+)]
+pub async fn get_chart_achievement_rates(
+    State(state): State<AppState>,
+    Extension(bearer): Extension<crate::features::auth::bearer::BearerAuthState>,
+    Query(query): Query<ChartAchievementQuery>,
+) -> Result<Json<ChartAchievementResponse>, AppError> {
+    let difficulty = query.difficulty.trim().to_ascii_uppercase();
+    if !matches!(difficulty.as_str(), "EZ" | "HD" | "IN" | "AT") {
+        return Err(AppError::Validation("难度必须为 EZ、HD、IN 或 AT".into()));
+    }
+    let catalog = state.song_catalog.snapshot();
+    let song = catalog
+        .by_id
+        .get(query.song_id.trim())
+        .ok_or_else(|| AppError::Search(crate::error::SearchError::NotFound))?;
+    let has_chart = match difficulty.as_str() {
+        "EZ" => song.chart_constants.ez.is_some(),
+        "HD" => song.chart_constants.hd.is_some(),
+        "IN" => song.chart_constants.in_level.is_some(),
+        "AT" => song.chart_constants.at.is_some(),
+        _ => false,
+    };
+    if !has_chart {
+        return Err(AppError::Search(crate::error::SearchError::NotFound));
+    }
+    let storage = state
+        .stats_storage
+        .as_ref()
+        .ok_or_else(|| AppError::Internal("统计存储未初始化".into()))?;
+    let total = storage
+        .chart_achievement_total(&song.id, &difficulty)
+        .await?;
+    let counts = storage
+        .chart_achievement_counts(&song.id, &difficulty)
+        .await?;
+    let labels = ["F", "C", "B", "A", "S", "V", "FC", "AP"];
+    let rates = labels
+        .into_iter()
+        .zip(counts)
+        .map(|(grade, count)| AchievementRateItem {
+            grade,
+            count,
+            rate: if total > 0 {
+                count as f64 / total as f64
+            } else {
+                0.0
+            },
+        })
+        .collect();
+    let user_hash = match &bearer {
+        crate::features::auth::bearer::BearerAuthState::Valid(context) => {
+            Some(context.claims.sub.as_str())
+        }
+        crate::features::auth::bearer::BearerAuthState::Invalid(message) => {
+            return Err(AppError::Auth(message.clone()));
+        }
+        crate::features::auth::bearer::BearerAuthState::Absent => None,
+    };
+    let mine = if let Some(user_hash) = user_hash {
+        storage
+            .chart_achievement_position(user_hash, &song.id, &difficulty)
+            .await?
+            .map(|position| {
+                let exceeded_rate = if total > 0 {
+                    position.exceeded_count as f64 / total as f64
+                } else {
+                    0.0
+                };
+                MyChartAchievement {
+                    score: position.score,
+                    grade: achievement_grade(position.score, position.is_full_combo),
+                    exceeded_count: position.exceeded_count,
+                    exceeded_rate,
+                    top_rate: 1.0 - exceeded_rate,
+                }
+            })
+    } else {
+        None
+    };
+    Ok(Json(ChartAchievementResponse {
+        song_id: song.id.clone(),
+        song_name: song.name.clone(),
+        difficulty,
+        total,
+        rates,
+        mine,
+    }))
+}
+
+fn achievement_grade(score: i64, is_full_combo: bool) -> &'static str {
+    if score >= 1_000_000 {
+        "AP"
+    } else if is_full_combo {
+        "FC"
+    } else if score >= 960_000 {
+        "V"
+    } else if score >= 920_000 {
+        "S"
+    } else if score >= 880_000 {
+        "A"
+    } else if score >= 820_000 {
+        "B"
+    } else if score >= 700_000 {
+        "C"
+    } else {
+        "F"
+    }
+}
+
 pub fn create_song_router() -> Router<AppState> {
     Router::new()
         .route("/songs/search", get(search_songs))
         .route("/songs/catalog", get(get_song_catalog))
+        .route("/songs/achievement-rates", get(get_chart_achievement_rates))
 }
 
 #[cfg(test)]
 mod catalog_tests {
-    use super::build_catalog_response_from_items;
+    use super::{achievement_grade, build_catalog_response_from_items};
     use crate::{features::song::models::SongInfo, startup::chart_loader::ChartConstants};
 
     fn song(id: &str, name: &str) -> SongInfo {
@@ -325,6 +492,18 @@ mod catalog_tests {
                 at: None,
             },
         }
+    }
+
+    #[test]
+    fn achievement_grade_uses_exclusive_score_ranges() {
+        assert_eq!(achievement_grade(1_000_000, true), "AP");
+        assert_eq!(achievement_grade(999_999, true), "FC");
+        assert_eq!(achievement_grade(960_000, false), "V");
+        assert_eq!(achievement_grade(959_999, false), "S");
+        assert_eq!(achievement_grade(920_000, false), "S");
+        assert_eq!(achievement_grade(919_999, false), "A");
+        assert_eq!(achievement_grade(700_000, false), "C");
+        assert_eq!(achievement_grade(699_999, false), "F");
     }
 
     #[test]

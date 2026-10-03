@@ -528,6 +528,7 @@ pub async fn get_qrcode_status(
                         AppError::Json(_) => ("UPSTREAM_ERROR", "上游响应解析失败"),
                         AppError::Validation(_) => ("VALIDATION_FAILED", "请求参数错误"),
                         AppError::Conflict(_) => ("CONFLICT", "资源冲突"),
+                        AppError::NotFound(_) => ("NOT_FOUND", "资源不存在"),
                         AppError::Internal(_)
                         | AppError::SaveProvider(_)
                         | AppError::Search(_)

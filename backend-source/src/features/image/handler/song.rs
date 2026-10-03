@@ -111,8 +111,8 @@ pub async fn render_song(
     // 缓存前移：先拿 updatedAt（作为版本号）再决定是否需要下载/解密/解析存档本体。
     let (meta, updated_for_cache) = fetch_image_save_meta(source, taptap_version).await?;
 
-    let song = state
-        .song_catalog
+    let catalog = state.song_catalog.snapshot();
+    let song = catalog
         .search_unique(&req.song)
         .map_err(AppError::Search)?;
 
@@ -165,14 +165,15 @@ pub async fn render_song(
     }
 
     // cache miss：下载/解密/解析存档本体
-    let parsed = decrypt_image_save_from_meta(meta, state.chart_constants.clone()).await?;
+    let chart_constants = state.chart_constants.snapshot();
+    let parsed = decrypt_image_save_from_meta(meta, chart_constants.clone()).await?;
     // 单曲成绩聚合、排序、推分求解与文件存在性检查均为同步 CPU/FS 工作，移出 Tokio worker。
     let SongComputeOutput {
         difficulty_scores,
         illustration_path,
         update_time,
     } = {
-        let chart_constants = state.chart_constants.clone();
+        let chart_constants = chart_constants.clone();
         let song_id = song.id.clone();
         let song_chart_constants = song.chart_constants.clone();
         let join = tokio::task::spawn_blocking(move || {

@@ -12,6 +12,9 @@ class CacheStore(private val context: Context, private val json: Json) {
     val imageFile = File(context.filesDir, "b30/latest.png")
     private val legacyP30ImageFile = File(context.filesDir, "p30/latest.png")
     val p30ImageFile = File(context.filesDir, "p30/top30-v2.png")
+    private val legacyCustomRankingImageFile = File(context.filesDir, "custom-ranking/latest.png")
+    val customB30ImageFile = File(context.filesDir, "custom-ranking/b30.png")
+    val customP30ImageFile = File(context.filesDir, "custom-ranking/p30.png")
 
     suspend fun saveSnapshot(snapshot: B30Snapshot) = withContext(Dispatchers.IO) {
         snapshotFile.parentFile?.mkdirs()
@@ -49,6 +52,19 @@ class CacheStore(private val context: Context, private val json: Json) {
 
     suspend fun saveImage(bytes: ByteArray, kind: RankingImageKind): File = withContext(Dispatchers.IO) {
         val destination = if (kind == RankingImageKind.B30) imageFile else p30ImageFile
+        saveBytes(bytes, destination)
+    }
+
+    suspend fun saveCustomRankingImage(bytes: ByteArray, ranking: String): File = withContext(Dispatchers.IO) {
+        val destination = if (ranking.equals("p30", ignoreCase = true)) {
+            customP30ImageFile
+        } else {
+            customB30ImageFile
+        }
+        saveBytes(bytes, destination)
+    }
+
+    private fun saveBytes(bytes: ByteArray, destination: File): File {
         destination.parentFile?.mkdirs()
         val temp = File(destination.parentFile, "${destination.name}.tmp")
         temp.writeBytes(bytes)
@@ -56,7 +72,7 @@ class CacheStore(private val context: Context, private val json: Json) {
             destination.writeBytes(bytes)
             temp.delete()
         }
-        destination
+        return destination
     }
 
     suspend fun deleteImage() = withContext(Dispatchers.IO) {
@@ -71,11 +87,22 @@ class CacheStore(private val context: Context, private val json: Json) {
         }
     }
 
+    suspend fun deleteCustomRankingImages() = withContext(Dispatchers.IO) {
+        listOf(legacyCustomRankingImageFile, customB30ImageFile, customP30ImageFile).forEach { destination ->
+            if (destination.exists() && !destination.delete()) {
+                throw IllegalStateException("无法删除自定义 BP30 图片")
+            }
+        }
+    }
+
     suspend fun clear() = withContext(Dispatchers.IO) {
         snapshotFile.delete()
         songCatalogFile.delete()
         imageFile.delete()
         p30ImageFile.delete()
         legacyP30ImageFile.delete()
+        legacyCustomRankingImageFile.delete()
+        customB30ImageFile.delete()
+        customP30ImageFile.delete()
     }
 }

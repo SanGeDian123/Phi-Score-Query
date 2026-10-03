@@ -137,6 +137,7 @@ pub(super) async fn render_ranking_image(
     // SVG 模式强制外链曲绘且不内嵌图片；缓存维度在同一处归一化，避免 hit/put 分叉。
     let output = ImageOutputCacheSpec::from_query(&q, req.embed_images);
     let app_version = normalized_app_version(req.app_version.as_deref());
+    let filtered_cache_version = format!("{updated_for_cache}:known-song-filter-v1");
     let fmt_code = output.fmt_code;
     let embed_images_effective = output.embed_images_effective;
     let public_illustration_base_url = output.public_illustration_base_url;
@@ -152,7 +153,7 @@ pub(super) async fn render_ranking_image(
                 user_hash,
                 req.n,
                 mode,
-                &updated_for_cache,
+                &filtered_cache_version,
                 req.theme,
                 app_version.as_deref(),
             )
@@ -215,7 +216,8 @@ pub(super) async fn render_ranking_image(
     }
 
     // cache miss：下载/解密/解析存档本体
-    let parsed = decrypt_image_save_from_meta(meta, state.chart_constants.clone()).await?;
+    let chart_constants = state.chart_constants.snapshot();
+    let parsed = decrypt_image_save_from_meta(meta, chart_constants.clone()).await?;
     let player_avatar = parsed
         .user
         .as_ref()
@@ -243,8 +245,8 @@ pub(super) async fn render_ranking_image(
         flatten_ms,
     } = {
         // 逻辑阶段（扁平化/排序/推分/统计）属于 CPU 密集 + 大量分配，避免阻塞 Tokio worker。
-        let chart_constants = state.chart_constants.clone();
-        let song_catalog = state.song_catalog.clone();
+        let chart_constants = chart_constants.clone();
+        let song_catalog = state.song_catalog.snapshot();
         let join = tokio::task::spawn_blocking(move || {
             bn_compute::build_bn_compute_output(BnComputeInput {
                 parsed,

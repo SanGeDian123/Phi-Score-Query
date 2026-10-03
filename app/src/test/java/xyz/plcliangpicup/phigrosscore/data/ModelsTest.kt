@@ -40,6 +40,22 @@ class ModelsTest {
     }
 
     @Test
+    fun `announcement feed keeps server order while removing invalid and duplicate entries`() {
+        val latest = AppAnnouncement("notice-2", "最新公告", "正文", "2026-08-30 20:00")
+        val older = AppAnnouncement("notice-1", "历史公告", "正文", "2026-08-29 20:00")
+        val items = AppAnnouncementFeed(
+            items = listOf(
+                latest,
+                latest.copy(title = "重复公告"),
+                AppAnnouncement("notice-invalid", " ", "正文"),
+                older,
+            ),
+        ).displayableItems()
+
+        assertEquals(listOf(latest, older), items)
+    }
+
+    @Test
     fun `single song image style defaults to new design and preserves legacy selection`() {
         assertEquals(SongScoreImageStyle.DEFAULT, SongScoreImageStyle.fromPreference(null))
         assertEquals(SongScoreImageStyle.DEFAULT, SongScoreImageStyle.fromPreference("unknown"))
@@ -268,7 +284,7 @@ class ModelsTest {
     @Test
     fun `challenge mode labels use compact single character colors`() {
         assertEquals("绿12", challengeModeLabel(112))
-        assertEquals("黄21", challengeModeLabel(421))
+        assertEquals("金21", challengeModeLabel(421))
         assertEquals("红49", challengeModeLabel(349))
         assertEquals("彩51", challengeModeLabel(551))
     }

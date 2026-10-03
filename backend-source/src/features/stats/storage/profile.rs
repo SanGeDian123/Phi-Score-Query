@@ -5,6 +5,17 @@ use crate::error::AppError;
 use super::{StatsStorage, UserAliasDefaults};
 
 impl StatsStorage {
+    pub async fn player_display_name(&self, user_hash: &str) -> Result<Option<String>, AppError> {
+        let value = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT COALESCE(NULLIF(TRIM(nickname),''), NULLIF(TRIM(alias),'')) FROM user_profile WHERE user_hash=?",
+        )
+        .bind(user_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| AppError::Internal(format!("query player display name: {e}")))?;
+        Ok(value.flatten())
+    }
+
     pub async fn update_player_profile(
         &self,
         user_hash: &str,

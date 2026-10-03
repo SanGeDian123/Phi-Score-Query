@@ -4,7 +4,7 @@ Phi Score Query 的公网服务使用了修改后的 Next-Phi-Backend。任何�
 
 ## 对应源码位置
 
-- 当前对应源码：Pre-0.9.7.8-Fix 服务器升级包内的 `source/backend-source-Pre-0.9.7.8.zip`
+- 仓库最新后端源码：`backend-source/`。生产环境实际运行版本的对应源码归档以公网 API 的 `/source` 链接为准；仓库更新不代表服务器已同步部署。
 - 上游项目：<https://github.com/Sczr0/Next-Phi-Backend>
 - 修改说明：源码归档内的 `MODIFICATIONS.md`
 

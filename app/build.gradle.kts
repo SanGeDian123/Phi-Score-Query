@@ -20,8 +20,8 @@ android {
         applicationId = "xyz.plcliangpicup.phigrosscore"
         minSdk = 26
         targetSdk = 36
-        versionCode = 40
-        versionName = "Pre-0.9.7.8-Fix"
+        versionCode = 98
+        versionName = "Pre-0.9.7.11-Fix"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -64,6 +64,7 @@ android {
         compose = true
         buildConfig = true
     }
+    testOptions.unitTests.isIncludeAndroidResources = true
     packaging.resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
 }
 
@@ -80,6 +81,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.google.code.gson:gson:2.11.0")
     implementation("com.google.zxing:core:3.5.3")
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("io.coil-kt:coil-svg:2.7.0")
@@ -96,6 +98,8 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")

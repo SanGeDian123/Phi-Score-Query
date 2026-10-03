@@ -55,6 +55,7 @@ serde_yaml = "0.9"
 rand = "0.8"
 moka = { version = "0.12", features = ["future"] }
 futures-util = "0.3"
+percent-encoding = "2"
 qrcode = "0.14"
 uuid = { version = "1", features = ["v4", "v7", "fast-rng"] }
 gethostname = "0.4"

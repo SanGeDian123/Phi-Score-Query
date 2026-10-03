@@ -48,6 +48,10 @@ pub enum AppError {
     #[error("资源冲突: {0}")]
     Conflict(String),
 
+    /// 请求的资源不存在
+    #[error("资源不存在: {0}")]
+    NotFound(String),
+
     /// 内部服务器错误
     #[error("内部错误: {0}")]
     Internal(String),
@@ -226,6 +230,7 @@ impl AppError {
             AppError::Conflict(_) | AppError::Search(SearchError::NotUnique { .. }) => {
                 StatusCode::CONFLICT
             }
+            AppError::NotFound(_) => StatusCode::NOT_FOUND,
             AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::SaveProvider(e) => match e {
                 SaveProviderError::Auth(_) | SaveProviderError::InvalidCredentials(_) => {
@@ -252,6 +257,7 @@ impl AppError {
             AppError::ImageRendererError(_) => "IMAGE_RENDER_FAILED",
             AppError::Validation(_) => "VALIDATION_FAILED",
             AppError::Conflict(_) => "CONFLICT",
+            AppError::NotFound(_) => "NOT_FOUND",
             AppError::Internal(_) => "INTERNAL_ERROR",
             AppError::SaveProvider(e) => match e {
                 SaveProviderError::Auth(_) | SaveProviderError::InvalidCredentials(_) => {

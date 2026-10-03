@@ -18,7 +18,8 @@ api.plc-liangpi-cup.xyz {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"
-		Cache-Control "no-store"
+		# Set a fallback only: resource handlers/upstream can supply their own cache policy.
+		?Cache-Control "no-store"
 		Link "<https://api.plc-liangpi-cup.xyz/source>; rel=source"
 		X-Source-Code "https://api.plc-liangpi-cup.xyz/source"
 	}
@@ -34,9 +35,9 @@ api.plc-liangpi-cup.xyz {
 
 	@source path /source
 	handle @source {
-		header Content-Disposition "attachment; filename=backend-source-Pre-0.9.7.8.zip"
+		header Content-Disposition "attachment; filename=backend-source-Pre-0.9.7.9.zip"
 		root * {$APP_SOURCE_DIR}
-		rewrite * /backend-source-Pre-0.9.7.8.zip
+		rewrite * /backend-source-Pre-0.9.7.9.zip
 		file_server
 	}
 
@@ -53,7 +54,6 @@ api.plc-liangpi-cup.xyz {
 
 	@illustrations path /_ill/*
 	handle @illustrations {
-		header Cache-Control "public, max-age=604800, immutable"
 		reverse_proxy 127.0.0.1:3939 {
 			header_up -X-Exchange-Secret
 			header_up -X-OpenApi-Token
@@ -61,6 +61,8 @@ api.plc-liangpi-cup.xyz {
 	}
 
 	handle_path /app-update/* {
+		@downloadFiles path *.pez *.apk *.zip
+		header @downloadFiles Cache-Control "public, max-age=0, must-revalidate"
 		root * {$APP_UPDATE_DIR}
 		file_server
 	}
@@ -79,7 +81,6 @@ api.plc-liangpi-cup.xyz {
 
 	@suggestionMedia path /suggestion-media/*
 	handle @suggestionMedia {
-		header Cache-Control "public, max-age=604800, immutable"
 		reverse_proxy 127.0.0.1:3939 {
 			header_up -X-Exchange-Secret
 			header_up -X-OpenApi-Token
@@ -97,6 +98,50 @@ api.plc-liangpi-cup.xyz {
 		}
 	}
 
+	@rksGuessApi path /api/v2/games/rks-guess/match /api/v2/games/rks-guess/*
+	handle @rksGuessApi {
+		request_body {
+			max_size 256KB
+		}
+		reverse_proxy 127.0.0.1:3939 {
+			header_up -X-Exchange-Secret
+			header_up -X-OpenApi-Token
+		}
+	}
+
+	@dailyCheckinApi path /api/v2/checkin /api/v2/checkin/leaderboard
+	handle @dailyCheckinApi {
+		request_body {
+			max_size 64KB
+		}
+		reverse_proxy 127.0.0.1:3939 {
+			header_up -X-Exchange-Secret
+			header_up -X-OpenApi-Token
+		}
+	}
+
+	@feedbackApi path /api/v2/feedback /api/v2/feedback/*
+	handle @feedbackApi {
+		request_body {
+			max_size 5MB
+		}
+		reverse_proxy 127.0.0.1:3939 {
+			header_up -X-Exchange-Secret
+			header_up -X-OpenApi-Token
+		}
+	}
+
+	@adminConsoleApi path /api/v2/admin/dashboard /api/v2/admin/announcement /api/v2/admin/announcements /api/v2/admin/announcements/* /api/v2/admin/feedback /api/v2/admin/feedback/*
+	handle @adminConsoleApi {
+		request_body {
+			max_size 64KB
+		}
+		reverse_proxy 127.0.0.1:3939 {
+			header_up -X-Exchange-Secret
+			header_up -X-OpenApi-Token
+		}
+	}
+
 	@allowed path \
  /health \
  /api/v2/auth/qrcode \
@@ -104,12 +149,14 @@ api.plc-liangpi-cup.xyz {
  /api/v2/auth/session/logout \
  /api/v2/songs/search \
  /api/v2/songs/catalog \
+ /api/v2/songs/achievement-rates \
  /api/v2/leaderboard/rks/top \
  /api/v2/leaderboard/rks/by-rank \
  /api/v2/leaderboard/rks/me \
  /api/v2/save \
- /api/v2/image/bn \
- /api/v2/image/p30
+  /api/v2/image/bn \
+  /api/v2/image/p30 \
+  /api/v2/image/bn/user
 	handle @allowed {
 		request_body {
 			max_size 1MB

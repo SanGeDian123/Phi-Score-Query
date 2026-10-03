@@ -35,14 +35,26 @@ class AppRepository(
     private val songCatalog = SongCatalog(context)
     private val songScoreImageRenderer = SongScoreImageRenderer(appContext)
     private val preferences = context.getSharedPreferences("app_preferences", Context.MODE_PRIVATE)
+    @Volatile private var activeUnknownSongIds: Set<String> = emptySet()
     private val refreshMutex = Mutex()
+
+    init {
+        activeUnknownSongIds = preferences.getStringSet("active_unknown_song_ids", emptySet<String>()).orEmpty().toSet()
+        songCatalog.setHiddenSongIds(activeUnknownSongIds)
+    }
 
     val hasSession: Boolean get() = sessionStore.hasSession()
     val hasStoredSessionToken: Boolean get() = sessionStore.hasStoredSessionToken()
+    val unknownTrackIds: Set<String> get() = activeUnknownSongIds
+    fun isSongVisible(songId: String): Boolean = songCatalog.isVisible(songId)
+    fun sanitizeSnapshot(snapshot: B30Snapshot): B30Snapshot = snapshot.withCatalogFallbacks()
+    fun isRksGuessStatusVisible(status: RksGuessStatus): Boolean =
+        (status.clues + status.clueHistory.flatMap { it.clues }).all { songCatalog.isVisible(it.songId) }
     val isDarkTheme: Boolean get() = preferences.getBoolean("dark_theme", false)
     val autoRefreshOnLaunch: Boolean get() = preferences.getBoolean("auto_refresh_on_launch", true)
     val autoCheckAppUpdates: Boolean get() = preferences.getBoolean("auto_check_app_updates", true)
     val showNavigationHandle: Boolean get() = preferences.getBoolean("show_navigation_handle", true)
+    val useSwipeNavigation: Boolean get() = preferences.getBoolean("use_swipe_navigation", false)
     val b30ImageStyle: B30ImageStyle
         get() = B30ImageStyle.fromPreference(preferences.getString("b30_image_style", null))
     val songScoreImageStyle: SongScoreImageStyle
@@ -56,13 +68,17 @@ class AppRepository(
         get() = !preferences.getBoolean("experience_survey_prompt_pre0975_shown", false)
     val cachedImage: File get() = cacheStore.imageFile
     val cachedP30Image: File get() = cacheStore.p30ImageFile
+    val cachedCustomB30Image: File get() = cacheStore.customB30ImageFile
+    val cachedCustomP30Image: File get() = cacheStore.customP30ImageFile
     val shouldShowImagePagerGuide: Boolean
         get() = !preferences.getBoolean("image_pager_guide_pre0976_shown", false)
+    val shouldShowSuggestionSwipeGuide: Boolean
+        get() = !preferences.getBoolean("suggestion_swipe_guide_pre0979_shown", false)
     val rksCalculatorDraft: RksCalculatorDraft
         get() = preferences.getString("rks_calculator_draft_pre0978", null)
             ?.let { encoded ->
                 runCatching {
-                    json.decodeFromString(RksCalculatorDraft.serializer(), encoded).normalized()
+                hideUnknownDraftCharts(json.decodeFromString(RksCalculatorDraft.serializer(), encoded).normalized())
                 }.getOrNull()
             }
             ?: RksCalculatorDraft()
@@ -77,7 +93,27 @@ class AppRepository(
         return announcement
     }
 
+    suspend fun fetchAnnouncementHistory(): List<AppAnnouncement> =
+        api.fetchAppAnnouncementHistory().displayableItems()
+
     fun constantTableEntries(): List<ConstantTableEntry> = songCatalog.constantTableEntries()
+
+    fun searchCatalogSongs(query: String): List<SongInfo> = songCatalog.search(query)
+
+    suspend fun searchAchievementSongs(query: String): List<SongInfo> {
+        val normalized = query.trim()
+        if (normalized.isEmpty()) return emptyList()
+        val localMatches = songCatalog.search(normalized, limit = 100)
+        val remoteMatches = authenticatedCall { token -> api.searchSongs(token, normalized).items }
+            .filter { songCatalog.isVisible(it.id) }
+            .map { remote -> songCatalog[remote.id] ?: songCatalog.resolveRemote(remote) }
+        return (remoteMatches + localMatches).distinctBy(SongInfo::id)
+    }
+
+    suspend fun fetchChartAchievementRates(songId: String, difficulty: String): ChartAchievementResponse {
+        require(songCatalog.isVisible(songId)) { "这首曲目尚未被后端曲库收录" }
+        return authenticatedCall { token -> api.fetchChartAchievementRates(token, songId, difficulty) }
+    }
 
     suspend fun loadCachedSongCatalog(): Boolean {
         val cached = cacheStore.readSongCatalog() ?: return false
@@ -99,6 +135,7 @@ class AppRepository(
     }
 
     fun songDetail(songId: String, snapshot: B30Snapshot?): SongScoreResult? {
+        if (!songCatalog.isVisible(songId)) return null
         val song = songCatalog[songId] ?: return null
         val records = snapshot?.scoreRecords.orEmpty()
             .asSequence()
@@ -158,8 +195,22 @@ class AppRepository(
     }
 
     fun setRksCalculatorDraft(draft: RksCalculatorDraft) {
-        val encoded = json.encodeToString(RksCalculatorDraft.serializer(), draft.normalized())
+        val encoded = json.encodeToString(RksCalculatorDraft.serializer(), hideUnknownDraftCharts(draft.normalized()))
         preferences.edit().putString("rks_calculator_draft_pre0978", encoded).apply()
+    }
+
+    fun sanitizeRksCalculatorDraft(draft: RksCalculatorDraft): RksCalculatorDraft =
+        hideUnknownDraftCharts(draft.normalized())
+
+    private fun hideUnknownDraftCharts(draft: RksCalculatorDraft): RksCalculatorDraft {
+        fun filter(charts: List<CustomChartDraft>) = charts.map { chart ->
+            if (chart.songId.isNotBlank() && !songCatalog.isVisible(chart.songId)) CustomChartDraft()
+            else chart
+        }
+        return draft.copy(
+            customB30Charts = filter(draft.customB30Charts),
+            customP30Charts = filter(draft.customP30Charts),
+        )
     }
 
     fun markNavigationGuideShown() {
@@ -176,6 +227,14 @@ class AppRepository(
 
     fun markImagePagerGuideShown() {
         preferences.edit().putBoolean("image_pager_guide_pre0976_shown", true).apply()
+    }
+
+    fun setUseSwipeNavigation(enabled: Boolean) {
+        preferences.edit().putBoolean("use_swipe_navigation", enabled).apply()
+    }
+
+    fun markSuggestionSwipeGuideShown() {
+        preferences.edit().putBoolean("suggestion_swipe_guide_pre0979_shown", true).apply()
     }
 
     fun storedSessionToken(): String? = sessionStore.readSessionToken()
@@ -269,6 +328,7 @@ class AppRepository(
         val previous = cacheStore.readSnapshot()?.withCatalogFallbacks()
         return authenticatedCall { token ->
             val response = api.fetchB30(token)
+            activateUnknownTrackIds(response.unknownSongIds)
             val scoreRecords = response.toScoreSnapshot()
             val canCompare = previous?.scoreRecords?.isNotEmpty() == true
             val updatedScores = if (canCompare) {
@@ -286,12 +346,61 @@ class AppRepository(
         }
     }
 
+    fun newlyUnknownSongIds(songIds: List<String>): List<String> {
+        val key = "notified_unknown_song_ids"
+        val currentIds = songIds.filter(String::isNotBlank).toSet()
+        val previousIds = preferences.getStringSet(key, emptySet<String>()).orEmpty().toSet()
+        val newlyDetected = (currentIds - previousIds).sorted()
+        val updatedIds = if (currentIds.isEmpty()) emptySet() else previousIds + currentIds
+        preferences.edit().putStringSet(key, updatedIds).apply()
+        return newlyDetected
+    }
+
+    suspend fun activateUnknownTrackIds(songIds: Collection<String>) {
+        val next = songIds.asSequence().filter(String::isNotBlank).toSet()
+        val previous = activeUnknownSongIds
+        activeUnknownSongIds = next
+        preferences.edit().putStringSet("active_unknown_song_ids", next).apply()
+        songCatalog.setHiddenSongIds(next)
+        if (previous != next) {
+            cacheStore.deleteImage()
+            cacheStore.deleteCustomRankingImages()
+            songScoreImageRenderer.clear()
+        }
+    }
+
+    suspend fun checkin(month: String, submit: Boolean): CheckinStatus =
+        authenticatedCall { token -> api.checkin(token, month, submit) }.withoutUnknownTrack()
+    suspend fun checkinLeaderboard(): CheckinLeaderboard =
+        authenticatedCall { token -> api.checkinLeaderboard(token) }
+
+    suspend fun startRksGuess(mode: String): RksGuessStatus =
+        authenticatedCall { token -> api.startRksGuess(mode, token) }.withoutUnknownTracks()
+
+    suspend fun fetchRksGuess(gameId: String): RksGuessStatus =
+        authenticatedCall { token -> api.fetchRksGuess(token, gameId) }.withoutUnknownTracks()
+
+    suspend fun fetchRksGuessLeaderboard(): RksGuessWinLeaderboard =
+        authenticatedCall { token -> api.fetchRksGuessLeaderboard(token) }
+
+    suspend fun submitRksGuessAnswer(gameId: String, answer: Double): RksGuessStatus =
+        authenticatedCall { token -> api.submitRksGuessAnswer(token, gameId, answer) }.withoutUnknownTracks()
+
+    suspend fun continueRksGuessRound(gameId: String): RksGuessStatus =
+        authenticatedCall { token -> api.continueRksGuessRound(token, gameId) }.withoutUnknownTracks()
+
+    suspend fun leaveRksGuess(gameId: String) = authenticatedCall { token ->
+        api.leaveRksGuess(token, gameId)
+    }
+
     suspend fun searchSongScores(query: String): List<SongScoreResult> {
         val normalized = query.trim()
         require(normalized.isNotEmpty()) { "请输入曲名、曲师或曲目 ID" }
         return authenticatedCall { token ->
             val remoteMatches = runCatching { api.searchSongs(token, normalized).items }.getOrDefault(emptyList())
-            api.fetchB30(token).toSongResults(normalized, remoteMatches)
+            val save = api.fetchB30(token)
+            activateUnknownTrackIds(save.unknownSongIds)
+            save.toSongResults(normalized, remoteMatches)
         }
     }
 
@@ -300,6 +409,7 @@ class AppRepository(
         val snapshotAgeMs = snapshot?.let { System.currentTimeMillis() - it.cachedAtEpochMs } ?: Long.MAX_VALUE
         if (snapshotAgeMs > 15_000L) {
             val refreshedSave = api.fetchB30(token)
+            activateUnknownTrackIds(refreshedSave.unknownSongIds)
             playerProfile = refreshedSave.toPlayerProfile()
             // 排行榜写入在后端异步完成，给同一次刷新留下一个很短的落盘窗口。
             delay(350)
@@ -335,11 +445,36 @@ class AppRepository(
         )
     }
 
+    suspend fun renderCustomRankingImage(
+        ranking: String,
+        scores: List<CustomRankingImageScore>,
+        style: B30ImageStyle,
+        isDarkTheme: Boolean,
+        width: Int = 1440,
+    ): File = authenticatedCall { token ->
+        require(scores.none { it.songId.isNotBlank() && !songCatalog.isVisible(it.songId) }) {
+            "这首曲目尚未被后端曲库收录，暂不能生成自定义 BP30"
+        }
+        cacheStore.saveCustomRankingImage(
+            api.renderCustomRanking(
+                accessToken = token,
+                width = width.coerceIn(900, 2400),
+                ranking = ranking,
+                scores = scores,
+                style = style,
+                isDarkTheme = isDarkTheme,
+            ),
+            ranking = ranking,
+        )
+    }
+
     fun cachedSongImage(songId: String, style: SongScoreImageStyle): File =
         songScoreImageRenderer.cachedFile(songId, style)
 
-    suspend fun renderSongScoreImage(song: SongScoreResult, style: SongScoreImageStyle): File =
-        songScoreImageRenderer.render(song, style)
+    suspend fun renderSongScoreImage(song: SongScoreResult, style: SongScoreImageStyle): File {
+        require(songCatalog.isVisible(song.songId)) { "这首曲目尚未被后端曲库收录" }
+        return songScoreImageRenderer.render(song, style)
+    }
 
     suspend fun deleteCachedSongImages() {
         songScoreImageRenderer.clear()
@@ -347,6 +482,10 @@ class AppRepository(
 
     suspend fun deleteCachedB30Image() {
         cacheStore.deleteImage()
+    }
+
+    suspend fun clearCustomRankingImage() {
+        cacheStore.deleteCustomRankingImages()
     }
 
     suspend fun logout() {
@@ -357,6 +496,28 @@ class AppRepository(
         songCatalog.resetToBundled()
     }
 
+    private fun CheckinStatus.withoutUnknownTrack(): CheckinStatus = copy(
+        today = today?.let { record ->
+            record.copy(chart = record.chart?.takeIf { songCatalog.isVisible(it.songId) })
+        },
+    )
+
+    private fun RksGuessStatus.withoutUnknownTracks(): RksGuessStatus {
+        val isVisible: (RksGuessClue) -> Boolean = { songCatalog.isVisible(it.songId) }
+        val current = clues.filter(isVisible)
+        val history = clueHistory.mapNotNull { group ->
+            group.copy(clues = group.clues.filter(isVisible)).takeIf { it.clues.isNotEmpty() }
+        }
+        val hidden = current.size != clues.size || history.sumOf { it.clues.size } != clueHistory.sumOf { it.clues.size }
+        return copy(
+            clues = current,
+            clueHistory = history,
+            myRks = if (hidden) null else myRks,
+            opponentRks = if (hidden) null else opponentRks,
+            targetRks = if (hidden) null else targetRks,
+        )
+    }
+
     suspend fun createSuggestionPost(
         description: String,
         imageBytes: ByteArray,
@@ -365,12 +526,17 @@ class AppRepository(
         api.createSuggestionPost(token, description, imageBytes, imageMimeType)
     }
 
-    suspend fun fetchRandomSuggestion(excludeId: String? = null): SuggestionPost =
-        authenticatedCall { token -> api.fetchRandomSuggestion(token, excludeId) }
+    suspend fun fetchRandomSuggestion(excludedIds: List<String> = emptyList()): SuggestionPost =
+        authenticatedCall { token -> api.fetchRandomSuggestion(token, excludedIds) }
 
     suspend fun fetchSuggestionPost(postId: String): SuggestionPost =
         authenticatedCall { token -> api.fetchSuggestionPost(token, postId) }
 
+    suspend fun createFeedback(draft: FeedbackDraft): Feedback = authenticatedCall { api.createFeedback(it, draft) }
+    suspend fun feedbackList(offset: Int = 0, notifications: Boolean = false): List<Feedback> = authenticatedCall { api.feedbackList(it, offset, notifications) }
+    suspend fun feedbackRead(id: String, revision: Long): Boolean = authenticatedCall { api.feedbackRead(it, id, revision) }
+    suspend fun feedbackImage(id: String, position: Int): ByteArray = authenticatedCall { api.feedbackImage(it, id, position) }
+    suspend fun feedbackUpdates(cursor: String?): FeedbackUpdates = authenticatedCall { api.feedbackUpdates(it, cursor) }
     suspend fun fetchOwnSuggestionPosts(): List<SuggestionPost> =
         authenticatedCall { token -> api.fetchOwnSuggestionPosts(token) }
 
@@ -414,7 +580,7 @@ class AppRepository(
     private fun verifyDownloadedApk(file: File, update: AppUpdateManifest) {
         val packageManager = appContext.packageManager
         val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            PackageManager.GET_SIGNING_CERTIFICATES
+            PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_SIGNATURES
         } else {
             PackageManager.GET_SIGNATURES
         }
@@ -435,7 +601,13 @@ class AppRepository(
         val installed = packageManager.getPackageInfo(appContext.packageName, flags)
         val installedSigners = signerCertificates(installed, includeHistory = true)
         val archiveSigners = signerCertificates(archive, includeHistory = false)
-        if (archiveSigners.isEmpty() || archiveSigners.none(installedSigners::contains)) {
+        if (archiveSigners.isEmpty()) {
+            throw SecurityException("无法读取安装包签名，无法安全验证更新")
+        }
+        if (installedSigners.isEmpty()) {
+            throw SecurityException("无法读取当前应用签名，无法安全验证更新")
+        }
+        if (archiveSigners.none(installedSigners::contains)) {
             throw SecurityException("安装包签名与当前应用不一致")
         }
     }
@@ -443,12 +615,15 @@ class AppRepository(
     @Suppress("DEPRECATION")
     private fun signerCertificates(packageInfo: PackageInfo, includeHistory: Boolean): Set<String> {
         val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            val signingInfo = packageInfo.signingInfo ?: return emptySet()
-            if (includeHistory && signingInfo.hasPastSigningCertificates()) {
-                signingInfo.signingCertificateHistory
-            } else {
-                signingInfo.apkContentsSigners
+            val signingInfo = packageInfo.signingInfo
+            val modernSignatures = signingInfo?.let {
+                if (includeHistory && it.hasPastSigningCertificates()) {
+                    it.signingCertificateHistory
+                } else {
+                    it.apkContentsSigners
+                }
             }
+            modernSignatures?.takeIf { it.isNotEmpty() } ?: packageInfo.signatures
         } else {
             packageInfo.signatures
         }
@@ -543,6 +718,7 @@ class AppRepository(
             scoreRecords = scoreRecords,
             updatedScores = updatedScores,
             hasUpdateComparison = hasUpdateComparison,
+            unknownSongIds = unknownSongIds,
             playerProfile = toPlayerProfile(),
         )
     }
@@ -555,31 +731,46 @@ class AppRepository(
     )
 
     private fun B30Snapshot.withCatalogFallbacks(): B30Snapshot {
+        val hiddenIds = (unknownSongIds + activeUnknownSongIds).map(String::lowercase).toSet()
         fun ScoreSnapshotEntry.withFallback(): ScoreSnapshotEntry {
-            if (chartConstant != null) return this
-            val fallback = songCatalog[songId]?.chartConstants?.get(difficulty.uppercase()) ?: return this
-            return copy(
-                chartConstant = fallback,
-                rks = calculateChartRankingScore(accuracy, fallback),
-            )
+            val song = songCatalog[songId]
+            val fallback = song?.chartConstants?.get(difficulty.uppercase())
+            val resolvedConstant = chartConstant ?: fallback
+            val resolvedName = song?.name?.takeIf(String::isNotBlank)
+                ?: songName.takeIf(String::isNotBlank)
+                ?: songId
+            val resolvedRks = if (chartConstant == null && fallback != null) {
+                calculateChartRankingScore(accuracy, fallback)
+            } else {
+                rks
+            }
+            return if (resolvedName == songName && resolvedConstant == chartConstant && resolvedRks == rks) this
+            else copy(songName = resolvedName, chartConstant = resolvedConstant, rks = resolvedRks)
         }
+        val visibleRecords = scoreRecords
+            .filterNot { it.songId.lowercase() in hiddenIds }
+            .map { it.withFallback() }
 
         return copy(
-            items = items.map { item ->
-                if (item.chartConstant != null) item
-                else item.copy(
-                    chartConstant = songCatalog[item.songId]
-                        ?.chartConstants
-                        ?.get(item.difficulty.uppercase()),
-                )
+            totalRks = if (hiddenIds.isEmpty()) totalRks else calculateCompositeRks(visibleRecords),
+            items = items.filterNot { it.songId.lowercase() in hiddenIds }.map { item ->
+                val song = songCatalog[item.songId]
+                val resolvedName = song?.name?.takeIf(String::isNotBlank)
+                    ?: item.songName.takeIf(String::isNotBlank)
+                    ?: item.songId
+                val resolvedConstant = item.chartConstant
+                    ?: song?.chartConstants?.get(item.difficulty.uppercase())
+                if (resolvedName == item.songName && resolvedConstant == item.chartConstant) item
+                else item.copy(songName = resolvedName, chartConstant = resolvedConstant)
             },
-            scoreRecords = scoreRecords.map { it.withFallback() },
-            updatedScores = updatedScores.map { it.withFallback() },
+            scoreRecords = visibleRecords,
+            updatedScores = updatedScores.filterNot { it.songId.lowercase() in hiddenIds }.map { it.withFallback() },
         )
     }
 
     private fun SaveAndRksResponse.toScoreSnapshot(): List<ScoreSnapshotEntry> =
         save.gameRecord.flatMap { (songId, records) ->
+            if (songId in unknownSongIds) return@flatMap emptyList()
             val song = songCatalog[songId]
             records.map { record ->
                 val chartConstant = record.chartConstant
@@ -612,7 +803,10 @@ class AppRepository(
             .sorted()
             .toList()
         val remoteById = remoteMatches.associateBy(RemoteSongInfo::id)
-        val songIds = (remoteMatches.map(RemoteSongInfo::id) + catalogMatches.map(SongInfo::id) + savedIdMatches).distinct()
+        val hiddenIds = (unknownSongIds + activeUnknownSongIds).map(String::lowercase).toSet()
+        val songIds = (remoteMatches.map(RemoteSongInfo::id) + catalogMatches.map(SongInfo::id) + savedIdMatches)
+            .filter { it.lowercase() !in hiddenIds }
+            .distinct()
         return songIds.asSequence()
             .map { songId ->
                 val records = save.gameRecord[songId].orEmpty()
@@ -696,6 +890,12 @@ internal fun calculateP30Rks(records: List<ScoreSnapshotEntry>): Double {
     val b27 = selectPerfectCharts(records, limit = 27)
     val p3 = b27.take(3)
     return (p3.sumOf(ScoreSnapshotEntry::rks) + b27.sumOf(ScoreSnapshotEntry::rks)) / 30.0
+}
+
+private fun calculateCompositeRks(records: List<ScoreSnapshotEntry>): Double {
+    val best27 = selectBestCharts(records, limit = 27)
+    val ap3 = selectPerfectCharts(records, limit = 3)
+    return (best27.sumOf(ScoreSnapshotEntry::rks) + ap3.sumOf(ScoreSnapshotEntry::rks)) / 30.0
 }
 
 private fun kotlinx.serialization.json.JsonElement?.pushAccHintType(): String? = when (this) {

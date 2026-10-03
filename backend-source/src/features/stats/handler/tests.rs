@@ -49,8 +49,8 @@ async fn build_test_state(sqlite_path: &str) -> AppState {
     let song_image_cache: Cache<String, Bytes> = Cache::builder().max_capacity(10).build();
 
     AppState {
-        chart_constants: Arc::new(chart_constants),
-        song_catalog: Arc::new(song_catalog),
+        chart_constants: crate::state::Reloadable::new(chart_constants),
+        song_catalog: crate::state::Reloadable::new(song_catalog),
         taptap_client,
         qrcode_service,
         stats: None,
@@ -1034,6 +1034,108 @@ async fn daily_dau_fills_missing_days_with_zero() {
     assert_eq!(resp.rows[1].date, "2025-12-25");
     assert_eq!(resp.rows[1].active_users, 0);
     assert_eq!(resp.rows[1].active_ips, 0);
+}
+
+#[tokio::test]
+async fn daily_dau_does_not_zero_previous_local_day_after_rollover() {
+    let sqlite_path = tmp_sqlite_path("stats_daily_dau_rollover");
+    let state = build_test_state(&sqlite_path).await;
+    let storage = state.stats_storage.as_ref().unwrap().clone();
+
+    // 2025-12-29 16:30 UTC = 2025-12-30 00:30 Asia/Shanghai.
+    storage
+        .insert_events(&[EventInsert {
+            ts_utc: dt_utc(2025, 12, 29, 16, 30, 0),
+            route: Some("/song/search".into()),
+            feature: None,
+            action: None,
+            method: Some("GET".into()),
+            status: Some(200),
+            duration_ms: Some(10),
+            user_hash: Some("rollover-user".into()),
+            client_ip_hash: Some("rollover-ip".into()),
+            instance: Some("inst-a".into()),
+            extra_json: None,
+        }])
+        .await
+        .unwrap();
+
+    // 模拟只完成了前一日预聚合；旧逻辑看到任意一行 daily_dau 后，
+    // 会把缺少的 2025-12-30 直接补成 0。
+    sqlx::query(
+        "INSERT INTO daily_dau (date, active_users, active_ips) VALUES ('2025-12-29', 7, 7)",
+    )
+    .execute(&storage.pool)
+    .await
+    .unwrap();
+
+    let rows = super::queries::query_daily_dau_at(
+        &storage,
+        chrono_tz::Asia::Shanghai,
+        chrono::NaiveDate::from_ymd_opt(2025, 12, 29).unwrap(),
+        chrono::NaiveDate::from_ymd_opt(2025, 12, 30).unwrap(),
+        chrono::NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
+    )
+    .await
+    .unwrap();
+    let target = rows.iter().find(|row| row.date == "2025-12-30").unwrap();
+    assert_eq!(target.active_users, 1);
+    assert_eq!(target.active_ips, 1);
+}
+
+#[tokio::test]
+async fn leaderboard_user_count_trend_uses_display_timezone() {
+    let sqlite_path = tmp_sqlite_path("stats_user_count_trend");
+    let state = build_test_state(&sqlite_path).await;
+    let storage = state.stats_storage.as_ref().unwrap().clone();
+
+    storage
+        .upsert_leaderboard_rks(
+            "trend-before",
+            10.0,
+            None,
+            0.0,
+            false,
+            &dt_utc(2025, 12, 20, 12, 0, 0).to_rfc3339(),
+        )
+        .await
+        .unwrap();
+    storage
+        .upsert_leaderboard_rks(
+            "trend-day-one",
+            20.0,
+            None,
+            0.0,
+            false,
+            &dt_utc(2025, 12, 28, 16, 30, 0).to_rfc3339(),
+        )
+        .await
+        .unwrap();
+    storage
+        .upsert_leaderboard_rks(
+            "trend-day-two",
+            30.0,
+            None,
+            0.0,
+            false,
+            &dt_utc(2025, 12, 29, 16, 30, 0).to_rfc3339(),
+        )
+        .await
+        .unwrap();
+
+    let trend = storage
+        .query_leaderboard_user_count_trend(
+            chrono::NaiveDate::from_ymd_opt(2025, 12, 29).unwrap(),
+            chrono::NaiveDate::from_ymd_opt(2025, 12, 30).unwrap(),
+            chrono_tz::Asia::Shanghai,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        trend,
+        vec![("2025-12-29".into(), 2), ("2025-12-30".into(), 3)]
+    );
 }
 
 #[tokio::test]

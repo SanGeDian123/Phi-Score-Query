@@ -4,7 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use chrono::Duration;
 use sha2::{Digest as _, Sha256};
 
@@ -21,7 +21,7 @@ use super::score::to_engine_record;
 use super::svg_error::svg_fmt_error;
 use super::template_shared::truncate_with_ellipsis;
 use super::text::escape_xml;
-use super::{PlayerStats, RenderRecord, MAIN_FONT_NAME};
+use super::{MAIN_FONT_NAME, PlayerStats, RenderRecord};
 
 // The upstream Phi-Plugin HTML is authored on a 1200 px canvas. These values
 // intentionally mirror b19.css instead of sharing the dimensions of the other
@@ -48,7 +48,8 @@ where
     S: std::hash::BuildHasher,
 {
     let is_p30 = stats.image_title.eq_ignore_ascii_case("P30");
-    let has_ap_section = if is_p30 {
+    let custom_p30 = is_p30 && stats.is_user_generated && !stats.ap_top_3_scores.is_empty();
+    let has_ap_section = if is_p30 && !custom_p30 {
         !scores.is_empty()
     } else {
         !stats.ap_top_3_scores.is_empty()
@@ -58,7 +59,8 @@ where
     let overflow_count = scores.len().saturating_sub(core_count);
     let core_rows = core_count.div_ceil(3);
     let overflow_rows = overflow_count.div_ceil(3);
-    let divider_y = main_y + core_rows as f64 * CARD_STEP_Y + 5.0;
+    // Remove the last row's unused 25 px spacing before the divider's own inset.
+    let divider_y = main_y + core_rows as f64 * CARD_STEP_Y - 20.0;
     let overflow_y = divider_y + 65.0;
     let content_bottom = if overflow_count > 0 {
         overflow_y + overflow_rows as f64 * CARD_STEP_Y
@@ -94,7 +96,7 @@ where
     write_header(&mut svg, stats, palette)?;
 
     if has_ap_section {
-        let perfect_top = if is_p30 {
+        let perfect_top = if is_p30 && !custom_p30 {
             scores
         } else {
             stats.ap_top_3_scores.as_slice()
@@ -107,6 +109,7 @@ where
                 CARD_GAP_X + index as f64 * CARD_STEP_X,
                 175.0,
                 true,
+                false,
                 push_acc_map,
                 &engine_records,
                 embed_images,
@@ -125,6 +128,7 @@ where
             CARD_GAP_X + col as f64 * CARD_STEP_X,
             main_y + row as f64 * CARD_STEP_Y,
             false,
+            custom_p30,
             push_acc_map,
             &engine_records,
             embed_images,
@@ -144,6 +148,7 @@ where
                 CARD_GAP_X + col as f64 * CARD_STEP_X,
                 overflow_y + row as f64 * CARD_STEP_Y,
                 false,
+                custom_p30,
                 push_acc_map,
                 &engine_records,
                 embed_images,
@@ -398,6 +403,7 @@ fn write_card<S>(
     x: f64,
     y: f64,
     is_ap_card: bool,
+    p30_main: bool,
     push_acc_map: Option<&HashMap<String, engine::PushAccHint, S>>,
     engine_records: &[engine::RksRecord],
     embed_images: bool,
@@ -420,6 +426,8 @@ where
     };
     let rank_label = if is_ap_card {
         format!("P{}", index + 1)
+    } else if p30_main {
+        format!("P{}", index + 4)
     } else {
         format!("#{}", index + 1)
     };

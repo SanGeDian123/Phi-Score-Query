@@ -29,6 +29,7 @@ const COMMENT_COOLDOWN_SECONDS: i64 = 5;
 #[derive(Debug, Deserialize)]
 pub struct RandomQuery {
     exclude: Option<String>,
+    exclude_ids: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -163,6 +164,9 @@ async fn remove_media_if_present(name: Option<&str>) {
                 .is_some_and(|file_name| file_name == *name)
     }) {
         let _ = tokio::fs::remove_file(media_root().join(name)).await;
+        let previews = media_root().join(".previews-v1");
+        let _ = tokio::fs::remove_file(previews.join(format!("{name}.webp"))).await;
+        let _ = tokio::fs::remove_file(previews.join(format!("{name}.stamp"))).await;
     }
 }
 
@@ -343,8 +347,23 @@ pub async fn random_post(
 ) -> Result<Json<SuggestionPost>, AppError> {
     let user_hash = require_user_hash(&bearer)?;
     let storage = storage(&state)?;
+    let mut excluded_ids: Vec<String> = query
+        .exclude_ids
+        .as_deref()
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .take(10)
+        .map(ToOwned::to_owned)
+        .collect();
+    if let Some(exclude) = query.exclude.filter(|value| !value.trim().is_empty()) {
+        if !excluded_ids.iter().any(|value| value == &exclude) {
+            excluded_ids.push(exclude);
+        }
+    }
     let record = storage
-        .random_suggestion_post(query.exclude.as_deref())
+        .random_suggestion_post(&excluded_ids)
         .await?
         .ok_or_else(|| AppError::Search(SearchError::NotFound))?;
     let post = post_from_record(storage, record, user_hash).await?;

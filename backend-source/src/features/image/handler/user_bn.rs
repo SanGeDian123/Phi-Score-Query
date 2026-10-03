@@ -1,20 +1,17 @@
-use axum::{
-    Json,
-    extract::{Query, State},
-    http::StatusCode,
-    response::IntoResponse,
-};
-use chrono::Utc;
-
 use crate::{
     config::AppConfig,
     error::AppError,
     features::image::{
         renderer::{self, PlayerStats},
         signing,
-        types::RenderUserBnRequest,
+        types::{RenderUserBnRequest, UserRanking},
     },
     state::AppState,
+};
+use axum::{
+    extract::{Query, Request, State},
+    http::StatusCode,
+    response::IntoResponse,
 };
 
 use super::{
@@ -89,15 +86,28 @@ use super::{
 pub async fn render_bn_user(
     State(state): State<AppState>,
     Query(q): Query<ImageQueryOpts>,
-    Json(req): Json<RenderUserBnRequest>,
+    request: Request,
 ) -> Result<impl IntoResponse, AppError> {
     validate_image_query_opts(&q)?;
 
+    let (mut req, bearer_state) =
+        crate::session_auth::parse_json_with_bearer_state::<RenderUserBnRequest>(request).await?;
+    crate::session_auth::merge_auth_from_bearer_if_missing(
+        state.stats_storage.as_ref(),
+        &bearer_state,
+        &mut req.auth,
+    )
+    .await?;
+
     let RenderUserBnRequest {
+        auth,
         theme,
         nickname,
         unlock_password,
+        custom,
+        ranking,
         scores,
+        app_version,
     } = req;
 
     // 限制 user 自报成绩条数，避免大输入放大 CPU/内存（排序/推分求解均会随条数线性/超线性增长）。
@@ -114,6 +124,11 @@ pub async fn render_bn_user(
     let records_len = scores.len();
     let n = records_len.max(1);
 
+    let phi_plugin = q
+        .template
+        .as_deref()
+        .is_some_and(|template| template.eq_ignore_ascii_case("phi-plugin"));
+
     // 解析成绩、排序、推分与统计属于 CPU 密集任务：移出 Tokio worker，避免影响吞吐与尾延迟。
     let UserBnComputeOutput {
         records,
@@ -123,16 +138,67 @@ pub async fn render_bn_user(
         best_27_avg,
         ap_top_3_scores,
     } = {
-        let song_catalog = state.song_catalog.clone();
+        let song_catalog = state.song_catalog.snapshot();
         let join = tokio::task::spawn_blocking(move || {
-            user_bn_compute::build_user_bn_compute_output(scores, song_catalog)
+            user_bn_compute::build_user_bn_compute_output(
+                scores,
+                song_catalog,
+                custom,
+                ranking,
+                phi_plugin,
+            )
         })
         .await;
         join.map_err(blocking_join_error)??
     };
 
     // 昵称
-    let display_name = nickname.unwrap_or_else(|| "Phigros Player".into());
+    let source = super::save_flow::to_save_source(&auth)?;
+    let (meta, _) =
+        super::save_flow::fetch_image_save_meta(source, auth.taptap_version.as_deref()).await?;
+    let chart_constants = state.chart_constants.snapshot();
+    let parsed =
+        super::save_flow::decrypt_image_save_from_meta(meta, chart_constants).await?;
+    let player_avatar = parsed
+        .user
+        .as_ref()
+        .and_then(|user| crate::features::save::handler::official_avatar_name(&user.avatar))
+        .or_else(|| {
+            parsed.summary_parsed.as_ref().and_then(|summary| {
+                crate::features::save::handler::official_avatar_name(&summary.avatar)
+            })
+        });
+    let challenge_rank = parsed
+        .summary_parsed
+        .as_ref()
+        .map(|summary| i64::from(summary.challenge_mode_rank))
+        .or_else(|| {
+            parsed
+                .game_progress
+                .as_ref()
+                .and_then(|progress| progress.challenge_mode_rank)
+                .map(i64::from)
+        })
+        .and_then(super::display::parse_challenge_rank);
+    let data_string = parsed
+        .game_progress
+        .as_ref()
+        .and_then(|progress| progress.money.as_ref())
+        .and_then(super::display::format_data_string);
+    let grade_counts = crate::features::save::handler::compute_grade_counts(&parsed.game_record);
+    let update_time = super::display::parse_update_time_or_now(parsed.updated_at.as_deref());
+    let fetched_name = super::nickname::resolve_display_name(
+        None,
+        auth.session_token.clone(),
+        auth.taptap_version.as_deref(),
+    )
+    .await
+    .0;
+    let display_name = if fetched_name == "Phigros Player" {
+        nickname.unwrap_or(fetched_name)
+    } else {
+        fetched_name
+    };
 
     // 水印控制：默认启用配置中的显式/隐式；若提供了正确的解除口令，则同时关闭二者
     let unlocked = cfg.watermark.is_unlock_valid(unlock_password.as_deref());
@@ -147,21 +213,34 @@ pub async fn render_bn_user(
         cfg.watermark.implicit_pixel
     };
 
+    let image_title = if custom && ranking == UserRanking::P30 {
+        "P30"
+    } else {
+        "B30"
+    };
+    let footer_text = if custom {
+        Some(format!(
+            "{} · 该B/P30内容由用户自定义",
+            image_footer_text(app_version.as_deref()).unwrap_or_else(|| "Phi Score Query".into())
+        ))
+    } else {
+        image_footer_text(app_version.as_deref())
+    };
     let stats = PlayerStats {
-        image_title: "B30".to_string(),
+        image_title: image_title.to_string(),
         ap_top_3_avg,
         best_27_avg,
         real_rks: Some(exact_rks),
         player_name: Some(display_name),
-        player_avatar: None,
-        update_time: Utc::now(),
+        player_avatar,
+        update_time,
         n: u32_from_usize(n),
         ap_top_3_scores,
-        challenge_rank: None,
-        data_string: None,
-        grade_counts: Default::default(),
-        custom_footer_text: image_footer_text(None),
-        is_user_generated: explicit,
+        challenge_rank,
+        data_string,
+        grade_counts,
+        custom_footer_text: footer_text,
+        is_user_generated: explicit || custom,
     };
 
     let output = ImageOutputCacheSpec::from_query(&q, false);

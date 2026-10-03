@@ -24,6 +24,9 @@ import androidx.work.WorkerParameters
 import xyz.plcliangpicup.phigrosscore.BuildConfig
 import xyz.plcliangpicup.phigrosscore.MainActivity
 import xyz.plcliangpicup.phigrosscore.R
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.time.Instant
 import java.util.concurrent.TimeUnit
 
@@ -33,10 +36,35 @@ object SuggestionNotificationManager {
     private const val PREFERENCES = "suggestion_notifications"
     private const val ENABLED = "enabled"
     private const val CURSOR = "cursor"
+    private const val IN_APP_UNREAD = "in_app_unread"
     private const val PERIODIC_WORK = "suggestion-comment-notifications"
     private const val IMMEDIATE_WORK = "suggestion-comment-notifications-now"
+    private val inAppUnreadState = MutableStateFlow(false)
+    private val inAppUnreadFlow = inAppUnreadState.asStateFlow()
+    private var inAppStateLoaded = false
 
     fun isEnabled(context: Context): Boolean = preferences(context).getBoolean(ENABLED, false)
+
+    internal fun observeInAppUnread(context: Context): StateFlow<Boolean> {
+        ensureInAppStateLoaded(context)
+        return inAppUnreadFlow
+    }
+
+    @Synchronized
+    internal fun markInAppUnread(context: Context) {
+        val appContext = context.applicationContext
+        ensureInAppStateLoaded(appContext)
+        preferences(appContext).edit { putBoolean(IN_APP_UNREAD, true) }
+        inAppUnreadState.value = true
+    }
+
+    @Synchronized
+    internal fun clearInAppUnread(context: Context) {
+        val appContext = context.applicationContext
+        ensureInAppStateLoaded(appContext)
+        preferences(appContext).edit { putBoolean(IN_APP_UNREAD, false) }
+        inAppUnreadState.value = false
+    }
 
     fun setEnabled(context: Context, enabled: Boolean) {
         val appContext = context.applicationContext
@@ -78,22 +106,23 @@ object SuggestionNotificationManager {
     }
 
     internal fun notify(context: Context, item: SuggestionNotificationItem) {
+        val appContext = context.applicationContext
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) return
-        createChannel(context)
-        val intent = Intent(context, MainActivity::class.java)
+        createChannel(appContext)
+        val intent = Intent(appContext, MainActivity::class.java)
             .putExtra(EXTRA_POST_ID, item.postId)
             .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         val pendingIntent = PendingIntent.getActivity(
-            context,
+            appContext,
             item.postId.hashCode(),
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val count = item.commentCount.coerceAtLeast(1)
         val message = "您的求建议帖子“${item.postTitle}”获得了${count}条评论，点击查看"
-        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+        val notification = NotificationCompat.Builder(appContext, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("求建议有新评论")
             .setContentText(message)
@@ -102,7 +131,7 @@ object SuggestionNotificationManager {
             .setContentIntent(pendingIntent)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .build()
-        NotificationManagerCompat.from(context).notify(item.postId.hashCode(), notification)
+        NotificationManagerCompat.from(appContext).notify(item.postId.hashCode(), notification)
     }
 
     private fun createChannel(context: Context) {
@@ -118,6 +147,14 @@ object SuggestionNotificationManager {
 
     private fun preferences(context: Context) =
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+
+    @Synchronized
+    private fun ensureInAppStateLoaded(context: Context) {
+        if (!inAppStateLoaded) {
+            inAppUnreadState.value = preferences(context.applicationContext).getBoolean(IN_APP_UNREAD, false)
+            inAppStateLoaded = true
+        }
+    }
 }
 
 class SuggestionNotificationWorker(
@@ -132,6 +169,9 @@ class SuggestionNotificationWorker(
             val response = repository.fetchSuggestionNotifications(
                 SuggestionNotificationManager.cursor(applicationContext),
             )
+            if (response.items.isNotEmpty()) {
+                SuggestionNotificationManager.markInAppUnread(applicationContext)
+            }
             response.items.forEach { SuggestionNotificationManager.notify(applicationContext, it) }
             SuggestionNotificationManager.updateCursor(applicationContext, response.checkedAt)
             Result.success()

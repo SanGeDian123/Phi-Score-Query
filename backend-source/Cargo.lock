@@ -3108,6 +3108,7 @@ dependencies = [
  "once_cell",
  "parquet",
  "pbkdf2",
+ "percent-encoding",
  "phi-save-codec",
  "png 0.17.16",
  "pprof",

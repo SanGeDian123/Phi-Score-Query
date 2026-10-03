@@ -66,6 +66,8 @@ pub(super) struct SaveWithCache {
 
 pub(super) struct RksComputeResult {
     pub(super) game_record: HashMap<String, Vec<super::models::DifficultyRecord>>,
+    pub(super) rks_game_record: HashMap<String, Vec<super::models::DifficultyRecord>>,
+    pub(super) unknown_song_ids: Vec<String>,
     pub(super) rks: PlayerRksResult,
     best_top3_json: Option<String>,
     ap_top3_json: Option<String>,
@@ -108,6 +110,18 @@ fn save_cache() -> &'static Cache<String, SaveCacheEntry> {
             .time_to_idle(Duration::from_secs(cfg.cache_tti_secs.max(1)))
             .build()
     })
+}
+
+// Short-lived, owner/region-isolated snapshots for daily recommendations. Normal /save still
+// validates upstream metadata and refreshes this cache on every successful read.
+fn recent_feature_saves() -> &'static Cache<String, Arc<provider::ParsedSave>> {
+    static CACHE: OnceCell<Cache<String, Arc<provider::ParsedSave>>> = OnceCell::new();
+    CACHE.get_or_init(|| Cache::builder().max_capacity(256)
+        .time_to_live(Duration::from_secs(600)).build())
+}
+
+fn recent_feature_key(user_hash: &str, version: Option<&str>) -> String {
+    format!("{user_hash}:{}", version.unwrap_or("default"))
 }
 
 // ── Phase 1: 认证 + 身份推导 ──
@@ -362,6 +376,9 @@ async fn fetch_save_with_cache(
         "save performance"
     );
 
+    if let Some(owner) = user_hash {
+        recent_feature_saves().insert(recent_feature_key(owner, taptap_version), parsed.clone()).await;
+    }
     Ok(SaveWithCache {
         parsed,
         data_body,
@@ -372,6 +389,87 @@ async fn fetch_save_with_cache(
         cache_lookup_ms,
         decode_ms,
     })
+}
+
+/// 为需要读取玩家存档的已认证功能复用 `/save` 的缓存、解密并发限制和身份校验。
+///
+/// 这避免各功能自行再次下载、解密同一份存档，尤其避免在普通 `/save` 请求并发时
+/// 叠加额外的高内存解压任务。
+pub(crate) async fn load_parsed_save_for_feature(
+    state: &AppState,
+    bearer: &crate::features::auth::bearer::BearerAuthState,
+    taptap_version: &str,
+) -> Result<Arc<provider::ParsedSave>, AppError> {
+    load_feature_save(state, bearer, taptap_version, false).await
+}
+
+pub(crate) async fn load_parsed_save_for_checkin(
+    state: &AppState,
+    bearer: &crate::features::auth::bearer::BearerAuthState,
+    taptap_version: &str,
+) -> Result<Arc<provider::ParsedSave>, AppError> {
+    load_feature_save(state, bearer, taptap_version, true).await
+}
+
+async fn load_feature_save(
+    state: &AppState,
+    bearer: &crate::features::auth::bearer::BearerAuthState,
+    taptap_version: &str,
+    allow_recent: bool,
+) -> Result<Arc<provider::ParsedSave>, AppError> {
+    let t_total = Instant::now();
+    let mut payload = UnifiedSaveRequest {
+        session_token: None,
+        external_credentials: None,
+        taptap_version: Some(taptap_version.to_string()),
+    };
+    crate::session_auth::merge_auth_from_bearer_if_missing(
+        state.stats_storage.as_ref(),
+        bearer,
+        &mut payload,
+    )
+    .await?;
+
+    let salt = crate::config::AppConfig::global()
+        .stats
+        .user_hash_salt
+        .as_deref();
+    let (user_hash, _) =
+        crate::session_auth::derive_user_identity_with_bearer(salt, &payload, bearer)?;
+    if let (Some(storage), Some(user_hash_ref)) =
+        (state.stats_storage.as_ref(), user_hash.as_deref())
+    {
+        storage.ensure_user_not_banned(user_hash_ref).await?;
+    }
+
+    let source = validate_and_create_source(&payload)?;
+    if allow_recent {
+        if let Some(owner) = user_hash.as_deref() {
+            if let Some(parsed) = recent_feature_saves().get(&recent_feature_key(owner, payload.taptap_version.as_deref())).await {
+                tracing::debug!(target: "phi_backend::checkin::performance", "recent owner save reused");
+                return Ok(parsed);
+            }
+        }
+    }
+    let chart_constants = state.chart_constants.snapshot();
+    let data = fetch_save_with_cache(
+        source,
+        payload.taptap_version.as_deref(),
+        user_hash.as_deref(),
+        chart_constants,
+        state.stats.as_ref(),
+        0,
+        0,
+    )
+    .await?;
+    tracing::info!(
+        target: "phi_backend::rks_guess::performance",
+        phase = "load_save",
+        cache_status = data.cache_status,
+        total_dur_ms = duration_ms_i64(t_total.elapsed()),
+        "RKS guess save loaded through shared save pipeline"
+    );
+    Ok(data.parsed)
 }
 
 // ── Phase 4a: RKS 计算 ──
@@ -388,16 +486,37 @@ async fn compute_rks_and_details(
         .await
         .map_err(|e| AppError::Internal(format!("save blocking semaphore closed: {e}")))?;
     let t_calc = Instant::now();
+    let chart_constants = state.chart_constants.snapshot();
+    let known_song_ids: HashSet<String> = state
+        .song_catalog
+        .snapshot()
+        .by_id
+        .keys()
+        .map(|song_id| song_id.to_ascii_lowercase())
+        .collect();
     let join = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         let game_record = parsed.game_record.clone();
+        let mut unknown_song_ids: Vec<String> = game_record
+            .keys()
+            .filter(|song_id| {
+                !song_id.trim().is_empty()
+                    && !known_song_ids.contains(&song_id.to_ascii_lowercase())
+            })
+            .cloned()
+            .collect();
+        unknown_song_ids.sort_unstable();
+        let mut rks_game_record: HashMap<_, _> = game_record
+            .iter()
+            .filter(|(song_id, _)| known_song_ids.contains(&song_id.to_ascii_lowercase()))
+            .map(|(song_id, records)| (song_id.clone(), records.clone()))
+            .collect();
         if calc_rks {
-            let mut game_record = game_record;
-            crate::rks_contract::engine::fill_push_acc_for_game_record(&mut game_record);
-            let rks_res = calculate_player_rks(&game_record, &state.chart_constants);
+            crate::rks_contract::engine::fill_push_acc_for_game_record(&mut rks_game_record);
+            let rks_res = calculate_player_rks(&rks_game_record, &chart_constants);
             let (best_top3_json, ap_top3_json, rks_comp_json) = if need_leaderboard {
                 let (best_top3, ap_top3, rks_comp) =
-                    build_textual_details_from_rks(&game_record, &rks_res, &state);
+                    build_textual_details_from_rks(&rks_game_record, &rks_res, &state);
                 (
                     serde_json::to_string(&best_top3).ok(),
                     serde_json::to_string(&ap_top3).ok(),
@@ -408,16 +527,18 @@ async fn compute_rks_and_details(
             };
             (
                 game_record,
+                rks_game_record,
+                unknown_song_ids,
                 rks_res,
                 best_top3_json,
                 ap_top3_json,
                 rks_comp_json,
             )
         } else {
-            let rks_res = calculate_player_rks(&game_record, &state.chart_constants);
+            let rks_res = calculate_player_rks(&rks_game_record, &chart_constants);
             let (best_top3_json, ap_top3_json, rks_comp_json) = if need_leaderboard {
                 let (best_top3, ap_top3, rks_comp) =
-                    build_textual_details_from_rks(&game_record, &rks_res, &state);
+                    build_textual_details_from_rks(&rks_game_record, &rks_res, &state);
                 (
                     serde_json::to_string(&best_top3).ok(),
                     serde_json::to_string(&ap_top3).ok(),
@@ -428,6 +549,8 @@ async fn compute_rks_and_details(
             };
             (
                 game_record,
+                rks_game_record,
+                unknown_song_ids,
                 rks_res,
                 best_top3_json,
                 ap_top3_json,
@@ -436,7 +559,15 @@ async fn compute_rks_and_details(
         }
     })
     .await;
-    let (game_record, rks, best_top3_json, ap_top3_json, rks_comp_json) = match join {
+    let (
+        game_record,
+        rks_game_record,
+        unknown_song_ids,
+        rks,
+        best_top3_json,
+        ap_top3_json,
+        rks_comp_json,
+    ) = match join {
         Ok(v) => v,
         Err(e) => {
             tracing::info!(
@@ -470,6 +601,8 @@ async fn compute_rks_and_details(
 
     Ok(RksComputeResult {
         game_record,
+        rks_game_record,
+        unknown_song_ids,
         rks,
         best_top3_json,
         ap_top3_json,
@@ -491,9 +624,24 @@ fn spawn_leaderboard_write(
     nickname: Option<String>,
     avatar: Option<String>,
     challenge_mode_rank: Option<i64>,
+    game_record: &HashMap<String, Vec<super::models::DifficultyRecord>>,
+    rks_guess_clues_json: Option<String>,
 ) {
     let total_rks = rks_result.total_rks;
     let now = chrono::Utc::now().to_rfc3339();
+    let chart_samples: Vec<crate::stats_contract::ChartAchievementSample> = game_record
+        .iter()
+        .flat_map(|(song_id, records)| {
+            records
+                .iter()
+                .map(|record| crate::stats_contract::ChartAchievementSample {
+                    song_id: song_id.clone(),
+                    difficulty: record.difficulty.to_string(),
+                    score: i64::from(record.score),
+                    is_full_combo: record.is_full_combo,
+                })
+        })
+        .collect();
     tokio::spawn(async move {
         let prev = match storage.get_prev_rks(&user_hash).await {
             Ok(v) => v,
@@ -549,6 +697,21 @@ fn spawn_leaderboard_write(
             .await
         {
             tracing::warn!(target: "phi_backend::leaderboard", user_hash = %user_hash, "insert_submission failed (ignored): {e}");
+        }
+        if let Err(e) = storage
+            .upsert_chart_achievement_samples(&user_hash, &chart_samples, &now)
+            .await
+        {
+            tracing::warn!(target: "phi_backend::achievement", user_hash = %user_hash, "upsert chart achievement samples failed (ignored): {e}");
+        }
+        if let Some(clues_json) = rks_guess_clues_json.as_deref() {
+            let rounded_rks = (total_rks * 100.0 + 0.5).floor() / 100.0;
+            if let Err(e) = storage
+                .upsert_rks_guess_snapshot(&user_hash, rounded_rks, clues_json, &now)
+                .await
+            {
+                tracing::warn!(target: "phi_backend::rks_guess", user_hash = %user_hash, "upsert RKS guess snapshot failed (ignored): {e}");
+            }
         }
         if let Err(e) = storage
             .upsert_leaderboard_rks(
@@ -649,11 +812,12 @@ pub async fn get_save_data(
     );
 
     // Phase 3: 元数据获取 + 缓存
+    let chart_constants = state.chart_constants.snapshot();
     let data = fetch_save_with_cache(
         source,
         auth.taptap_version.as_deref(),
         auth.user_hash.as_deref(),
-        state.chart_constants.clone(),
+        chart_constants,
         state.stats.as_ref(),
         auth.auth_ms,
         source_ms,
@@ -719,6 +883,17 @@ pub async fn get_save_data(
         if let Some(storage) = state.stats_storage.as_ref()
             && let Some(ref user_hash_ref) = auth.user_hash
         {
+            let rks_guess_clues_json =
+                crate::features::rks_guess::serialize_snapshot_clues(
+                    &state,
+                    data.parsed.as_ref(),
+                    &result.rks,
+                )
+                .map_err(|error| {
+                    tracing::warn!(target: "phi_backend::rks_guess", "skip invalid anonymous snapshot: {error}");
+                    error
+                })
+                .ok();
             spawn_leaderboard_write(
                 storage.clone(),
                 user_hash_ref.clone(),
@@ -730,6 +905,8 @@ pub async fn get_save_data(
                 player_nickname.clone(),
                 player_avatar.clone(),
                 challenge_mode_rank,
+                &result.rks_game_record,
+                rks_guess_clues_json,
             );
         }
         let calc_ms = result.calc_ms;

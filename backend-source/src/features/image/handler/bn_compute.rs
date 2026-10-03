@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use std::{collections::{HashMap, HashSet}, sync::Arc, time::Instant};
 
 use chrono::{DateTime, Utc};
 
@@ -51,12 +51,19 @@ pub(super) fn build_bn_compute_output(input: BnComputeInput) -> BnComputeOutput 
         mode,
     } = input;
 
-    let grade_counts = crate::features::save::handler::compute_grade_counts(&parsed.game_record);
+    let known_song_ids = song_catalog.by_id.keys()
+        .map(|song_id| song_id.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+    let known_game_record = parsed.game_record.iter()
+        .filter(|(song_id, _)| known_song_ids.contains(&song_id.to_ascii_lowercase()))
+        .map(|(song_id, records)| (song_id.clone(), records.clone()))
+        .collect::<HashMap<_, _>>();
+    let grade_counts = crate::features::save::handler::compute_grade_counts(&known_game_record);
 
     let t_flatten = Instant::now();
-    let total_records = parsed.game_record.values().map(Vec::len).sum();
+    let total_records = known_game_record.values().map(Vec::len).sum();
     let mut all: Vec<RenderRecord> = Vec::with_capacity(total_records);
-    for (song_id, diffs) in &parsed.game_record {
+    for (song_id, diffs) in &known_game_record {
         // 查定数与曲名
         let chart = chart_constants.get(song_id);
         let name = song_catalog

@@ -1,16 +1,46 @@
 use super::urls::{
-    build_remote_illustration_url_with_options, remote_illustration_dir_for_category,
-    to_public_url_for_base, to_somnia_public_url_for_base, ExternalIllustrationDirMode,
+    ExternalIllustrationDirMode, build_remote_illustration_url_with_options,
+    remote_illustration_dir_for_category, to_public_url_for_base, to_somnia_public_url_for_base,
 };
 use super::{
-    generate_song_svg_string, generate_svg_string, render_svg_unified, PlayerStats, RenderRecord,
-    SongRenderData, Theme,
+    PlayerStats, RenderRecord, SongRenderData, Theme, generate_song_svg_string,
+    generate_svg_string, render_svg_unified,
 };
 use chrono::Utc;
 use sha2::{Digest as _, Sha256};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::OnceLock;
+
+#[test]
+fn custom_phi_plugin_p30_has_36_unique_numbered_cards() {
+    ensure_config_inited();
+    let all: Vec<RenderRecord> = (0..36).map(|i| RenderRecord {
+        song_id: format!("custom-{i}"), song_name: format!("UniqueSong{i:02}"),
+        difficulty: "IN".into(), score: Some(1_000_000.0), acc: 100.0,
+        rks: 18.0 - i as f64 * 0.1, difficulty_value: 18.0 - i as f64 * 0.1, is_fc: true,
+    }).collect();
+    let stats = PlayerStats {
+        image_title: "P30".into(), ap_top_3_avg: Some(17.9), best_27_avg: Some(16.4),
+        real_rks: Some(16.55), player_name: Some("Custom P30".into()), player_avatar: None,
+        update_time: Utc::now(), n: 36, ap_top_3_scores: all[..3].to_vec(),
+        challenge_rank: None, data_string: None, grade_counts: Default::default(),
+        custom_footer_text: Some("该B/P30内容由用户自定义".into()), is_user_generated: true,
+    };
+    let svg = generate_svg_string::<std::collections::hash_map::RandomState>(
+        &all[3..], &stats, None, &Theme::Black, true, None, Some("phi-plugin"),
+    ).unwrap();
+    for i in 0..36 {
+        assert_eq!(svg.matches(&format!("UniqueSong{i:02}")).count(), 1);
+        assert_eq!(svg.matches(&format!(">P{}</text>", i + 1)).count(), 1);
+    }
+    let divider = svg.find("class=\"overflow\">OVER FLOW").unwrap();
+    assert!(svg.find(">P30</text>").unwrap() < divider);
+    assert!(svg.find(">P31</text>").unwrap() > divider);
+    assert_eq!(svg.matches("filter=\"url(#card-edge-halo-gold)\"").count(), 3);
+    let (png, _) = render_svg_unified(&svg, false, Some("png"), Some(1200), None, None).unwrap();
+    if let Ok(path) = std::env::var("CUSTOM_P30_PREVIEW") { fs::write(path, png).unwrap(); }
+}
 
 fn ensure_config_inited() {
     static INIT: OnceLock<()> = OnceLock::new();

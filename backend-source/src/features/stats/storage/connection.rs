@@ -1,6 +1,6 @@
 use std::{path::Path, time::Duration};
 
-use sqlx::{sqlite::SqliteConnectOptions, ConnectOptions, Row, SqlitePool};
+use sqlx::{ConnectOptions, Row, SqlitePool, sqlite::SqliteConnectOptions};
 
 use crate::error::AppError;
 
@@ -28,6 +28,7 @@ impl StatsStorage {
     }
 
     pub async fn init_schema(&self) -> Result<(), AppError> {
+        sqlx::raw_sql(crate::features::feedback::SCHEMA).execute(&self.pool).await.map_err(|e| AppError::Internal(format!("feedback schema: {e}")))?;
         let ddl = r"
         CREATE TABLE IF NOT EXISTS events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -175,6 +176,45 @@ impl StatsStorage {
         CREATE INDEX IF NOT EXISTS idx_submissions_user ON save_submissions(user_hash, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_submissions_user_created_id ON save_submissions(user_hash, created_at DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_submissions_user_total_rks ON save_submissions(user_hash, total_rks DESC);
+
+        -- 每个账号每张谱面的最新有效成绩，用于公开的评级达成率聚合。
+        CREATE TABLE IF NOT EXISTS chart_achievement_samples (
+            user_hash TEXT NOT NULL,
+            song_id TEXT NOT NULL,
+            difficulty TEXT NOT NULL,
+            score INTEGER NOT NULL,
+            is_full_combo INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(user_hash, song_id, difficulty)
+        );
+        CREATE INDEX IF NOT EXISTS idx_chart_achievement_lookup
+            ON chart_achievement_samples(song_id, difficulty);
+
+        -- RKS 猜猜乐匿名题库。只保存脱敏后的 B30 线索和两位小数总 RKS，
+        -- 不保存原始存档、SessionToken、头像或昵称。
+        CREATE TABLE IF NOT EXISTS daily_checkins (
+            user_hash TEXT NOT NULL, date TEXT NOT NULL,
+            coin INTEGER NOT NULL CHECK(coin BETWEEN 15 AND 50),
+            luck INTEGER NOT NULL CHECK(luck BETWEEN 0 AND 100),
+            record_json TEXT NOT NULL, PRIMARY KEY(user_hash,date)
+        );
+        CREATE INDEX IF NOT EXISTS idx_checkins_date ON daily_checkins(date);
+        CREATE TABLE IF NOT EXISTS rks_guess_snapshots (
+            user_hash TEXT PRIMARY KEY,
+            total_rks REAL NOT NULL,
+            clues_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_rks_guess_snapshot_updated
+            ON rks_guess_snapshots(updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS rks_guess_wins (
+            game_id TEXT PRIMARY KEY,
+            user_hash TEXT NOT NULL,
+            mode TEXT NOT NULL CHECK(mode IN ('single','public')),
+            finished_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_rks_guess_wins_user ON rks_guess_wins(user_hash,finished_at);
 
         CREATE TABLE IF NOT EXISTS leaderboard_details (
             user_hash TEXT PRIMARY KEY,

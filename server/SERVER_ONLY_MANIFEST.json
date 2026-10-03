@@ -1,0 +1,67 @@
+{
+    "package":  "server-only-upgrade-Pre-0.9.7.9-CatalogSync-20260905-Fix1",
+    "kind":  "server-only",
+    "version":  "Pre-0.9.7.9",
+    "versionCode":  41,
+    "generatedAt":  "2026-09-05T23:59:00+08:00",
+    "appUpdateIsolation":  {
+                               "includesApk":  false,
+                               "publishesAppUpdate":  false,
+                               "modifiesLatestJson":  false,
+                               "preservesExistingLatestJson":  true
+                           },
+    "contents":  [
+                     "phi-backend.exe",
+                     "backend info data",
+                     "Phi-Plugin renderer fonts and grade assets",
+                     "Caddy route configuration",
+                     "runtime scripts",
+                     "backend source archive",
+                     "RKS 猜猜乐 API (`/api/v2/games/rks-guess/*`)",
+                     "匿名存档题库、回合线索历史和多人规则修复",
+                     "单人抽题有界读取、3 秒超时和异常快照校验",
+                     "重复开局复用、遗留对局回收和 2048 局硬上限",
+                     "独立回合作答页与结算页、双方确认后进入下一回合",
+                     "60 秒未作答直接判负，不再自动进入下一回合",
+                     "回合差值只在服务端计算，API 永不返回差值字段",
+                     "整局按 B30 槽位去重，公开匹配第 6 回合仍提供新线索",
+                     "公开匹配仅返回我方真实昵称，对方玩家保持匿名",
+                     "回合答案公布和下一回合准备状态",
+                     "给建议随机刷新严格排除当前帖子，不再按客户端历史队列回退",
+                     "没有其他可用帖子时保留当前页面并返回暂无新帖提示",
+                     "公告历史 index.json 与 latest.json 兼容迁移、原子写入和最新优先排序",
+                     "公告管理列表、新增、编辑与历史删除；最新公告仅允许编辑",
+                     "开放前 30 秒稳定性检查、公网路由探针、强制健康回滚和故障报告",
+                     "仅校验 latest.json，避免 app-update 全目录哈希造成误回滚"
+                 ],
+    "catalog":  {
+                    "version":  null,
+                    "versionStrategy":  "服务端按排序后的 SongInfo JSON 计算 SHA-256；每次完整解析成功后原子替换",
+                    "baselineSongCount":  312,
+                    "songCount":  314,
+                    "requiredSongIds":  [
+                                             "NWAD.Knighthood",
+                                             "DevastatingHistory.NAMV"
+                                         ],
+                    "newSongIds":  [
+                                       "NWAD.Knighthood",
+                                       "DevastatingHistory.NAMV"
+                                   ],
+                    "changedRecordCount":  49,
+                    "existingChangedRecordCount":  47,
+                    "atChangedRecordCount":  6,
+                    "newAt":  [
+                                  {
+                                      "songId":  "Archidoxen.Se_IRA",
+                                      "value":  16.9
+                                  }
+                              ],
+                    "upstreamRepository":  "https://github.com/Sczr0/Next-Phi-Backend",
+                    "upstreamCommit":  "ec00ae90b170565f72b8e209e6824ea6f0c3000e",
+                    "infoFiles":  {
+                                      "info.csv":  "521A1EFBDBB131E338AEE2B5078544183A2841758D7B6D5ECCB5CEB100C09EDC",
+                                      "difficulty.csv":  "34F5DADD6ACB8200399504BB447DB4015969B7B633B0E11A62E4C7E15117ABD9",
+                                      "nicklist.yaml":  "65408287F7EE2F7696E098E44FEA24D236B787135383E31CACEA64BF2299171E"
+                                  }
+                }
+}

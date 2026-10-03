@@ -481,10 +481,12 @@ mod tests {
         assert_eq!(rows, vec![1, 2]);
     }
 
-
     #[test]
     fn invalid_database_avatar_is_removed_from_public_ranklist() {
-        assert_eq!(official_avatar_name("Glaciaxion".into()).as_deref(), Some("Glaciaxion"));
+        assert_eq!(
+            official_avatar_name("Glaciaxion".into()).as_deref(),
+            Some("Glaciaxion")
+        );
         assert!(official_avatar_name("...".into()).is_none());
         assert!(official_avatar_name("\u{e}".into()).is_none());
     }

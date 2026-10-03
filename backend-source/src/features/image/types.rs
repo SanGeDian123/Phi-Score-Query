@@ -108,6 +108,15 @@ fn default_n() -> u32 {
 #[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RenderUserBnRequest {
+    /// 绑定账号认证：sessionToken 或 externalCredentials；也可由 Bearer 会话补齐
+    #[serde(flatten)]
+    pub auth: UnifiedSaveRequest,
+    /// 是否启用自定义 B/P30 规则。普通样式提交 30 张，Phi-Plugin B30 提交 36 张互不重复的谱面。
+    #[serde(default)]
+    pub custom: bool,
+    /// 自定义榜单类型：b30 或 p30。
+    #[serde(default)]
+    pub ranking: UserRanking,
     /// 主题（默认 black）
     #[serde(default)]
     pub theme: Theme,
@@ -119,6 +128,22 @@ pub struct RenderUserBnRequest {
     pub unlock_password: Option<String>,
     /// 成绩列表
     pub scores: Vec<UserScoreItem>,
+    /// 发起生成图片请求的 APP 版本，用于底部水印。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_version: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, utoipa::ToSchema, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum UserRanking {
+    B30,
+    P30,
+}
+
+impl Default for UserRanking {
+    fn default() -> Self {
+        Self::B30
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]

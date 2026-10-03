@@ -6,6 +6,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
@@ -24,7 +26,7 @@ class PhiApiClient(
     private val baseUrl: String,
     private val json: Json,
 ) {
-    private val client = OkHttpClient.Builder()
+    private val client = ResourceHttp.builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
@@ -87,6 +89,67 @@ class PhiApiClient(
             .build(),
     )
 
+    suspend fun checkin(accessToken: String, month: String, submit: Boolean): CheckinStatus = executeJson(
+        Request.Builder().url(url("api/v2/checkin") + "?month=" + month)
+            .header("Authorization", "Bearer $accessToken")
+            .apply { if (submit) post("{}".toRequestBody(jsonMediaType)) else get() }.build(),
+    )
+    suspend fun checkinLeaderboard(accessToken: String): CheckinLeaderboard = executeJson(
+        Request.Builder().url(url("api/v2/checkin/leaderboard"))
+            .header("Authorization", "Bearer $accessToken").get().build(),
+    )
+
+    suspend fun startRksGuess(mode: String, accessToken: String): RksGuessStatus = executeJson(
+        Request.Builder()
+            .url(url("api/v2/games/rks-guess/match"))
+            .header("Authorization", "Bearer $accessToken")
+            .post(buildJsonObject { put("mode", mode) }.toString().toRequestBody(jsonMediaType))
+            .build(),
+    )
+
+    suspend fun fetchRksGuess(accessToken: String, gameId: String): RksGuessStatus = executeJson(
+        Request.Builder()
+            .url(url("api/v2/games/rks-guess/$gameId"))
+            .header("Authorization", "Bearer $accessToken")
+            .get()
+            .build(),
+    )
+
+    suspend fun fetchRksGuessLeaderboard(accessToken: String): RksGuessWinLeaderboard = executeJson(
+        Request.Builder().url(url("api/v2/games/rks-guess/leaderboard"))
+            .header("Authorization", "Bearer $accessToken").get().build(),
+    )
+
+    suspend fun submitRksGuessAnswer(
+        accessToken: String,
+        gameId: String,
+        answer: Double,
+    ): RksGuessStatus = executeJson(
+        Request.Builder()
+            .url(url("api/v2/games/rks-guess/$gameId/answer"))
+            .header("Authorization", "Bearer $accessToken")
+            .post(buildJsonObject { put("answer", answer) }.toString().toRequestBody(jsonMediaType))
+            .build(),
+    )
+
+    suspend fun continueRksGuessRound(accessToken: String, gameId: String): RksGuessStatus = executeJson(
+        Request.Builder()
+            .url(url("api/v2/games/rks-guess/$gameId/next"))
+            .header("Authorization", "Bearer $accessToken")
+            .post("{}".toRequestBody(jsonMediaType))
+            .build(),
+    )
+
+    suspend fun leaveRksGuess(accessToken: String, gameId: String) {
+        executeBytes(
+            Request.Builder()
+                .url(url("api/v2/games/rks-guess/$gameId/leave"))
+                .header("Authorization", "Bearer $accessToken")
+                .post("{}".toRequestBody(jsonMediaType))
+                .build(),
+        )
+    }
+
     suspend fun searchSongs(accessToken: String, query: String): SongSearchPage {
         val searchUrl = url("api/v2/songs/search").toHttpUrlOrNull()
             ?.newBuilder()
@@ -137,6 +200,26 @@ class PhiApiClient(
             }
             throw IOException("无法连接曲库服务器，请稍后重试", lastError)
         }
+
+    suspend fun fetchChartAchievementRates(
+        accessToken: String,
+        songId: String,
+        difficulty: String,
+    ): ChartAchievementResponse {
+        val requestUrl = url("api/v2/songs/achievement-rates").toHttpUrlOrNull()
+            ?.newBuilder()
+            ?.addQueryParameter("song_id", songId)
+            ?.addQueryParameter("difficulty", difficulty)
+            ?.build()
+            ?: throw IOException("谱面评级达成率接口地址无效")
+        return executeJson(
+            Request.Builder()
+                .url(requestUrl)
+                .header("Authorization", "Bearer $accessToken")
+                .get()
+                .build(),
+        )
+    }
 
     suspend fun fetchLeaderboard(accessToken: String): LeaderboardResponse = executeJson(
         Request.Builder()
@@ -206,6 +289,44 @@ class PhiApiClient(
         )
     }
 
+    suspend fun renderCustomRanking(
+        accessToken: String,
+        width: Int,
+        ranking: String,
+        scores: List<CustomRankingImageScore>,
+        style: B30ImageStyle,
+        isDarkTheme: Boolean,
+    ): ByteArray {
+        val requestBody = buildJsonObject {
+            put("custom", true)
+            put("ranking", ranking)
+            put("theme", if (isDarkTheme) "black" else "white")
+            put("appVersion", BuildConfig.VERSION_NAME)
+            put("scores", buildJsonArray {
+                scores.forEach { item ->
+                    add(buildJsonObject {
+                        put("song", item.songId)
+                        put("difficulty", item.difficulty)
+                        put("acc", item.accuracy)
+                        item.score?.let { put("score", it) }
+                    })
+                }
+            })
+        }.toString()
+        val templateQuery = when (style) {
+            B30ImageStyle.CLASSIC -> ""
+            B30ImageStyle.MINIMAL -> "&template=minimal"
+            B30ImageStyle.PHI_PLUGIN -> "&template=phi-plugin"
+        }
+        return executeBytes(
+            Request.Builder()
+                .url(url("api/v2/image/bn/user?format=png&width=$width$templateQuery"))
+                .header("Authorization", "Bearer $accessToken")
+                .post(requestBody.toRequestBody(jsonMediaType))
+                .build(),
+        )
+    }
+
     suspend fun createSuggestionPost(
         accessToken: String,
         description: String,
@@ -232,11 +353,15 @@ class PhiApiClient(
 
     suspend fun fetchRandomSuggestion(
         accessToken: String,
-        excludeId: String? = null,
+        excludedIds: List<String> = emptyList(),
     ): SuggestionPost {
         val requestUrl = url("api/v2/suggestions/random").toHttpUrlOrNull()
             ?.newBuilder()
-            ?.apply { excludeId?.takeIf(String::isNotBlank)?.let { addQueryParameter("exclude", it) } }
+            ?.apply {
+                excludedIds.map(String::trim).filter(String::isNotEmpty).distinct().take(10)
+                    .takeIf(List<String>::isNotEmpty)
+                    ?.let { addQueryParameter("exclude_ids", it.joinToString(",")) }
+            }
             ?.build()
             ?: throw IOException("建议接口地址无效")
         return executeJson<SuggestionPost>(
@@ -339,6 +464,47 @@ class PhiApiClient(
         )
     }
 
+    suspend fun createFeedback(token: String, draft: FeedbackDraft): Feedback = executeJson(
+        Request.Builder().url(url("api/v2/feedback")).header("Authorization", "Bearer $token")
+            .post(json.encodeToString(draft).toRequestBody(jsonMediaType)).build(),
+    )
+    suspend fun feedbackList(token: String, offset: Int = 0, notifications: Boolean = false): List<Feedback> = executeJson(
+        Request.Builder().url(url(if (notifications) "api/v2/feedback/notifications" else "api/v2/feedback/mine?offset=$offset"))
+            .header("Authorization", "Bearer $token").build(),
+    )
+    suspend fun feedbackRead(token: String, id: String, revision: Long): Boolean = executeJson(
+        Request.Builder().url(url("api/v2/feedback/$id/read")).header("Authorization", "Bearer $token")
+            .post(buildJsonObject { put("revision", revision) }.toString().toRequestBody(jsonMediaType)).build(),
+    )
+    suspend fun feedbackUpdates(token: String, cursor: String?): FeedbackUpdates {
+        val endpoint = url("api/v2/feedback/updates").toHttpUrlOrNull()!!.newBuilder()
+            .apply { cursor?.let { addQueryParameter("cursor", it) } }.build()
+        val request = Request.Builder().url(endpoint).header("Authorization", "Bearer $token").build()
+        // Long-held requests must release the socket immediately on logout/cancellation.
+        val bytes = kotlinx.coroutines.suspendCancellableCoroutine<ByteArray> { continuation ->
+            val call = client.newCall(request)
+            continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : okhttp3.Callback {
+                override fun onFailure(call: okhttp3.Call, e: IOException) {
+                    continuation.resumeWith(Result.failure(e))
+                }
+                override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+                    val result = runCatching {
+                        response.use {
+                            val body = it.body?.bytes() ?: ByteArray(0)
+                            if (!it.isSuccessful) throw ApiException(it.code, "反馈更新连接失败（${it.code}）")
+                            body
+                        }
+                    }
+                    continuation.resumeWith(result)
+                }
+            })
+        }
+        return json.decodeFromString(bytes.decodeToString())
+    }
+    suspend fun feedbackImage(token: String, id: String, position: Int): ByteArray = executeBytes(
+        Request.Builder().url(url("api/v2/feedback/$id/images/$position")).header("Authorization", "Bearer $token").build(),
+    )
     suspend fun fetchAppUpdate(): AppUpdateManifest = executeJson(
         Request.Builder()
             .url(url("app-update/latest.json"))
@@ -350,6 +516,14 @@ class PhiApiClient(
     suspend fun fetchAppAnnouncement(): AppAnnouncement = executeJson(
         Request.Builder()
             .url(url("app-announcement/latest.json"))
+            .header("Cache-Control", "no-cache")
+            .get()
+            .build(),
+    )
+
+    suspend fun fetchAppAnnouncementHistory(): AppAnnouncementFeed = executeJson(
+        Request.Builder()
+            .url(url("app-announcement/index.json"))
             .header("Cache-Control", "no-cache")
             .get()
             .build(),

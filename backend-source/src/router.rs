@@ -3,10 +3,10 @@
 //! 将 route 注册、middleware 层叠、压缩策略等横切关注点从 main.rs 中提取，
 //! 保持 main.rs 专注于进程初始化与生命周期管理。
 
-use axum::http::{header, HeaderValue};
+use axum::http::{HeaderValue, header};
 use axum::middleware::Next;
 use axum::response::Response;
-use axum::{extract::Request, routing::get, Router};
+use axum::{Router, extract::Request, routing::get};
 use tower_http::compression::CompressionLayer;
 use tower_http::services::ServeDir;
 use utoipa::OpenApi;
@@ -18,8 +18,8 @@ use crate::features::health::handler::health_check;
 use crate::features::leaderboard::handler::create_leaderboard_router;
 use crate::features::open_platform;
 use crate::features::stats::{
-    middleware::{stats_middleware, StateWithStats},
     StatsHandle,
+    middleware::{StateWithStats, stats_middleware},
 };
 use crate::features::{auth, save, song};
 use crate::openapi::ApiDoc;
@@ -44,13 +44,16 @@ fn compression_predicate() -> impl tower_http::compression::predicate::Predicate
 
 /// 为曲绘静态资源（`/_ill/*`）添加缓存头。
 async fn ill_cache_control_middleware(req: Request, next: Next) -> Response {
-    let is_ill = req.uri().path().starts_with("/_ill/");
+    let is_ill = req.uri().path().starts_with("/_ill/") || req.uri().path().starts_with("/suggestion-media/");
     let mut res = next.run(req).await;
-    if is_ill && res.headers().get(header::CACHE_CONTROL).is_none() {
+    if is_ill && res.status().is_success() && res.headers().get(header::CACHE_CONTROL).is_none() {
         res.headers_mut().insert(
             header::CACHE_CONTROL,
             HeaderValue::from_static("public, max-age=604800, immutable"),
         );
+    }
+    if is_ill && !res.status().is_success() && res.status() != axum::http::StatusCode::NOT_MODIFIED {
+        res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     }
     res
 }
@@ -64,6 +67,9 @@ fn build_api_router(state: &AppState, config: &AppConfig) -> Router<AppState> {
         .merge(crate::features::image::create_image_router())
         .merge(create_leaderboard_router())
         .merge(crate::features::rks::handler::create_rks_router())
+        .merge(crate::features::rks_guess::create_rks_guess_router())
+        .merge(crate::features::checkin::router())
+        .merge(crate::features::feedback::router())
         .merge(crate::features::stats::handler::create_stats_router())
         .merge(crate::features::suggestion::create_suggestion_router());
 
@@ -91,6 +97,9 @@ pub fn build_app(
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("resources/suggestion-media"));
     let api_router = build_api_router(&state, config);
+    let preview_roots = crate::features::media_preview::PreviewRoots {
+        illustrations: ill_root.clone(), suggestions: suggestion_media_root.clone(),
+    };
 
     let mut app = Router::<AppState>::new()
         .route("/health", get(health_check))
@@ -102,6 +111,9 @@ pub fn build_app(
         .merge(SwaggerUi::new("/docs").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .with_state(state);
 
+    app = app.layer(axum::middleware::from_fn_with_state(
+        preview_roots, crate::features::media_preview::middleware,
+    ));
     // /_ill 缓存头
     app = app.layer(axum::middleware::from_fn(ill_cache_control_middleware));
 
@@ -134,7 +146,7 @@ pub fn build_app(
 mod compression_predicate_tests {
     use super::compression_predicate;
     use axum::body::Body;
-    use axum::http::{header, Response as HttpResponse};
+    use axum::http::{Response as HttpResponse, header};
     use tower_http::compression::predicate::Predicate;
 
     fn should_compress_for(ct: &str) -> bool {

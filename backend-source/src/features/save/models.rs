@@ -236,6 +236,9 @@ pub struct SaveAndRksResponseDoc {
     pub save: ParsedSaveDoc,
     /// 玩家 RKS 概览
     pub rks: crate::rks_contract::engine::PlayerRksResult,
+    /// 当前后端曲库尚未收录的存档曲目 ID
+    #[serde(rename = "unknownSongIds")]
+    pub unknown_song_ids: Vec<String>,
     /// 按难度统计的 C/FC/P 成绩数量（仅 calculate_rks=true 时返回）
     #[serde(rename = "gradeCounts")]
     pub grade_counts: CfcPCountsByDifficulty,

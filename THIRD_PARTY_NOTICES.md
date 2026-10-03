@@ -7,6 +7,7 @@ Phi Score Query 使用以下主要第三方软件。具体版本以 `app/build.g
 | AndroidX / Jetpack Compose / Material 3 | Apache-2.0 |
 | Kotlin、kotlinx.coroutines、kotlinx.serialization | Apache-2.0 |
 | OkHttp | Apache-2.0 |
+| Gson（谱面流式 JSON 读取） | Apache-2.0 |
 | Coil | Apache-2.0 |
 | Source Han Sans | SIL Open Font License 1.1 |
 | Saira | SIL Open Font License 1.1 |

@@ -57,8 +57,10 @@ fn make_state() -> AppState {
     let song_image_cache: Cache<String, Bytes> = Cache::builder().max_capacity(16).build();
 
     AppState {
-        chart_constants: Arc::new(std::collections::HashMap::default()),
-        song_catalog: Arc::new(SongCatalog::default()),
+        chart_constants: phi_backend::state::Reloadable::new(
+            std::collections::HashMap::default(),
+        ),
+        song_catalog: phi_backend::state::Reloadable::new(SongCatalog::default()),
         taptap_client,
         qrcode_service,
         stats: None,

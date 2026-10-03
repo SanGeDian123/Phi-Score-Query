@@ -18,6 +18,8 @@ $runCaddySource = Join-Path $bundleRoot 'scripts\Run-Caddy.ps1'
 $publishSource = Join-Path $bundleRoot 'scripts\Publish-AppAnnouncement.ps1'
 $manifestPath = Join-Path $bundleRoot 'SHA256SUMS.json'
 $announcementRoot = Join-Path $installRoot 'app-announcement'
+$announcementLatest = Join-Path $announcementRoot 'latest.json'
+$announcementIndex = Join-Path $announcementRoot 'index.json'
 
 foreach ($required in @(
     $manifestPath,
@@ -53,6 +55,7 @@ if ($LASTEXITCODE -ne 0) { throw 'New Caddy configuration validation failed.' }
 
 $backupRoot = Join-Path $installRoot ('backup\app-announcement-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 New-Item -ItemType Directory -Force -Path $backupRoot, $announcementRoot | Out-Null
+$hadAnnouncementIndex = Test-Path -LiteralPath $announcementIndex
 Copy-Item -LiteralPath $caddyTarget -Destination (Join-Path $backupRoot 'Caddyfile') -Force
 Copy-Item -LiteralPath $runCaddyTarget -Destination (Join-Path $backupRoot 'Run-Caddy.ps1') -Force
 $hadPublishScript = Test-Path -LiteralPath $publishTarget
@@ -74,6 +77,28 @@ try {
     Copy-Item -LiteralPath $caddySource -Destination $caddyTarget -Force
     Copy-Item -LiteralPath $runCaddySource -Destination $runCaddyTarget -Force
     Copy-Item -LiteralPath $publishSource -Destination $publishTarget -Force
+    if (-not $hadAnnouncementIndex) {
+        $items = @()
+        if (Test-Path -LiteralPath $announcementLatest) {
+            try {
+                $items = @([IO.File]::ReadAllText($announcementLatest, [Text.Encoding]::UTF8) | ConvertFrom-Json)
+            } catch {
+                throw "现有 latest.json 不是有效 JSON，无法迁移公告历史: $($_.Exception.Message)"
+            }
+        }
+        $temporaryIndex = "$announcementIndex.$([Guid]::NewGuid().ToString('N')).upload"
+        try {
+            $index = [ordered]@{ items = @($items) }
+            [IO.File]::WriteAllText(
+                $temporaryIndex,
+                ($index | ConvertTo-Json -Depth 6),
+                (New-Object Text.UTF8Encoding($false))
+            )
+            Move-Item -LiteralPath $temporaryIndex -Destination $announcementIndex -Force
+        } finally {
+            if (Test-Path -LiteralPath $temporaryIndex) { Remove-Item -LiteralPath $temporaryIndex -Force }
+        }
+    }
     Start-ScheduledTask -TaskName 'PhigrosScore-Caddy'
     Start-Sleep -Seconds 3
     if ((Get-ScheduledTask -TaskName 'PhigrosScore-Caddy').State -ne 'Running') {
@@ -92,6 +117,9 @@ try {
         Copy-Item -LiteralPath (Join-Path $backupRoot 'Publish-AppAnnouncement.ps1') -Destination $publishTarget -Force
     } elseif (Test-Path -LiteralPath $publishTarget) {
         Remove-Item -LiteralPath $publishTarget -Force
+    }
+    if (-not $hadAnnouncementIndex -and (Test-Path -LiteralPath $announcementIndex)) {
+        Remove-Item -LiteralPath $announcementIndex -Force
     }
     Start-ScheduledTask -TaskName 'PhigrosScore-Caddy' -ErrorAction SilentlyContinue
     throw "APP announcement deployment failed and was rolled back. Original error: $($_.Exception.Message)"

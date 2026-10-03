@@ -40,6 +40,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        appViewModel.startSongCatalogSync()
+        xyz.plcliangpicup.phigrosscore.data.FeedbackNotificationManager.schedule(applicationContext)
+    }
+
+    override fun onStop() {
+        appViewModel.stopSongCatalogSync()
+        super.onStop()
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -47,6 +58,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openSuggestionFromIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra(xyz.plcliangpicup.phigrosscore.data.FeedbackNotificationManager.EXTRA_FEEDBACK, false) == true) {
+            xyz.plcliangpicup.phigrosscore.ui.FeedbackNavigation.destination.value = "mine"
+            intent.removeExtra(xyz.plcliangpicup.phigrosscore.data.FeedbackNotificationManager.EXTRA_FEEDBACK)
+        }
         intent?.getStringExtra(SuggestionNotificationManager.EXTRA_POST_ID)
             ?.takeIf(String::isNotBlank)
             ?.let(appViewModel::openSuggestionPost)

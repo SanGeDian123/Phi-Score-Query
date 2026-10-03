@@ -1,0 +1,6 @@
+name: "高仿官皮"
+author: fkh
+hitFx: [6, 5]
+holdAtlas: [50, 50]
+holdAtlasMH: [50, 93]
+hitFxScale: 0.95

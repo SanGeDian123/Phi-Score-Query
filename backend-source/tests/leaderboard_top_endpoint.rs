@@ -51,8 +51,10 @@ fn new_test_state(storage: Arc<StatsStorage>) -> AppState {
     let song_image_cache: Cache<String, Bytes> = Cache::builder().max_capacity(1024).build();
 
     AppState {
-        chart_constants: Arc::new(std::collections::HashMap::default()),
-        song_catalog: Arc::new(SongCatalog::default()),
+        chart_constants: phi_backend::state::Reloadable::new(
+            std::collections::HashMap::default(),
+        ),
+        song_catalog: phi_backend::state::Reloadable::new(SongCatalog::default()),
         taptap_client: Arc::new(taptap_client),
         qrcode_service: Arc::new(
             phi_backend::features::auth::qrcode_service::QrCodeService::default(),

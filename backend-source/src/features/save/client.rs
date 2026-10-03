@@ -57,8 +57,6 @@ struct SaveInfoResponse {
 
 #[derive(Debug, Deserialize)]
 struct SaveInfoResult {
-    #[serde(rename = "objectId")]
-    object_id: String,
     summary: String,
     #[serde(rename = "gameFile")]
     game_file: GameFile,
@@ -72,6 +70,12 @@ struct SaveInfoResult {
 
 #[derive(Debug, Deserialize)]
 struct SaveUser {
+    #[serde(rename = "objectId")]
+    object_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CurrentUser {
     #[serde(rename = "objectId")]
     object_id: String,
 }
@@ -125,6 +129,30 @@ struct KdfFields {
     password_b64: Option<String>,
 }
 
+const QUARANTINED_CN_USER_OBJECT_ID: &str = "6a265effd774134774ac90d6";
+
+fn select_owned_save(
+    results: Vec<SaveInfoResult>,
+    current_user_id: &str,
+    is_cn: bool,
+) -> Result<SaveInfoResult, SaveProviderError> {
+    if is_cn && current_user_id == QUARANTINED_CN_USER_OBJECT_ID {
+        return Err(SaveProviderError::Metadata(
+            "当前账号存档处于隔离状态".into(),
+        ));
+    }
+
+    results
+        .into_iter()
+        .find(|result| {
+            result
+                .user
+                .as_ref()
+                .is_some_and(|user| user.object_id == current_user_id)
+        })
+        .ok_or_else(|| SaveProviderError::Metadata("未找到与当前登录账号匹配的存档".to_string()))
+}
+
 pub async fn fetch_from_official(
     session_token: &str,
     config: &crate::config::TapTapMultiConfig,
@@ -146,6 +174,31 @@ pub async fn fetch_from_official(
     };
     // 不去 limit=1 —— 可能有需要跳过的坏数据
     let url = format!("{}{}", tap_config.leancloud_base_url, path);
+
+    // 先从同一 SessionToken 获取当前 LeanCloud 用户，再严格按 owner 选择存档。
+    // 不能依赖上游 ACL 恰好只返回一条记录：一旦 ACL 或返回顺序变化，直接取 results[0]
+    // 会把某个用户的存档错误地复用于所有请求，且随后还可能污染服务端成绩/图片缓存。
+    let current_user_response = client
+        .get(format!("{}/users/me", tap_config.leancloud_base_url))
+        .header("X-LC-Id", &tap_config.leancloud_app_id)
+        .header("X-LC-Key", &tap_config.leancloud_app_key)
+        .header("X-LC-Session", session_token)
+        .header("User-Agent", USER_AGENT)
+        .send()
+        .await?;
+    if !current_user_response.status().is_success() {
+        return Err(SaveProviderError::Auth(format!(
+            "用户身份校验失败: {}",
+            current_user_response.status()
+        )));
+    }
+    let current_user: CurrentUser = current_user_response.json().await?;
+    let current_user_id = current_user.object_id.trim();
+    if current_user_id.is_empty() {
+        return Err(SaveProviderError::Metadata(
+            "用户身份响应缺少 objectId".into(),
+        ));
+    }
 
     let t_http = Instant::now();
     let response = client
@@ -176,26 +229,7 @@ pub async fn fetch_from_official(
     }
 
     let save_info: SaveInfoResponse = response.json().await?;
-    let result = save_info
-        .results
-        .into_iter()
-        .find(|r| {
-            // 过滤 0608 事件残留的异常存档
-            if is_cn
-                && r.user
-                    .as_ref()
-                    .is_some_and(|u| u.object_id == "6a265effd774134774ac90d6")
-            {
-                tracing::warn!(
-                    target: "phi_backend::save::client",
-                    save_object_id = %r.object_id,
-                    "跳过异常存档 (bad user objectId)"
-                );
-                return false;
-            }
-            true
-        })
-        .ok_or_else(|| SaveProviderError::Metadata("未找到存档".to_string()))?;
+    let result = select_owned_save(save_info.results, current_user_id, is_cn)?;
 
     let download_url = if result.game_file.url.starts_with("http") {
         result.game_file.url
@@ -428,10 +462,76 @@ pub async fn fetch_from_external(
 
 #[cfg(test)]
 mod tests {
-    use super::clamp_pbkdf2_rounds;
+    use super::{GameFile, SaveInfoResult, SaveUser, clamp_pbkdf2_rounds, select_owned_save};
+    use crate::config::{TapTapConfig, TapTapMultiConfig, TapTapVersion};
+
+    fn save_result(save_id: &str, owner_id: Option<&str>) -> SaveInfoResult {
+        SaveInfoResult {
+            summary: "summary".into(),
+            game_file: GameFile {
+                _object_id: format!("file-{save_id}"),
+                url: format!("https://example.invalid/{save_id}.zip"),
+            },
+            updated_at: "2026-08-23T00:00:00Z".into(),
+            user: owner_id.map(|object_id| SaveUser {
+                object_id: object_id.to_string(),
+            }),
+            crypto: None,
+        }
+    }
 
     fn ensure_config_initialized() {
         let _ = crate::config::AppConfig::init_global();
+    }
+
+    fn tap_config(base_url: &str) -> TapTapMultiConfig {
+        let version = TapTapConfig {
+            device_code_endpoint: "http://example.invalid/device".into(),
+            token_endpoint: "http://example.invalid/token".into(),
+            user_info_endpoint: "http://example.invalid/user".into(),
+            leancloud_base_url: base_url.to_string(),
+            leancloud_app_id: "test-app-id".into(),
+            leancloud_app_key: "test-app-key".into(),
+        };
+        TapTapMultiConfig {
+            cn: version.clone(),
+            global: version,
+            default_version: TapTapVersion::Global,
+        }
+    }
+
+    async fn start_owner_mock_server(save_results: serde_json::Value) -> std::net::SocketAddr {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock server");
+        let address = listener.local_addr().expect("mock server address");
+        tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut socket, _) = listener.accept().await.expect("accept mock request");
+                let mut request = vec![0_u8; 8192];
+                let bytes_read = socket.read(&mut request).await.expect("read mock request");
+                let request = String::from_utf8_lossy(&request[..bytes_read]);
+                let body = if request.starts_with("GET /users/me ") {
+                    serde_json::json!({ "objectId": "current-user" }).to_string()
+                } else if request.starts_with("GET /classes/_GameSave ") {
+                    serde_json::json!({ "results": save_results }).to_string()
+                } else {
+                    panic!("unexpected mock request: {request}");
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                socket
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("write mock response");
+            }
+        });
+        address
     }
 
     #[test]
@@ -444,5 +544,71 @@ mod tests {
         assert!(low >= 1000);
         assert_eq!(ok, 5000);
         assert!(high <= 100_000);
+    }
+
+    #[test]
+    fn select_owned_save_ignores_first_foreign_record() {
+        let selected = select_owned_save(
+            vec![
+                save_result("foreign-save", Some("foreign-user")),
+                save_result("own-save", Some("current-user")),
+            ],
+            "current-user",
+            true,
+        )
+        .expect("owned save");
+
+        assert!(selected.game_file.url.ends_with("/own-save.zip"));
+    }
+
+    #[test]
+    fn select_owned_save_rejects_foreign_or_ownerless_records() {
+        let result = select_owned_save(
+            vec![
+                save_result("foreign-save", Some("foreign-user")),
+                save_result("ownerless-save", None),
+            ],
+            "current-user",
+            true,
+        );
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("与当前登录账号匹配")
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_from_official_matches_save_to_users_me_owner() {
+        let address = start_owner_mock_server(serde_json::json!([
+            {
+                "objectId": "foreign-save",
+                "summary": "foreign-summary",
+                "gameFile": { "objectId": "foreign-file", "url": "https://example.invalid/foreign.zip" },
+                "updatedAt": "2026-08-22T00:00:00Z",
+                "user": { "objectId": "foreign-user" }
+            },
+            {
+                "objectId": "own-save",
+                "summary": "own-summary",
+                "gameFile": { "objectId": "own-file", "url": "https://example.invalid/own.zip" },
+                "updatedAt": "2026-08-23T00:00:00Z",
+                "user": { "objectId": "current-user" }
+            }
+        ]))
+        .await;
+        let config = tap_config(&format!("http://{address}"));
+
+        let (download_url, _, summary, updated_at) =
+            super::fetch_from_official("session-current", &config, Some("global"))
+                .await
+                .expect("owned save metadata");
+
+        assert_eq!(download_url, "https://example.invalid/own.zip");
+        assert_eq!(summary.as_deref(), Some("own-summary"));
+        assert_eq!(updated_at.as_deref(), Some("2026-08-23T00:00:00Z"));
     }
 }
