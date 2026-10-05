@@ -245,6 +245,7 @@ import xyz.plcliangpicup.phigrosscore.data.LoginProgress
 import xyz.plcliangpicup.phigrosscore.data.LeaderboardEntry
 import xyz.plcliangpicup.phigrosscore.data.LeaderboardMe
 import xyz.plcliangpicup.phigrosscore.data.LeaderboardSnapshot
+import xyz.plcliangpicup.phigrosscore.data.PLAYER_LEADERBOARD_LIMIT
 import xyz.plcliangpicup.phigrosscore.data.PlayerProfile
 import androidx.lifecycle.repeatOnLifecycle
 import xyz.plcliangpicup.phigrosscore.data.PracticeCharts
@@ -310,6 +311,17 @@ private const val BACKEND_REPOSITORY_URL = "https://github.com/Sczr0/Next-Phi-Ba
 private const val EXPERIENCE_SURVEY_URL = "https://wj.qq.com/s2/27522729/6kti/"
 
 private val changelogEntries = listOf(
+    ChangelogEntry(
+        "Pre-0.9.7.12",
+        "",
+        listOf(
+            "还原了部分谱面中的“噪域”；",
+            "修复了“谱面播放与练习”功能的部分已知问题；",
+            "将课题模式等级“黄”更改为“金”；",
+            "玩家排行榜展示数量提升至前1,500名。",
+            "自定义BP30功能现支持导入已有BP30。",
+        ),
+    ),
     ChangelogEntry(
         "Pre-0.9.7.11-Fix",
         "定数表与新曲信息修复",
@@ -784,6 +796,7 @@ fun PhigrosScoreApp(viewModel: AppViewModel) {
                  onSearchAchievementSongs = viewModel::searchAchievementSongs,
                   onLoadAchievementRates = viewModel::loadChartAchievementRates,
                   onGenerateCustomRankingImage = viewModel::generateCustomRankingImage,
+                  onImportCustomRanking = viewModel::importCustomRanking,
                   onClearCustomRanking = viewModel::clearCustomRanking,
                   onCheckin = viewModel::loadCheckin,
                   onCheckinRanks = viewModel::loadCheckinRanks,
@@ -1544,6 +1557,7 @@ internal fun MainShell(
     onSearchAchievementSongs: (String) -> Unit,
     onLoadAchievementRates: (String, String) -> Unit,
     onGenerateCustomRankingImage: () -> Unit,
+    onImportCustomRanking: () -> Unit,
     onClearCustomRanking: () -> Unit,
     onCheckin: (String, Boolean) -> Unit,
     onCheckinRanks: () -> Unit,
@@ -1702,6 +1716,7 @@ internal fun MainShell(
                       onSearchAchievementSongs = onSearchAchievementSongs,
                       onLoadAchievementRates = onLoadAchievementRates,
                       onGenerateCustomRankingImage = onGenerateCustomRankingImage,
+                      onImportCustomRanking = onImportCustomRanking,
                       onClearCustomRanking = onClearCustomRanking,
                       onCheckin = onCheckin,
                       onCheckinRanks = onCheckinRanks,
@@ -1803,6 +1818,7 @@ private fun PageContent(
     onSearchAchievementSongs: (String) -> Unit,
     onLoadAchievementRates: (String, String) -> Unit,
     onGenerateCustomRankingImage: () -> Unit,
+    onImportCustomRanking: () -> Unit,
     onClearCustomRanking: () -> Unit,
     onCheckin: (String, Boolean) -> Unit,
     onCheckinRanks: () -> Unit,
@@ -1889,6 +1905,7 @@ private fun PageContent(
                       onSearchAchievementSongs = onSearchAchievementSongs,
                       onLoadAchievementRates = onLoadAchievementRates,
                       onGenerateCustomRankingImage = onGenerateCustomRankingImage,
+                      onImportCustomRanking = onImportCustomRanking,
                       onClearCustomRanking = onClearCustomRanking,
                       onCheckin = onCheckin,
                       onCheckinRanks = onCheckinRanks,
@@ -2171,7 +2188,7 @@ private fun CurrentPlayerRankCard(
                 }
                 Text(
                     when {
-                        me.rank > 1000 -> "当前排名不在前 1000 名"
+                        me.rank > PLAYER_LEADERBOARD_LIMIT -> "当前排名不在前 1,500 名"
                         me.rank > 0 -> "超过 ${"%.2f".format(me.percentile)}% 的公开玩家"
                         else -> "刷新存档后生成排名"
                     },
@@ -4217,6 +4234,7 @@ private fun MorePage(
     onSearchAchievementSongs: (String) -> Unit,
     onLoadAchievementRates: (String, String) -> Unit,
     onGenerateCustomRankingImage: () -> Unit,
+    onImportCustomRanking: () -> Unit,
     onClearCustomRanking: () -> Unit,
     onCheckin: (String, Boolean) -> Unit,
     onCheckinRanks: () -> Unit,
@@ -4243,6 +4261,7 @@ private fun MorePage(
             onSearchAchievementSongs = onSearchAchievementSongs,
             onLoadAchievementRates = onLoadAchievementRates,
             onGenerateCustomRankingImage = onGenerateCustomRankingImage,
+            onImportCustomRanking = onImportCustomRanking,
             onClearCustomRanking = onClearCustomRanking,
             onCheckin = onCheckin,
                       onCheckinRanks = onCheckinRanks,
@@ -4346,6 +4365,8 @@ private fun SettingsPage(
     var showAbout by remember { mutableStateOf(false) }
     var showPracticeResources by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val noiseSettings = remember(context) { PracticeNoiseSettings(context) }
+    var noiseCompatibilityMode by remember { mutableStateOf(noiseSettings.compatibilityMode) }
     val feedbackUnread by FeedbackNotificationManager.observeInAppUnread(context).collectAsState()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         PageHeader("设置", BuildConfig.VERSION_NAME)
@@ -4378,6 +4399,13 @@ private fun SettingsPage(
                 "查看与删除已下载的谱面",
                 onClick = { showPracticeResources = true },
             )
+            }
+            SettingsSectionLabel("谱面播放")
+            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(AppSurface)) {
+                NoiseCompatibilitySetting(noiseCompatibilityMode) { enabled ->
+                    noiseSettings.setCompatibilityMode(enabled)
+                    noiseCompatibilityMode = enabled
+                }
             }
             SettingsSectionLabel("反馈")
             Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(AppSurface)) {
@@ -4705,6 +4733,20 @@ private fun AutoRefreshSetting(enabled: Boolean, onEnabledChange: (Boolean) -> U
                 modifier = Modifier.padding(start = 12.dp),
             )
         }
+    }
+}
+
+@Composable
+private fun NoiseCompatibilitySetting(enabled: Boolean, onEnabledChange: (Boolean) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("噪域兼容模式", fontWeight = FontWeight.Medium, fontSize = 14.sp)
+            Text("使用旧版噪域样式", color = AppTextMuted, fontSize = 12.sp)
+        }
+        Switch(checked = enabled, onCheckedChange = onEnabledChange, modifier = Modifier.padding(start = 12.dp))
     }
 }
 

@@ -1,0 +1,604 @@
+// Phigros 4.0.1 APK GLES3 ActiveBlock / DisabledBlock fragment formula translation.
+// Geometry masks use Android field pixels; chart and Unity UVs have a bottom-left origin.
+uniform float4 _Time;
+uniform float4 _ScreenParams;
+uniform float4 _EffectRT_TexelSize;
+uniform int _TouchPosCount;
+uniform float2 _TouchPos[10];
+uniform float _TouchPosShine;
+uniform shader _ComposeRT;
+uniform shader _EffectRT;
+uniform shader _DisabledNormalBlockRT;
+uniform shader _DisabledSubtractBlockRT;
+uniform shader _ReadyComposeRT;
+uniform shader _TouchHoverRT;
+uniform shader _DisabledComposeRT;
+uniform shader _DisplaceMap;
+uniform shader _TouchDisplaceMap;
+uniform shader _SparkMap;
+uniform shader _NoiseMap;
+uniform shader _SceneColor;
+uniform shader _BackgroundColor;
+uniform float2 _SceneRenderScale;
+uniform int _OverlayOnly;
+float2 androidPosition(float2 uv) { return float2(uv.x, 1.0 - uv.y) * _ScreenParams.xy; }
+float4 sample_ComposeRT(float2 uv) { return float4(_ComposeRT.eval(androidPosition(uv))); }
+float4 sample_EffectRT(float2 uv) { return float4(_EffectRT.eval(androidPosition(uv))); }
+float4 sample_DisabledNormalBlockRT(float2 uv) { return float4(_DisabledNormalBlockRT.eval(androidPosition(uv))); }
+float4 sample_DisabledSubtractBlockRT(float2 uv) { return float4(_DisabledSubtractBlockRT.eval(androidPosition(uv))); }
+float4 sample_ReadyComposeRT(float2 uv) { return float4(_ReadyComposeRT.eval(androidPosition(uv))); }
+float4 sample_TouchHoverRT(float2 uv) { return float4(_TouchHoverRT.eval(androidPosition(uv))); }
+float4 sample_DisabledComposeRT(float2 uv) { return float4(_DisabledComposeRT.eval(androidPosition(uv))); }
+float4 sample_DisplaceMap(float2 uv) { return float4(_DisplaceMap.eval(float2(uv.x, 1.0 - uv.y) * float2(256.0, 256.0))); }
+float4 sample_TouchDisplaceMap(float2 uv) { return float4(_TouchDisplaceMap.eval(float2(uv.x, 1.0 - uv.y) * float2(256.0, 256.0))); }
+float4 sample_SparkMap(float2 uv) { return float4(_SparkMap.eval(float2(uv.x, 1.0 - uv.y) * float2(128.0, 128.0))); }
+float4 sample_NoiseMap(float2 uv) { return float4(_NoiseMap.eval(float2(uv.x, 1.0 - uv.y) * float2(256.0, 256.0))); }
+const float4 D_FillColor = float4(0.4970000088214874, 0.13766898214817047, 0.13766898214817047, 1.0);
+const float D_FillOpacity = 0.4000000059604645;
+const float3 D_SparkTint = float3(0.31132078170776367, 0.07783019542694092, 0.07783019542694092);
+const float D_SparkMapOpacity = 3.5;
+const float D_SparkDisplaceIntensity = 2.2899999618530273;
+const float D_DisplaceSpeed = 0.30000001192092896;
+const float4 D_DisplaceDirection = float4(1.0, 1.0, 0.0, 0.0);
+
+
+
+
+
+const float4 D_DisplaceMap_ST = float4(0.5, 0.20000000298023224, 0.0, 0.0);
+const float4 D_SparkMap_ST = float4(3.0, 1.2000000476837158, 0.0, 0.0);
+float4 disabledFragment(float2 uv) {
+float2 Dvs_TEXCOORD0 = uv;
+float2 Dvs_TEXCOORD2 = uv * D_DisplaceMap_ST.xy + D_DisplaceMap_ST.zw;
+float2 Dvs_TEXCOORD3 = uv * D_SparkMap_ST.xy + D_SparkMap_ST.zw;
+float4 Dvs_COLOR0 = float4(1.0);
+
+float Du_xlat16_0 = float(0);
+float3 Du_xlat16_1 = float3(0);
+float4 Du_xlat2 = float4(0);
+float Du_xlat16_3 = float(0);
+float3 Du_xlat4 = float3(0);
+float Du_xlat16_4 = float(0);
+bool Du_xlatb4 = bool(false);
+float Du_xlat16_8 = float(0);
+float Du_xlat16_9 = float(0);
+float Du_xlat16_13 = float(0);
+
+float4 DSV_Target0 = float4(0.0);
+
+    Du_xlat16_0 = sample_DisabledComposeRT(Dvs_TEXCOORD0.xy).x;
+    Du_xlat16_1.x = Du_xlat16_0 + -9.99999975e-05;
+    Du_xlatb4 = Du_xlat16_1.x<0.0;
+    if(Du_xlatb4){return float4(0.0);}
+    Du_xlat4.x = _Time.x * D_DisplaceSpeed;
+    Du_xlat16_1.x = dot(D_DisplaceDirection.xy, D_DisplaceDirection.xy);
+    Du_xlat16_1.x = inversesqrt(Du_xlat16_1.x);
+    Du_xlat16_1.xy = Du_xlat16_1.xx * D_DisplaceDirection.xy;
+    Du_xlat2.xyw = Du_xlat4.xxx * Du_xlat16_1.xyx;
+    Du_xlat2.z = Du_xlat4.x * (-Du_xlat16_1.y);
+    Du_xlat2 = Du_xlat2 + Dvs_TEXCOORD2.xyxy;
+    Du_xlat16_4 = sample_DisplaceMap(Du_xlat2.zw).x;
+    Du_xlat16_8 = sample_DisplaceMap(Du_xlat2.xy).x;
+    Du_xlat16_9 = Du_xlat16_4 + -0.5;
+    Du_xlat16_13 = Du_xlat16_4 + Du_xlat16_8;
+    Du_xlat16_3 = Du_xlat16_8 + -0.5;
+    Du_xlat16_13 = Du_xlat16_13 * 0.5;
+    Du_xlat2.x = Du_xlat16_9 * (-Du_xlat16_1.y);
+    Du_xlat2.y = Du_xlat16_9 * Du_xlat16_1.x;
+    Du_xlat4.xy = Du_xlat16_1.xy * float2(Du_xlat16_3) + Du_xlat2.xy;
+    Du_xlat4.xy = Du_xlat4.xy * float2(D_SparkDisplaceIntensity) + Dvs_TEXCOORD3.xy;
+    Du_xlat16_4 = sample_SparkMap(Du_xlat4.xy).x;
+    Du_xlat4.xyz = float3(Du_xlat16_4) * D_SparkTint.xyz;
+    Du_xlat4.xyz = float3(Du_xlat16_13) * Du_xlat4.xyz;
+    Du_xlat16_1.xyz = D_FillColor.xyz * float3(D_FillOpacity);
+    Du_xlat16_1.xyz = Du_xlat4.xyz * float3(D_SparkMapOpacity) + Du_xlat16_1.xyz;
+    DSV_Target0.xyz = float3(Du_xlat16_0) * Du_xlat16_1.xyz;
+    DSV_Target0.w = Dvs_COLOR0.w;
+    return DSV_Target0;
+
+}
+
+float4 sample_SceneColor(float2 uv) {
+    // DisabledBlock's One/One camera pass already belongs to the scene copied by BlockRender.
+    float2 position = androidPosition(uv);
+    // Unity's copied SceneColor RT is point-filtered. The RenderEffect child
+    // may interpolate, so address the exact centre of its bounded source texel.
+    float4 source = float4(_SceneColor.eval(floor(position * _SceneRenderScale) + float2(0.5)));
+    float4 background = float4(_BackgroundColor.eval(position));
+    source = source + background * (1.0 - source.a);
+    float4 disabled = disabledFragment(uv);
+    return float4(clamp(source.rgb + disabled.rgb, 0.0, 1.0), source.a);
+}
+const float4 _EdgeColor = float4(1.0, 0.3301885724067688, 0.3301885724067688, 1.0);
+const float _EdgeOpacity = 0.800000011920929;
+const float4 _FillColor = float4(0.713207483291626, 0.23549295961856842, 0.23549295961856842, 1.0);
+const float _FillStrength = 0.6669999957084656;
+const float _FillOpacity = 0.6669999957084656;
+const float4 _GlowColor = float4(1.0, 0.17924517393112183, 0.17924517393112183, 1.0);
+const float _GlowIntensity = 0.800000011920929;
+const float3 _SparkTint = float3(1.0, 0.28490567207336426, 0.28490567207336426);
+const float _SparkMapOpacity = 5.690000057220459;
+const float _SparkHueShiftAmount = 0.20000000298023224;
+const float _SparkDisplaceIntensity = 2.390000104904175;
+const float _DisplaceBlendIntensity = 0.41100001335144043;
+const float _DisplaceSpeed = 1.5;
+const float _DisplaceStrength = 0.15000000596046448;
+const float4 _DisplaceDirection = float4(1.0, 1.0, 0.0, 0.0);
+
+
+
+const float _TouchPosRadius = 0.5;
+const float _TouchPosSDFSmoothness = 0.4699999988079071;
+const float _TouchPosSDFFalloff = 0.4099999964237213;
+const float _BackgroundPixelScale = 6.0;
+const float _ShineSpeed = 37.900001525878906;
+const float _ShineBrightness = 0.11999999731779099;
+const float4 _ShineColor = float4(1.0, 1.0, 1.0, 1.0);
+const float _TouchDisplaceSpeed = 2.9000000953674316;
+const float _TouchDisplaceStrength = 0.07999999821186066;
+const float4 _TouchDisplaceDirection = float4(1.0, 1.0, 0.0, 0.0);
+const float4 _NoiseTint = float4(1.0, 0.0, 0.0, 1.0);
+const float _NoiseEvoSpeed = 0.029999999329447746;
+const float _NoiseDirChangeSpeed = 60.0;
+const float _NoiseDisplaceStrength = 1.0;
+const float _NoiseRadius = 0.47999998927116394;
+const float _NoiseSmoothness = 1.0;
+const float _SDFCellSize = 0.10999999940395355;
+const float _SDFSmoothness = 0.6299999952316284;
+const float _SDFFalloff = 0.3400000035762787;
+const float _SDFMoveSpeed = 9.300000190734863;
+const float4 _TouchGlowColor = float4(1.0, 0.0, 0.0, 1.0);
+const float _TouchBackgroundPixelScale = 8.0;
+
+
+
+
+
+
+
+
+const float4 _DisplaceMap_ST = float4(0.800000011920929, 0.30000001192092896, 0.0, 0.0);
+const float4 _NoiseMap_ST = float4(1.5, 1.4600000381469727, 0.0, 0.0);
+const float4 _SparkMap_ST = float4(3.0, 1.2000000476837158, 0.0, 0.0);
+const float4 _TouchDisplaceMap_ST = float4(0.550000011920929, 0.30000001192092896, 0.0, 0.0);
+float4 activeFragment(float2 uv) {
+float2 vs_TEXCOORD0 = uv;
+float2 vs_TEXCOORD1 = uv * _DisplaceMap_ST.xy + _DisplaceMap_ST.zw;
+float2 vs_TEXCOORD2 = uv * _SparkMap_ST.xy + _SparkMap_ST.zw;
+float2 vs_TEXCOORD4 = uv * _TouchDisplaceMap_ST.xy + _TouchDisplaceMap_ST.zw;
+float4 vs_TEXCOORD3 = float4(uv, 0.0, 1.0);
+float2 vs_TEXCOORD5 = uv * _NoiseMap_ST.xy + _NoiseMap_ST.zw;
+float vs_TEXCOORD6 = _ScreenParams.y * 0.888888896 / _ScreenParams.x;
+
+float4 u_xlat0 = float4(0);
+float u_xlat16_0 = float(0);
+bool3 u_xlatb0 = bool3(false);
+float4 u_xlat1 = float4(0);
+float2 u_xlat16_1 = float2(0);
+int u_xlati1 = int(0);
+bool u_xlatb1 = bool(false);
+float4 u_xlat16_2 = float4(0);
+float4 u_xlat16_3 = float4(0);
+float4 u_xlat4 = float4(0);
+float4 u_xlat16_4 = float4(0);
+float4 u_xlat5 = float4(0);
+float4 u_xlat16_5 = float4(0);
+float3 u_xlat6 = float3(0);
+bool3 u_xlatb6 = bool3(false);
+float2 u_xlat7 = float2(0);
+float4 u_xlat16_7 = float4(0);
+float4 u_xlat16_8 = float4(0);
+float3 u_xlat16_9 = float3(0);
+float3 u_xlat16_10 = float3(0);
+float3 u_xlat11 = float3(0);
+float3 u_xlat12 = float3(0);
+float3 u_xlat16_13 = float3(0);
+float3 u_xlat16_14 = float3(0);
+float3 u_xlat16_15 = float3(0);
+float2 u_xlat16 = float2(0);
+float u_xlat16_16 = float(0);
+bool u_xlatb16 = bool(false);
+float3 u_xlat17 = float3(0);
+float u_xlat16_17 = float(0);
+int u_xlati17 = int(0);
+float u_xlat16_18 = float(0);
+float3 u_xlat16_21 = float3(0);
+float2 u_xlat22 = float2(0);
+float2 u_xlat32 = float2(0);
+float u_xlat16_32 = float(0);
+bool u_xlatb32 = bool(false);
+float2 u_xlat33 = float2(0);
+float u_xlat16_33 = float(0);
+float u_xlat16_34 = float(0);
+float u_xlat16_35 = float(0);
+float u_xlat16_37 = float(0);
+float2 u_xlat38 = float2(0);
+float u_xlat48 = float(0);
+float u_xlat16_48 = float(0);
+float u_xlat49 = float(0);
+bool u_xlatb49 = bool(false);
+float u_xlat16_50 = float(0);
+float u_xlat16_51 = float(0);
+float u_xlat52 = float(0);
+float u_xlat16_56 = float(0);
+
+float4 SV_Target0 = float4(0.0);
+
+    u_xlat0.x = vs_TEXCOORD0.x + -0.5;
+    u_xlat0.x = -abs(u_xlat0.x) + vs_TEXCOORD6;
+    u_xlatb0.x = u_xlat0.x<0.0;
+    if(u_xlatb0.x){return float4(0.0);}
+    u_xlat16_0 = sample_ComposeRT(vs_TEXCOORD0.xy).x;
+    u_xlat16.xy = vs_TEXCOORD0.xy * _EffectRT_TexelSize.zw;
+    u_xlat16.xy = floor(u_xlat16.xy);
+    u_xlat16.xy = u_xlat16.xy + float2(0.5, 0.5);
+    u_xlat16.xy = u_xlat16.xy * _EffectRT_TexelSize.xy;
+    u_xlat16_16 = sample_EffectRT(u_xlat16.xy).x;
+    u_xlat16_32 = sample_EffectRT(vs_TEXCOORD0.xy).y;
+    u_xlat16_48 = sample_DisabledNormalBlockRT(vs_TEXCOORD0.xy).x;
+    u_xlat16_1.x = sample_DisabledSubtractBlockRT(vs_TEXCOORD0.xy).y;
+    u_xlat16_17 = sample_ReadyComposeRT(vs_TEXCOORD0.xy).x;
+    u_xlat16_2.x = (-u_xlat16_48) + u_xlat16_1.x;
+    u_xlat16_18 = u_xlat16_17 * abs(u_xlat16_2.x);
+    u_xlat48 = sample_TouchHoverRT(vs_TEXCOORD0.xy).x;
+    u_xlat16_34 = u_xlat16_16 + u_xlat16_0;
+    u_xlat16_50 = u_xlat16_32 + u_xlat16_34;
+    u_xlat16_2.x = abs(u_xlat16_2.x) * u_xlat16_17 + u_xlat16_50;
+    u_xlat16_2.x = u_xlat48 + u_xlat16_2.x;
+    u_xlat16_2.x = u_xlat16_2.x + -9.99999975e-05;
+    u_xlatb1 = u_xlat16_2.x<0.0;
+    if(u_xlatb1){return float4(0.0);}
+    u_xlatb1 = 9.99999975e-05<u_xlat16_50;
+    if(u_xlatb1){
+        u_xlat16_2.x = u_xlat16_16 * _EdgeOpacity;
+        u_xlat16_34 = u_xlat16_34 * (-u_xlat16_32) + u_xlat16_32;
+        u_xlat16_50 = u_xlat16_34 * _GlowIntensity;
+        u_xlat16_3.x = dot(_DisplaceDirection.xy, _DisplaceDirection.xy);
+        u_xlat16_3.x = inversesqrt(u_xlat16_3.x);
+        u_xlat16_3.xy = u_xlat16_3.xx * _DisplaceDirection.xy;
+        u_xlat16.x = _Time.x * _DisplaceSpeed;
+        u_xlat33.y = u_xlat16.x * u_xlat16_3.x;
+        u_xlat1.xy = u_xlat16_3.xy * u_xlat16.xx + vs_TEXCOORD1.xy;
+        u_xlat32.x = max(_BackgroundPixelScale, 1.0);
+        u_xlat1.xy = u_xlat1.xy * _ScreenParams.xy;
+        u_xlat1.xy = u_xlat1.xy / u_xlat32.xx;
+        u_xlat1.xy = floor(u_xlat1.xy);
+        u_xlat4.x = u_xlat32.x * 0.5;
+        u_xlat1.xy = u_xlat1.xy * u_xlat32.xx + u_xlat4.xx;
+        u_xlat33.x = u_xlat16.x * (-u_xlat16_3.y);
+        u_xlat33.xy = u_xlat33.xy + vs_TEXCOORD1.xy;
+        u_xlat33.xy = u_xlat33.xy * _ScreenParams.xy;
+        u_xlat33.xy = u_xlat33.xy / u_xlat32.xx;
+        u_xlat33.xy = floor(u_xlat33.xy);
+        u_xlat1.zw = u_xlat33.xy * u_xlat32.xx + u_xlat4.xx;
+        u_xlat1 = u_xlat1 / _ScreenParams.xyxy;
+        u_xlat16_16 = sample_DisplaceMap(u_xlat1.xy).x;
+        u_xlat16_1.x = sample_DisplaceMap(u_xlat1.zw).x;
+        u_xlat16_35 = u_xlat16_16 + u_xlat16_1.x;
+        u_xlat16_35 = u_xlat16_35 * 0.5;
+        u_xlat16_51 = u_xlat16_16 + -0.5;
+        u_xlat16_5.x = u_xlat16_1.x + -0.5;
+        u_xlat1.x = (-u_xlat16_3.y) * u_xlat16_5.x;
+        u_xlat1.y = u_xlat16_3.x * u_xlat16_5.x;
+        u_xlat1.xy = u_xlat16_3.xy * float2(u_xlat16_51) + u_xlat1.xy;
+        u_xlat33.xy = vs_TEXCOORD0.xy * _ScreenParams.xy;
+        u_xlat33.xy = u_xlat33.xy / u_xlat32.xx;
+        u_xlat33.xy = floor(u_xlat33.xy);
+        u_xlat16.xy = u_xlat33.xy * u_xlat32.xx + u_xlat4.xx;
+        u_xlat16.xy = u_xlat16.xy / _ScreenParams.xy;
+        u_xlat16.xy = u_xlat1.xy * float2(float2(_DisplaceStrength, _DisplaceStrength)) + u_xlat16.xy;
+        u_xlat33.xy = u_xlat1.xy * float2(float2(_SparkDisplaceIntensity, _SparkDisplaceIntensity)) + vs_TEXCOORD2.xy;
+        u_xlat16_33 = sample_SparkMap(u_xlat33.xy).x;
+        u_xlat4.xyz = float3(u_xlat16_33) * _SparkTint.xyz;
+        u_xlat6.xyz = sample_SceneColor(u_xlat16.xy).xyz;
+        u_xlatb16 = 0<_TouchPosCount;
+        if(u_xlatb16){
+            u_xlat16.xy = vs_TEXCOORD3.xy / vs_TEXCOORD3.ww;
+            u_xlat16.xy = u_xlat1.xy * float2(float2(_DisplaceStrength, _DisplaceStrength)) + u_xlat16.xy;
+            u_xlat16.xy = u_xlat16.xy * _ScreenParams.xy;
+            u_xlat16.xy = u_xlat16.xy / _ScreenParams.yy;
+            u_xlati1 = _TouchPosCount;
+            u_xlat33.x = float(1.0);
+            for(int u_xlati_loop_1 = int(0) ; u_xlati_loop_1<10 ; u_xlati_loop_1++)
+            {
+                u_xlatb49 = u_xlati_loop_1>=u_xlati1;
+                if(u_xlatb49){
+                    break;
+                }
+                u_xlat7.xy = u_xlat16.xy + (-_TouchPos[u_xlati_loop_1].xy);
+                u_xlat49 = dot(u_xlat7.xy, u_xlat7.xy);
+                u_xlat49 = sqrt(u_xlat49);
+                u_xlat52 = (-u_xlat49) + u_xlat33.x;
+                u_xlat52 = -abs(u_xlat52) + _TouchPosSDFSmoothness;
+                u_xlat52 = max(u_xlat52, 0.0);
+                u_xlat52 = u_xlat52 / _TouchPosSDFSmoothness;
+                u_xlat49 = min(u_xlat49, u_xlat33.x);
+                u_xlat52 = u_xlat52 * u_xlat52;
+                u_xlat52 = u_xlat52 * _TouchPosSDFSmoothness;
+                u_xlat33.x = (-u_xlat52) * 0.25 + u_xlat49;
+            }
+            u_xlat16.x = u_xlat33.x + (-_TouchPosRadius);
+            u_xlat32.x = float(1.0) / (-_TouchPosRadius);
+            u_xlat16.x = u_xlat32.x * u_xlat16.x;
+            u_xlat16.x = clamp(u_xlat16.x, 0.0, 1.0);
+            u_xlat32.x = u_xlat16.x * -2.0 + 3.0;
+            u_xlat16.x = u_xlat16.x * u_xlat16.x;
+            u_xlat16.x = u_xlat16.x * u_xlat32.x;
+            u_xlat16.x = log2(u_xlat16.x);
+            u_xlat16.x = u_xlat16.x * _TouchPosSDFFalloff;
+            u_xlat16.x = exp2(u_xlat16.x);
+        } else {
+            u_xlat16.x = 0.0;
+        }
+        u_xlat16_3.xyw = float3(u_xlat16_35) * u_xlat4.xyz;
+        u_xlat1.xyz = u_xlat16_3.xyw * float3(_SparkMapOpacity);
+        u_xlatb32 = u_xlat6.y>=u_xlat6.z;
+        u_xlat16_5.x = (u_xlatb32) ? 1.0 : 0.0;
+        u_xlat16_21.xy = (-u_xlat6.zy) + u_xlat6.yz;
+        u_xlat16_8.x = float(1.0);
+        u_xlat16_8.y = float(-1.0);
+        u_xlat16_4.xy = u_xlat16_5.xx * u_xlat16_21.xy + u_xlat6.zy;
+        u_xlat16_4.zw = u_xlat16_5.xx * u_xlat16_8.xy + float2(-1.0, 0.666666687);
+        u_xlatb32 = u_xlat6.x>=u_xlat16_4.x;
+        u_xlat16_5.x = (u_xlatb32) ? 1.0 : 0.0;
+        u_xlat16_7.xyz = (-u_xlat16_4.xyw);
+        u_xlat16_7.w = (-u_xlat6.x);
+        u_xlat16_8.x = u_xlat6.x + u_xlat16_7.x;
+        u_xlat16_8.yzw = u_xlat16_4.yzx + u_xlat16_7.yzw;
+        u_xlat16_21.xyz = u_xlat16_5.xxx * u_xlat16_8.xyz + u_xlat16_4.xyw;
+        u_xlat16_5.x = u_xlat16_5.x * u_xlat16_8.w + u_xlat6.x;
+        u_xlat16_8.x = min(u_xlat16_21.y, u_xlat16_5.x);
+        u_xlat16_8.x = u_xlat16_21.x + (-u_xlat16_8.x);
+        u_xlat16_5.x = (-u_xlat16_21.y) + u_xlat16_5.x;
+        u_xlat32.x = u_xlat16_8.x * 6.0 + 1.00000001e-10;
+        u_xlat32.x = u_xlat16_5.x / u_xlat32.x;
+        u_xlat32.x = u_xlat32.x + u_xlat16_21.z;
+        u_xlat49 = u_xlat16_21.x + 1.00000001e-10;
+        u_xlat49 = u_xlat16_8.x / u_xlat49;
+        u_xlat16_5.x = u_xlat1.x * _SparkHueShiftAmount + abs(u_xlat32.x);
+        u_xlat16_37 = u_xlat1.y * _SparkHueShiftAmount + u_xlat49;
+        u_xlat16_21.x = u_xlat1.z * _SparkHueShiftAmount + u_xlat16_21.x;
+        u_xlat16_8.xyz = u_xlat16_5.xxx + float3(1.0, 0.666666687, 0.333333343);
+        u_xlat16_8.xyz = fract(u_xlat16_8.xyz);
+        u_xlat16_8.xyz = u_xlat16_8.xyz * float3(6.0, 6.0, 6.0) + float3(-3.0, -3.0, -3.0);
+        u_xlat16_8.xyz = abs(u_xlat16_8.xyz) + float3(-1.0, -1.0, -1.0);
+        u_xlat16_8.xyz = clamp(u_xlat16_8.xyz, 0.0, 1.0);
+        u_xlat16_8.xyz = u_xlat16_8.xyz + float3(-1.0, -1.0, -1.0);
+        u_xlat16_5.xzw = float3(u_xlat16_37) * u_xlat16_8.xyz + float3(1.0, 1.0, 1.0);
+        u_xlat16_8.xyz = u_xlat16_5.xzw * u_xlat16_21.xxx;
+        u_xlat16_9.xyz = u_xlat16_8.xyz + u_xlat16_8.xyz;
+        u_xlat16_10.xyz = u_xlat1.xyz * u_xlat16_9.xyz;
+        u_xlat16_5.xyz = (-u_xlat16_21.xxx) * u_xlat16_5.xzw + float3(1.0, 1.0, 1.0);
+        u_xlat16_5.xyz = u_xlat16_5.xyz + u_xlat16_5.xyz;
+        u_xlat16_3.xyw = (-u_xlat16_3.xyw) * float3(_SparkMapOpacity) + float3(1.0, 1.0, 1.0);
+        u_xlat16_3.xyw = (-u_xlat16_5.xyz) * u_xlat16_3.xyw + float3(1.0, 1.0, 1.0);
+        u_xlatb6.xyz = bool3(u_xlat16_8.x >= 0.5, u_xlat16_8.y >= 0.5, u_xlat16_8.z >= 0.5);
+        u_xlat6.x = u_xlatb6.x ? float(1.0) : 0.0;
+        u_xlat6.y = u_xlatb6.y ? float(1.0) : 0.0;
+        u_xlat6.z = u_xlatb6.z ? float(1.0) : 0.0;
+;
+        u_xlat1.xyz = (-u_xlat16_9.xyz) * u_xlat1.xyz + u_xlat16_3.xyw;
+        u_xlat1.xyz = u_xlat6.xyz * u_xlat1.xyz + u_xlat16_10.xyz;
+        u_xlat1.xyz = clamp(u_xlat1.xyz, 0.0, 1.0);
+        u_xlat16_3.xyz = (-float3(u_xlat16_35)) * float3(float3(_DisplaceBlendIntensity, _DisplaceBlendIntensity, _DisplaceBlendIntensity)) + _FillColor.xyz;
+        u_xlat16_5.xyz = u_xlat1.xyz + (-u_xlat16_3.xyz);
+        u_xlat16_3.xyz = float3(_FillStrength) * u_xlat16_5.xyz + u_xlat16_3.xyz;
+        u_xlat16_5.xyz = float3(u_xlat16_50) * _GlowColor.xyz;
+        u_xlat16_5.xyz = _EdgeColor.xyz * u_xlat16_2.xxx + u_xlat16_5.xyz;
+        u_xlat16_3.xyz = u_xlat16_3.xyz * float3(u_xlat16_0) + u_xlat16_5.xyz;
+        u_xlat16_50 = u_xlat16.x * _TouchPosShine + 1.0;
+        u_xlat16_3.xyz = float3(u_xlat16_50) * u_xlat16_3.xyz;
+        u_xlat16_2.x = u_xlat16_0 * _FillOpacity + u_xlat16_2.x;
+        SV_Target0.w = u_xlat16_34 * _GlowIntensity + u_xlat16_2.x;
+    } else {
+        u_xlat16_3.x = float(0.0);
+        u_xlat16_3.y = float(0.0);
+        u_xlat16_3.z = float(0.0);
+        SV_Target0.w = 0.0;
+    }
+    u_xlatb0.x = 9.99999975e-05<u_xlat16_18;
+    u_xlat1.xyz = float3(float3(_ShineBrightness, _ShineBrightness, _ShineBrightness)) * _ShineColor.xyz;
+    u_xlat16.x = _Time.y * _ShineSpeed;
+    u_xlat16.x = sin(u_xlat16.x);
+    u_xlat16.x = u_xlat16.x * 0.5 + 1.0;
+    u_xlat1.xyz = u_xlat16.xxx * u_xlat1.xyz;
+    u_xlat1.xyz = float3(u_xlat16_18) * u_xlat1.xyz;
+    u_xlat16_2.xzw = (u_xlatb0.x) ? u_xlat1.xyz : float3(0.0, 0.0, 0.0);
+    u_xlat16_18 = (u_xlatb0.x) ? u_xlat16_18 : 0.0;
+    u_xlatb0.x = 9.99999975e-05<u_xlat48;
+    if(u_xlatb0.x){
+        u_xlat0.x = dot(_TouchDisplaceDirection.xy, _TouchDisplaceDirection.xy);
+        u_xlat0.x = inversesqrt(u_xlat0.x);
+        u_xlat0.xy = u_xlat0.xx * _TouchDisplaceDirection.xy;
+        u_xlat1.x = _Time.x * _TouchDisplaceSpeed;
+        u_xlat17.xy = u_xlat0.xy * u_xlat1.xx + vs_TEXCOORD4.xy;
+        u_xlat49 = max(_TouchBackgroundPixelScale, 1.0);
+        u_xlat17.xy = u_xlat17.xy * _ScreenParams.xy;
+        u_xlat17.xy = u_xlat17.xy / float2(u_xlat49);
+        u_xlat17.xy = floor(u_xlat17.xy);
+        u_xlat6.x = u_xlat49 * 0.5;
+        u_xlat1.yz = u_xlat17.xy * float2(u_xlat49) + u_xlat6.xx;
+        u_xlat0.zw = (-u_xlat0.yy);
+        u_xlat22.xy = u_xlat0.zx * u_xlat1.xx + vs_TEXCOORD4.xy;
+        u_xlat22.xy = u_xlat22.xy * _ScreenParams.xy;
+        u_xlat22.xy = u_xlat22.xy / float2(u_xlat49);
+        u_xlat22.xy = floor(u_xlat22.xy);
+        u_xlat1.xw = u_xlat22.xy * float2(u_xlat49) + u_xlat6.xx;
+        u_xlat1 = u_xlat1 / _ScreenParams.xxyy;
+        u_xlat16_32 = sample_TouchDisplaceMap(u_xlat1.yz).x;
+        u_xlat16_1.x = sample_TouchDisplaceMap(u_xlat1.xw).x;
+        u_xlat16_51 = u_xlat16_32 + -0.5;
+        u_xlat16_5.x = u_xlat16_1.x + -0.5;
+        u_xlat32.xy = u_xlat0.wx * u_xlat16_5.xx;
+        u_xlat0.xy = u_xlat0.xy * float2(u_xlat16_51) + u_xlat32.xy;
+        u_xlat0.xy = u_xlat0.xy * float2(float2(_TouchDisplaceStrength, _TouchDisplaceStrength)) + vs_TEXCOORD0.xy;
+        u_xlat16_0 = sample_TouchHoverRT(u_xlat0.xy).x;
+        u_xlat16.xy = vs_TEXCOORD3.xy / vs_TEXCOORD3.ww;
+        u_xlat48 = _Time.y * _NoiseDirChangeSpeed;
+        u_xlat1.x = floor(u_xlat48);
+        u_xlat48 = fract(u_xlat48);
+        u_xlat17.x = u_xlat48 * u_xlat48;
+        u_xlat48 = (-u_xlat48) * 2.0 + 3.0;
+        u_xlat48 = u_xlat48 * u_xlat17.x;
+        u_xlat4.xz = u_xlat1.xx * float2(0.103100002, 0.103100002);
+        u_xlat4.y = float(0.381470025);
+        u_xlat4.w = float(0.93821007);
+        u_xlat4 = fract(u_xlat4);
+        u_xlat17.xyz = u_xlat4.yxx + float3(33.3300018, 33.3300018, 33.3300018);
+        u_xlat17.x = dot(u_xlat4.xyx, u_xlat17.xyz);
+        u_xlat17.xy = u_xlat17.xx + u_xlat4.xy;
+        u_xlat33.x = u_xlat17.y + u_xlat17.x;
+        u_xlat17.x = u_xlat17.x * u_xlat33.x;
+        u_xlat6.x = fract(u_xlat17.x);
+        u_xlat17.xyz = u_xlat4.wzz + float3(33.3300018, 33.3300018, 33.3300018);
+        u_xlat17.x = dot(u_xlat4.zwz, u_xlat17.xyz);
+        u_xlat17.xy = u_xlat17.xx + u_xlat4.zw;
+        u_xlat33.x = u_xlat17.y + u_xlat17.x;
+        u_xlat17.x = u_xlat17.x * u_xlat33.x;
+        u_xlat6.y = fract(u_xlat17.x);
+        u_xlat17.xy = u_xlat6.xy * float2(2.0, 2.0) + float2(-1.0, -1.0);
+        u_xlat1.x = u_xlat1.x + 1.0;
+        u_xlat4.xz = u_xlat1.xx * float2(0.103100002, 0.103100002);
+        u_xlat4.y = float(0.381470025);
+        u_xlat4.w = float(0.93821007);
+        u_xlat4 = fract(u_xlat4);
+        u_xlat6.xyz = u_xlat4.yxx + float3(33.3300018, 33.3300018, 33.3300018);
+        u_xlat1.x = dot(u_xlat4.xyx, u_xlat6.xyz);
+        u_xlat1.xw = u_xlat1.xx + u_xlat4.xy;
+        u_xlat49 = u_xlat1.w + u_xlat1.x;
+        u_xlat1.x = u_xlat1.x * u_xlat49;
+        u_xlat6.x = fract(u_xlat1.x);
+        u_xlat11.xyz = u_xlat4.wzz + float3(33.3300018, 33.3300018, 33.3300018);
+        u_xlat1.x = dot(u_xlat4.zwz, u_xlat11.xyz);
+        u_xlat1.xw = u_xlat1.xx + u_xlat4.zw;
+        u_xlat49 = u_xlat1.w + u_xlat1.x;
+        u_xlat1.x = u_xlat1.x * u_xlat49;
+        u_xlat6.y = fract(u_xlat1.x);
+        u_xlat1.xw = u_xlat6.xy * float2(2.0, 2.0) + float2(-1.0, -1.0);
+        u_xlat1.xw = (-u_xlat17.xy) + u_xlat1.xw;
+        u_xlat1.xy = float2(u_xlat48) * u_xlat1.xw + u_xlat17.xy;
+        u_xlat1.xy = u_xlat1.xy * float2(_NoiseEvoSpeed) + vs_TEXCOORD5.xy;
+        u_xlat16_1.xy = sample_NoiseMap(u_xlat1.xy).xy;
+        u_xlat1.xy = u_xlat16_1.xy + float2(-0.5, -0.5);
+        u_xlat48 = _NoiseRadius + (-_NoiseSmoothness);
+        u_xlat33.x = _NoiseRadius + _NoiseSmoothness;
+        u_xlat33.x = (-u_xlat48) + u_xlat33.x;
+        u_xlat48 = (-u_xlat48) + u_xlat16_0;
+        u_xlat33.x = float(1.0) / u_xlat33.x;
+        u_xlat48 = u_xlat48 * u_xlat33.x;
+        u_xlat48 = clamp(u_xlat48, 0.0, 1.0);
+        u_xlat33.x = u_xlat48 * -2.0 + 3.0;
+        u_xlat48 = u_xlat48 * u_xlat48;
+        u_xlat48 = u_xlat48 * u_xlat33.x;
+        u_xlat33.x = _ScreenParams.y * _SDFCellSize;
+        u_xlat16_5.xy = u_xlat1.xy + u_xlat1.xy;
+        u_xlat1.xy = u_xlat16_5.xy * float2(float2(_NoiseDisplaceStrength, _NoiseDisplaceStrength));
+        u_xlat1.xy = u_xlat33.xx * u_xlat1.xy;
+        u_xlat1.xy = u_xlat1.xy / _ScreenParams.xy;
+        u_xlat16.xy = u_xlat16.xy + u_xlat1.xy;
+        u_xlat16.xy = u_xlat16.xy * _ScreenParams.xy;
+        u_xlat16.xy = u_xlat16.xy / u_xlat33.xx;
+        u_xlat1.xy = floor(u_xlat16.xy);
+        u_xlat16.xy = fract(u_xlat16.xy);
+        u_xlat33.x = _Time.y * _SDFMoveSpeed;
+        u_xlat49 = floor(u_xlat33.x);
+        u_xlat33.x = fract(u_xlat33.x);
+        u_xlat6.x = u_xlat33.x * u_xlat33.x;
+        u_xlat33.x = (-u_xlat33.x) * 2.0 + 3.0;
+        u_xlat33.x = u_xlat33.x * u_xlat6.x;
+        u_xlat1.xy = float2(u_xlat49) + u_xlat1.xy;
+        u_xlat6.xy = u_xlat1.xy * float2(0.103100002, 0.103100002);
+        u_xlat6.xy = fract(u_xlat6.xy);
+        u_xlat11.xyz = u_xlat6.yxx + float3(33.3300018, 33.3300018, 33.3300018);
+        u_xlat49 = dot(u_xlat6.xyx, u_xlat11.xyz);
+        u_xlat6.xy = float2(u_xlat49) + u_xlat6.xy;
+        u_xlat49 = u_xlat6.y + u_xlat6.x;
+        u_xlat49 = u_xlat6.x * u_xlat49;
+        u_xlat6.x = fract(u_xlat49);
+        u_xlat4 = u_xlat1.yxyx + float4(17.1700001, 17.1700001, 1.0, 1.0);
+        u_xlat4 = u_xlat4 * float4(0.103100002, 0.103100002, 0.103100002, 0.103100002);
+        u_xlat4 = fract(u_xlat4);
+        u_xlat5 = u_xlat4 + float4(33.3300018, 33.3300018, 33.3300018, 33.3300018);
+        u_xlat49 = dot(u_xlat4.yxy, u_xlat5.xyy);
+        u_xlat38.xy = float2(u_xlat49) + u_xlat4.yx;
+        u_xlat49 = u_xlat38.y + u_xlat38.x;
+        u_xlat49 = u_xlat38.x * u_xlat49;
+        u_xlat6.y = fract(u_xlat49);
+        u_xlat49 = dot(u_xlat4.wzw, u_xlat5.zww);
+        u_xlat38.xy = float2(u_xlat49) + u_xlat4.wz;
+        u_xlat49 = u_xlat38.y + u_xlat38.x;
+        u_xlat49 = u_xlat38.x * u_xlat49;
+        u_xlat11.x = fract(u_xlat49);
+        u_xlat1.xy = u_xlat1.xy + float2(18.1700001, 18.1700001);
+        u_xlat1.xy = u_xlat1.xy * float2(0.103100002, 0.103100002);
+        u_xlat1.xy = fract(u_xlat1.xy);
+        u_xlat12.xyz = u_xlat1.yxx + float3(33.3300018, 33.3300018, 33.3300018);
+        u_xlat49 = dot(u_xlat1.xyx, u_xlat12.xyz);
+        u_xlat1.xy = float2(u_xlat49) + u_xlat1.xy;
+        u_xlat17.x = u_xlat1.y + u_xlat1.x;
+        u_xlat1.x = u_xlat1.x * u_xlat17.x;
+        u_xlat11.y = fract(u_xlat1.x);
+        u_xlat1.xy = (-u_xlat6.xy) + u_xlat11.xy;
+        u_xlat1.xy = u_xlat33.xx * u_xlat1.xy + u_xlat6.xy;
+        u_xlat16.xy = u_xlat16.xy + (-u_xlat1.xy);
+        u_xlat16.x = dot(u_xlat16.xy, u_xlat16.xy);
+        u_xlat16.x = sqrt(u_xlat16.x);
+        u_xlat16.x = u_xlat16.x + (-_SDFFalloff);
+        u_xlat32.x = float(1.0) / _SDFSmoothness;
+        u_xlat16.x = u_xlat32.x * u_xlat16.x;
+        u_xlat16.x = clamp(u_xlat16.x, 0.0, 1.0);
+        u_xlat32.x = u_xlat16.x * -2.0 + 3.0;
+        u_xlat16.x = u_xlat16.x * u_xlat16.x;
+        u_xlat16.x = u_xlat16.x * u_xlat32.x;
+        u_xlat16_8.xyz = u_xlat16.xxx * _NoiseTint.xyz + u_xlat16.xxx;
+        u_xlat16_8.xyz = clamp(u_xlat16_8.xyz, 0.0, 1.0);
+        u_xlat16_9.xyz = float3(u_xlat48) * u_xlat16_8.xyz;
+        u_xlat16_51 = u_xlat16_0;
+        u_xlat16_51 = clamp(u_xlat16_51, 0.0, 1.0);
+        u_xlat16_56 = u_xlat16_51 * -2.0 + 3.0;
+        u_xlat16_51 = u_xlat16_51 * u_xlat16_51;
+        u_xlat16_51 = u_xlat16_51 * u_xlat16_56;
+        u_xlat16_10.xyz = float3(u_xlat16_51) * _TouchGlowColor.xyz;
+        u_xlat16_13.xyz = u_xlat16_9.xyz * u_xlat16_10.xyz;
+        u_xlat16_14.xyz = u_xlat16_13.xyz + u_xlat16_13.xyz;
+        u_xlat16_8.xyz = (-u_xlat16_8.xyz) * float3(u_xlat48) + float3(1.0, 1.0, 1.0);
+        u_xlat16_8.xyz = u_xlat16_8.xyz + u_xlat16_8.xyz;
+        u_xlat16_15.xyz = (-float3(u_xlat16_51)) * _TouchGlowColor.xyz + float3(1.0, 1.0, 1.0);
+        u_xlat16_8.xyz = (-u_xlat16_8.xyz) * u_xlat16_15.xyz + float3(1.0, 1.0, 1.0);
+        u_xlatb0.xyz = bool3(u_xlat16_9.x >= 0.5, u_xlat16_9.y >= 0.5, u_xlat16_9.z >= 0.5);
+        u_xlat0.x = u_xlatb0.x ? float(1.0) : 0.0;
+        u_xlat0.y = u_xlatb0.y ? float(1.0) : 0.0;
+        u_xlat0.z = u_xlatb0.z ? float(1.0) : 0.0;
+;
+        u_xlat1.xyz = (-u_xlat16_13.xyz) * float3(2.0, 2.0, 2.0) + u_xlat16_8.xyz;
+        u_xlat0.xyz = u_xlat0.xyz * u_xlat1.xyz + u_xlat16_14.xyz;
+        u_xlat0.xyz = clamp(u_xlat0.xyz, 0.0, 1.0);
+        u_xlat16_8.xyz = u_xlat16_10.xyz * float3(0.5, 0.5, 0.5) + u_xlat0.xyz;
+    } else {
+        u_xlat16_8.x = float(0.0);
+        u_xlat16_8.y = float(0.0);
+        u_xlat16_8.z = float(0.0);
+    }
+    u_xlat16_2.xyz = u_xlat16_2.xzw * float3(u_xlat16_18) + u_xlat16_3.xyz;
+    SV_Target0.xyz = u_xlat16_8.xyz + u_xlat16_2.xyz;
+    return SV_Target0;
+
+}
+
+half4 main(float2 coord) {
+    coord /= _SceneRenderScale;
+    float2 uv = float2(coord.x / _ScreenParams.x, 1.0 - coord.y / _ScreenParams.y);
+    // Keep the original full-resolution background and notes outside all effects.
+    // Touch/disabled/ready use additive colour and may have zero active alpha.
+    if (_OverlayOnly != 0 && sample_ComposeRT(uv).r + sample_EffectRT(uv).r +
+        sample_EffectRT(uv).g + sample_DisabledComposeRT(uv).r +
+        sample_ReadyComposeRT(uv).r + sample_TouchHoverRT(uv).r < 0.0001) {
+        return half4(0.0);
+    }
+    float4 destination = sample_SceneColor(uv);
+    float4 active = activeFragment(uv);
+    // Real pass: Blend One OneMinusSrcAlpha. Touch RGB may be nonzero with zero area alpha.
+    float factor = 1.0 - clamp(active.a, 0.0, 1.0);
+    return half4(clamp(active.rgb + destination.rgb * factor, 0.0, 1.0),
+                 clamp(active.a + destination.a * factor, 0.0, 1.0));
+}

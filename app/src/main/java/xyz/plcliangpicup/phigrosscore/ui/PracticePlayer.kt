@@ -159,11 +159,13 @@ import xyz.plcliangpicup.phigrosscore.data.PracticeDownloadProgress
 import xyz.plcliangpicup.phigrosscore.data.PracticeJudgeLine
 import xyz.plcliangpicup.phigrosscore.data.PracticeNote
 import xyz.plcliangpicup.phigrosscore.data.PracticeNoteType
+import xyz.plcliangpicup.phigrosscore.data.PracticeNoisePoint
+import xyz.plcliangpicup.phigrosscore.data.PracticeNoiseRuntime
 import xyz.plcliangpicup.phigrosscore.data.evaluatePracticeEvents
 import xyz.plcliangpicup.phigrosscore.data.PracticeField
 import xyz.plcliangpicup.phigrosscore.data.evaluatePracticeLayers
 import xyz.plcliangpicup.phigrosscore.data.practiceTangentDistance
-import xyz.plcliangpicup.phigrosscore.data.practiceTravelPixels
+import xyz.plcliangpicup.phigrosscore.data.practiceNoteDistances
 import xyz.plcliangpicup.phigrosscore.data.secondsToBeat
 import xyz.plcliangpicup.phigrosscore.data.calculatePlayScoreAndAccuracy
 import xyz.plcliangpicup.phigrosscore.data.calculateChartRks
@@ -397,7 +399,10 @@ private enum class PracticeMode { LOADING, READY, PREVIEW, PREVIEW_PLAYING, SEEK
 private data class PracticeSeekRequest(val revision: Int, val position: Double, val after: PracticeMode)
 
 private data class PracticeOutcome(val grade: PracticeGrade, val deltaSeconds: Double, val judgedAt: Double)
-private data class PracticeEffect(val x: Float, val y: Float, val grade: PracticeGrade, val time: Double)
+private data class PracticeEffect(
+    val x: Float, val y: Float, val grade: PracticeGrade, val time: Double,
+    val visual: PracticeHitVisual = PracticeHitVisual(perfect = grade == PracticeGrade.PERFECT),
+)
 private data class ActivePracticeHold(
     val pointerId: Long,
     val grade: PracticeGrade,
@@ -434,8 +439,10 @@ private data class PracticeAssets(
     val fxScale: Float = .95f,
 )
 
-private data class PracticeLoaded(val chart: PracticeChart, val assets: PracticeAssets, var player: PracticeMusicPlayer) {
+private data class PracticeLoaded(val chart: PracticeChart, val assets: PracticeAssets, var player: PracticeMusicPlayer,
+    val noiseRenderer: PracticeNoiseRenderer?) {
     val geometry = PracticeRenderGeometry(chart)
+    val noiseRuntime = PracticeNoiseRuntime(chart.blockAreas)
 }
 
 private class PracticeRenderGeometry(chart: PracticeChart) {
@@ -460,8 +467,8 @@ private class PracticeRenderGeometry(chart: PracticeChart) {
         }
         return judgePoses[index]
     }
-    val perfectTint = PorterDuffColorFilter(NativeColor.rgb(255,237,165), PorterDuff.Mode.SRC_IN)
-    val goodTint = PorterDuffColorFilter(NativeColor.rgb(202,234,255), PorterDuff.Mode.SRC_IN)
+    val perfectTint = PorterDuffColorFilter(PRACTICE_HIT_PERFECT_TINT, PorterDuff.Mode.SRC_IN)
+    val goodTint = PorterDuffColorFilter(PRACTICE_HIT_GOOD_TINT, PorterDuff.Mode.SRC_IN)
     val badTint = PorterDuffColorFilter(NativeColor.rgb(110,65,65), PorterDuff.Mode.SRC_IN)
     private val source = Rect()
     private val target = RectF()
@@ -509,6 +516,8 @@ fun PracticePlayerScreen(pezFile: File, chartSource: PracticeChartSource, segmen
     val playerScope = rememberCoroutineScope()
     val density = LocalDensity.current
     val preferences = remember(context) { context.getSharedPreferences("practice_player_settings", Context.MODE_PRIVATE) }
+    val noiseSettings = remember(context) { PracticeNoiseSettings(context) }
+    var showNoiseCompatibilityNotice by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf<PracticeLoaded?>(null) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var mode by remember { mutableStateOf(PracticeMode.LOADING) }
@@ -563,7 +572,35 @@ fun PracticePlayerScreen(pezFile: File, chartSource: PracticeChartSource, segmen
     val effects = remember(pezFile.absolutePath) { mutableStateListOf<PracticeEffect>() }
     val activeHolds = remember(pezFile.absolutePath) { mutableStateMapOf<Int, ActivePracticeHold>() }
     val fingers = remember { mutableStateMapOf<Long, PracticeFinger>() }
+    // Keep Android's raw touch lifetime separately: a blocked pointer must not
+    // unlock just because it was removed from the fingers used for judgement.
+    val rawFingers = remember { mutableStateMapOf<Long, Offset>() }
     val displayedTimeline = remember { PracticeDisplayedTimeline() }
+
+    fun clearNoiseTouches() {
+        rawFingers.clear()
+        activeHolds.keys.toList().forEach { id -> activeHolds[id]?.let { hold ->
+            activeHolds[id] = hold.copy(pointerId = -1, valid = false)
+        } }
+        loaded?.noiseRuntime?.resetTouches()
+        loaded?.noiseRenderer?.resetTouches()
+        loaded?.player?.setNoiseBlocked(false)
+    }
+    fun syncNoiseTouches(bundle: PracticeLoaded, atTime: Double, vp: PracticeViewport): Set<Long> {
+        if (autoPlayThisRun || bundle.chart.blockAreas.isEmpty()) {
+            bundle.noiseRuntime.resetTouches()
+            bundle.noiseRenderer?.resetTouches()
+            bundle.player.setNoiseBlocked(false)
+            return emptySet()
+        }
+        val frame = bundle.noiseRuntime.frame(atTime - bundle.chart.offsetSeconds, vp.field.width, vp.field.height)
+        val blocked = bundle.noiseRuntime.updateTouches(frame, rawFingers.mapValues { (_, point) ->
+            PracticeNoisePoint(point.x - vp.field.left, vp.field.height - point.y)
+        })
+        blocked.forEach { fingers.remove(it) }
+        bundle.player.setNoiseBlocked(blocked.isNotEmpty())
+        return blocked
+    }
 
 
     val lastAudioSamplePosition = remember { longArrayOf(0L) }
@@ -645,6 +682,7 @@ fun PracticePlayerScreen(pezFile: File, chartSource: PracticeChartSource, segmen
         chartSeconds = now
         judgementFloor = now
         outcomes.clear(); effects.clear(); activeHolds.clear(); fingers.clear(); armedNotes.clear()
+        clearNoiseTouches()
         pauseGesture.reset()
         goodTimingLabel = null
         goodTimingEvent++
@@ -802,6 +840,29 @@ fun PracticePlayerScreen(pezFile: File, chartSource: PracticeChartSource, segmen
         }
     }
 
+    fun enterLoadedChart(bundle: PracticeLoaded) {
+        if (segmentMode) {
+            autoPlayThisRun = true
+            queueSeek(range.start, if (showSeekGuide) PracticeMode.PREVIEW else PracticeMode.PREVIEW_PLAYING)
+        } else if (!preferences.getBoolean("first_setup_complete", false)) {
+            settingsAreFirstRun = true
+            showSettings = true
+        } else {
+            beginPractice(
+                preferences, bundle.player, outcomes, effects, activeHolds,
+                onReset = { combo = 0; maxCombo = 0; chartSeconds = 0.0; resumeRun = false; fingers.clear(); armedNotes.clear() },
+                onAuto = { autoPlayThisRun = it; strictThisRun = strictModeEnabled },
+                onMode = { mode = it }, onToken = { playToken++ },
+            )
+        }
+    }
+
+    fun dismissNoiseCompatibilityNotice() {
+        noiseSettings.markNoticeSeen()
+        showNoiseCompatibilityNotice = false
+        loaded?.let { enterLoadedChart(it) }
+    }
+
     LaunchedEffect(pezFile.absolutePath) {
         mode = PracticeMode.LOADING
         loadError = null
@@ -816,25 +877,9 @@ fun PracticePlayerScreen(pezFile: File, chartSource: PracticeChartSource, segmen
                 preferences.getLong("${rangeKey}_end", (audioDuration * 1000).toLong()) / 1000.0, audioDuration)
             mode = PracticeMode.READY
             applySpeed(speedStep)
-            if (segmentMode) {
-                autoPlayThisRun = true
-                queueSeek(range.start, if (showSeekGuide) PracticeMode.PREVIEW else PracticeMode.PREVIEW_PLAYING)
-            } else if (!preferences.getBoolean("first_setup_complete", false)) {
-                settingsAreFirstRun = true
-                showSettings = true
-            } else {
-                beginPractice(
-                    preferences,
-                    bundle.player,
-                    outcomes,
-                    effects,
-                            activeHolds,
-                            onReset = { combo = 0; maxCombo = 0; chartSeconds = 0.0; resumeRun = false; fingers.clear(); armedNotes.clear() },
-                    onAuto = { autoPlayThisRun = it; strictThisRun = strictModeEnabled },
-                    onMode = { mode = it },
-                    onToken = { playToken++ },
-                )
-            }
+            if (noiseSettings.shouldShowNotice(android.os.Build.VERSION.SDK_INT, bundle.chart.blockAreas.isNotEmpty())) {
+                showNoiseCompatibilityNotice = true
+            } else enterLoadedChart(bundle)
         }.onFailure { failure ->
             loadError = failure.message ?: "谱面读取失败"
             mode = PracticeMode.ERROR
@@ -848,6 +893,7 @@ fun PracticePlayerScreen(pezFile: File, chartSource: PracticeChartSource, segmen
         onDispose {
             owned?.player?.release()
             owned?.assets?.hitAudio?.release()
+            owned?.noiseRenderer?.release()
         }
     }
     DisposableEffect(endingPlayer) {
@@ -914,6 +960,9 @@ fun PracticePlayerScreen(pezFile: File, chartSource: PracticeChartSource, segmen
             lastNow = now
             chartSeconds = now
             val vp = viewportFor(canvasSize)
+            // Moving/appearing regions can block a stationary finger between
+            // MotionEvents, so run the same noise gate before every judgement.
+            syncNoiseTouches(bundle, now, vp)
             val laneRadius = practiceHitRadius(vp.field.width)
             val frameUptime = SystemClock.uptimeMillis()
             val visibleTime = displayedTimeline.at(frameUptime, now)
@@ -983,7 +1032,7 @@ fun PracticePlayerScreen(pezFile: File, chartSource: PracticeChartSource, segmen
                     activeHolds[id] = hold
                 }
             }
-            effects.removeAll { now - it.time > bundle.assets.fxDuration || now < it.time }
+            effects.removeAll { now - it.time > maxOf(bundle.assets.fxDuration, PRACTICE_HIT_LIFETIME_SECONDS) || now < it.time }
             if (segmentMode && !previewRun && interpolated >= range.end) {
                 finishSegment()
                 break
@@ -1055,13 +1104,16 @@ fun PracticePlayerScreen(pezFile: File, chartSource: PracticeChartSource, segmen
     LaunchedEffect(playToken, mode) { displayedTimeline.clear() }
     LaunchedEffect(playToken) { goodTimingLabel = null; goodTimingEvent++ }
     LaunchedEffect(mode, playToken, pauseDoubleTapEnabled) { pauseGesture.reset() }
+    LaunchedEffect(mode, loaded, autoPlayThisRun) {
+        if (mode != PracticeMode.PLAYING || autoPlayThisRun) clearNoiseTouches()
+    }
     val framePaint = remember { Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG) }
     fun pausePractice() {
         if (mode == PracticeMode.PLAYING || mode == PracticeMode.PREPARING || mode == PracticeMode.COUNT_IN || mode == PracticeMode.SEEKING) {
             resumeNeedsSeek = mode == PracticeMode.SEEKING
             seekRevision++
             loaded?.player?.pause()
-            fingers.clear(); pauseGesture.reset()
+            fingers.clear(); clearNoiseTouches(); pauseGesture.reset()
             mode = PracticeMode.PAUSED
         }
     }
@@ -1125,7 +1177,7 @@ fun PracticePlayerScreen(pezFile: File, chartSource: PracticeChartSource, segmen
             // CANCEL can come from Android/Compose multi-touch arbitration; it
             // is not a pause request. Discard input ownership and allow a brief
             // Hold re-contact window. Actual app backgrounding pauses below.
-            fingers.clear(); armedNotes.clear(); pauseGesture.reset()
+            fingers.clear(); clearNoiseTouches(); armedNotes.clear(); pauseGesture.reset()
             tripleTap.reset(); tapSide = 0; edgeGesture = false
             val audioPosition = bundle.player.position
             val now = practiceEventVisualTime(audioPosition.milliseconds.toLong(), audioPosition.uptimeMs,
@@ -1195,48 +1247,53 @@ fun PracticePlayerScreen(pezFile: File, chartSource: PracticeChartSource, segmen
             }
             if (event.actionMasked == MotionEvent.ACTION_DOWN) {
                 fingers.clear()
+                clearNoiseTouches()
                 (context as? android.app.Activity)?.window?.decorView?.requestUnbufferedDispatch(event)
             }
             val lifting = if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_POINTER_UP) event.actionIndex else -1
             val pressing = if (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_POINTER_DOWN) event.actionIndex else -1
-            for (index in 0 until event.pointerCount) {
-                val id = event.getPointerId(index).toLong()
-                val position = Offset(event.getX(index),event.getY(index))
-                val previous = fingers[id]
-                var swipe = previous?.swipe ?: PracticeSwipe()
-                // Android batches move samples. Walk them in timestamp order so
-                // a quick flick followed by a stop is not averaged into zero speed.
-                var lastPosition = previous?.position ?: position
-                var lastTime = previous?.timeMs ?: event.eventTime
-                for (sample in 0..event.historySize) {
-                    val sampleTime = if (sample == event.historySize) event.eventTime else event.getHistoricalEventTime(sample)
-                    val samplePosition = if (sample == event.historySize) position else Offset(event.getHistoricalX(index,sample),event.getHistoricalY(index,sample))
-                    val sampleVisualTime = practiceEventVisualTime(touchSamplePosition, touchSampleUptime,
-                        sampleTime, latencyMs, playbackSpeed, touchAudioPosition.advancing)
+            // Process each historical batch for all pointers before any note.
+            // Otherwise a second finger could temporarily disappear from the
+            // raw map, or a move through a noise area could still produce a hit.
+            for (sample in 0..event.historySize) {
+                val sampleTime = if (sample == event.historySize) event.eventTime else event.getHistoricalEventTime(sample)
+                val sampleVisualTime = practiceEventVisualTime(touchSamplePosition, touchSampleUptime,
+                    sampleTime, latencyMs, playbackSpeed, touchAudioPosition.advancing)
+                for (index in 0 until event.pointerCount) {
+                    rawFingers[event.getPointerId(index).toLong()] = if (sample == event.historySize)
+                        Offset(event.getX(index), event.getY(index)) else
+                        Offset(event.getHistoricalX(index, sample), event.getHistoricalY(index, sample))
+                }
+                val blocked = syncNoiseTouches(bundle, sampleVisualTime, vp)
+                for (index in 0 until event.pointerCount) {
+                    val id = event.getPointerId(index).toLong()
+                    val samplePosition = rawFingers.getValue(id)
+                    if (id in blocked) continue
+                    val previous = fingers[id]
+                    var swipe = previous?.swipe ?: PracticeSwipe()
                     contact(id, samplePosition, sampleVisualTime, sampleTime)
                     armedNotes.keys.toList().forEach { noteId ->
                         val note = bundle.chart.notes[noteId]
                         if (sampleVisualTime >= note.startSeconds + bundle.chart.offsetSeconds) arm(note, sampleVisualTime)
                     }
-                    if (sampleTime <= lastTime) continue
-                    val movement = samplePosition - lastPosition
-                    swipe = swipe.sample(movement.x, movement.y, sampleTime-lastTime, sampleTime, vp.field.width)
-                    if (!swipe.consumed && practiceRecentSwipe(swipe.lastSwipeMs, sampleTime)) candidate(samplePosition, true,
-                        sampleVisualTime, sampleTime)?.let {
-                        tripleTap.reset(); tapSide = 0
-                        arm(it, sampleVisualTime)
-                        swipe = swipe.consume()
+                    if (previous != null && sampleTime > previous.timeMs) {
+                        val movement = samplePosition - previous.position
+                        swipe = swipe.sample(movement.x, movement.y, sampleTime - previous.timeMs, sampleTime, vp.field.width)
+                        if (!swipe.consumed && practiceRecentSwipe(swipe.lastSwipeMs, sampleTime)) candidate(samplePosition, true,
+                            sampleVisualTime, sampleTime)?.let {
+                            tripleTap.reset(); tapSide = 0
+                            arm(it, sampleVisualTime)
+                            swipe = swipe.consume()
+                        }
                     }
-                    lastPosition = samplePosition; lastTime = sampleTime
-                }
-                if (index == lifting) fingers.remove(id) else fingers[id] = PracticeFinger(position,event.eventTime,swipe)
-                if (index == pressing) candidate(position,false,now,event.eventTime)?.let { note ->
+                    fingers[id] = PracticeFinger(samplePosition, sampleTime, swipe)
+                    if (index == pressing && sample == event.historySize) candidate(samplePosition,false,now,event.eventTime)?.let { note ->
                     pauseGesture.reset()
                     tripleTap.reset(); tapSide = 0
                     val delta = practiceTimingDelta(now-(note.startSeconds+bundle.chart.offsetSeconds), playbackSpeed)
                     val grade = judgeRules.grade(delta) ?: return@let
                     if (note.type == PracticeNoteType.HOLD) {
-                        activeHolds[note.id] = ActivePracticeHold(id,grade,delta,position,lastContact=now,lastEffect=now)
+                        activeHolds[note.id] = ActivePracticeHold(id,grade,delta,samplePosition,lastContact=now,lastEffect=now)
                         emitPracticeHit(note,grade,now,bundle.chart,bundle.assets,vp,effects,true)
                         if (grade == PracticeGrade.GOOD) showGoodTiming(delta)
                     } else addPracticeOutcome(note,grade,delta,now,bundle.chart,bundle.assets,vp,outcomes,effects) { success ->
@@ -1244,7 +1301,16 @@ fun PracticePlayerScreen(pezFile: File, chartSource: PracticeChartSource, segmen
                         maxCombo = max(maxCombo,combo)
                     }
                     if (note.type != PracticeNoteType.HOLD && grade == PracticeGrade.GOOD) showGoodTiming(delta)
+                    }
                 }
+            }
+            if (lifting >= 0) {
+                val id = event.getPointerId(lifting).toLong()
+                fingers.remove(id); rawFingers.remove(id)
+                activeHolds.keys.toList().forEach { noteId -> activeHolds[noteId]?.let { hold ->
+                    if (hold.pointerId == id) activeHolds[noteId] = hold.copy(pointerId = -1, valid = false)
+                } }
+                syncNoiseTouches(bundle, now, vp)
             }
             true
         }
@@ -1266,7 +1332,7 @@ fun PracticePlayerScreen(pezFile: File, chartSource: PracticeChartSource, segmen
                 (mode == PracticeMode.PLAYING || mode == PracticeMode.PREPARING || mode == PracticeMode.COUNT_IN || mode == PracticeMode.PREVIEW_PLAYING || mode == PracticeMode.SEEKING)) {
                 resumeNeedsSeek = mode == PracticeMode.SEEKING
                 runCatching { loaded?.player?.suspendOutput() }
-                fingers.clear(); seekRevision++
+                fingers.clear(); clearNoiseTouches(); seekRevision++
                 armedNotes.clear(); pauseGesture.reset()
                 mode = if (editorOpen) PracticeMode.PREVIEW else PracticeMode.PAUSED
             }
@@ -1317,8 +1383,8 @@ fun PracticePlayerScreen(pezFile: File, chartSource: PracticeChartSource, segmen
                             RectF(index * 4f, 0f, index * 4f + 3f, 3f), framePaint)
                     }
                 }
-                drawPracticeFrame(
-                    canvas = composeCanvas.nativeCanvas,
+                val drawScene: (NativeCanvas) -> Unit = { sceneCanvas -> drawPracticeFrame(
+                    canvas = sceneCanvas,
                     viewport = viewportFor(IntSize(size.width.toInt(), size.height.toInt())),
                     chart = bundle.chart,
                     assets = bundle.assets,
@@ -1332,7 +1398,15 @@ fun PracticePlayerScreen(pezFile: File, chartSource: PracticeChartSource, segmen
                     ) else effects,
                     paint = framePaint,
                     geometry = bundle.geometry,
-                )
+                ) }
+                val noiseRenderer = bundle.noiseRenderer
+                if (noiseRenderer == null) drawScene(composeCanvas.nativeCanvas)
+                else noiseRenderer.drawScene(composeCanvas.nativeCanvas,
+                    bundle.noiseRuntime.frame(chartSeconds - bundle.chart.offsetSeconds, viewport.field.width, viewport.field.height),
+                    viewport.field.left, viewport.field.width, viewport.field.height,
+                    rawFingers.filterKeys { bundle.noiseRuntime.isFingerBlocked(it) }.mapValues { (_, point) ->
+                        PracticeNoisePoint(point.x - viewport.field.left, viewport.field.height - point.y)
+                    }, bundle.assets.background, viewport.width, warmUp = renderWarmup != null, scene = drawScene)
                 renderWarmup?.complete(Unit)
             }
         }
@@ -1504,7 +1578,17 @@ fun PracticePlayerScreen(pezFile: File, chartSource: PracticeChartSource, segmen
     }
 
 
-    if (showSeekGuide && loaded != null && !showSettings) {
+    if (showNoiseCompatibilityNotice && loaded != null) {
+        AlertDialog(
+            onDismissRequest = { dismissNoiseCompatibilityNotice() },
+            title = { Text("噪域显示提示") },
+            text = { Text(PRACTICE_NOISE_COMPATIBILITY_NOTICE) },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { dismissNoiseCompatibilityNotice() }) { Text("知道了") }
+            },
+        )
+    }
+    if (showSeekGuide && loaded != null && !showSettings && !showNoiseCompatibilityNotice) {
         AlertDialog(
             onDismissRequest = { showSeekGuide = false; preferences.edit().putBoolean("segment_seek_guide_seen", true).apply() },
             title = { Text("快进与快退") },
@@ -1909,6 +1993,7 @@ private suspend fun loadPractice(context: Context, pezFile: File): PracticeLoade
         PracticeNoteType.DRAG to readBitmap("drag_mh.png"),
     )
     val hitFx = readBitmap("hit_fx.png")
+    PracticeHitMotion.prepare()
     // Request sprite upload during loading instead of on the first judged note.
     (noteBitmaps.values + multiBitmaps.values + hitFx).forEach { bitmap ->
         runCatching { bitmap.prepareToDraw() }
@@ -1950,7 +2035,9 @@ private suspend fun loadPractice(context: Context, pezFile: File): PracticeLoade
         hitAudio, ending,
         holdAtlas = pair("holdAtlas", 50 to 50), holdAtlasMulti = pair("holdAtlasMH", 50 to 93),
         fxColumns = fx.first.coerceAtLeast(1), fxRows = fx.second.coerceAtLeast(1),
-        fxDuration = number("hitFxDuration", .5).coerceAtLeast(.01), fxScale = number("hitFxScale", .95).toFloat()), player)
+        fxDuration = number("hitFxDuration", .5).coerceAtLeast(.01), fxScale = number("hitFxScale", .95).toFloat()), player,
+        if (chart.blockAreas.isNotEmpty()) PracticeNoiseRenderer(context,
+            compatibilityMode = PracticeNoiseSettings(context).compatibilityMode) else null)
     } catch (failure: Throwable) {
         withContext(NonCancellable + Dispatchers.Main.immediate) { ownedPlayer?.release() }
         hitAudio.release()
@@ -2007,7 +2094,10 @@ private fun linePose(line: PracticeJudgeLine, time: Double, viewport: PracticeVi
 
 private fun localNoteTravel(chart: PracticeChart, note: PracticeNote, time: Double, viewport: PracticeViewport, tail: Boolean = false): Float {
     val line = chart.lines[note.lineIndex]
-    return practiceTravelPixels(line, time - chart.offsetSeconds, if (tail) note.endSeconds else note.startSeconds, viewport.height) * note.speed + note.yOffset * viewport.scaleY * note.speed
+    val chartTime = time - chart.offsetSeconds
+    val distances = practiceNoteDistances(note, chartTime, line.travel.at(note.startSeconds),
+        line.travel.at(note.endSeconds), line.travel.at(chartTime), viewport.height)
+    return if (tail) distances.tail else distances.head
 }
 
 private fun practiceNotePoint(chart: PracticeChart, note: PracticeNote, time: Double, viewport: PracticeViewport, onLine: Boolean = false): Offset {
@@ -2054,7 +2144,6 @@ private fun drawPracticeFrame(
         val angle = Math.toRadians(pose.rotation.toDouble())
         lineCos[index] = cos(angle).toFloat(); lineSin[index] = sin(angle).toFloat()
     }
-    val travelFactor = viewport.height * (10.0 / 45.0 / .83175) / 2
     paint.colorFilter = null
     val saved = canvas.save()
     canvas.clipRect(field.left, 0f, field.left + field.width, field.height)
@@ -2083,10 +2172,10 @@ private fun drawPracticeFrame(
         val line = chart.lines[note.lineIndex]
         val pose = poses[note.lineIndex]
         if (pose.alpha < 0) return@forEach
-        val current = geometry.current[note.lineIndex]
-        val yOffset = note.yOffset * viewport.scaleY * note.speed
-        val headDistance = if (hold && time >= target) 0f else ((geometry.heads[note.id]-current)*travelFactor*note.speed).toFloat()+yOffset
-        val tailDistance = if (hold) ((geometry.tails[note.id]-current)*travelFactor*note.speed).toFloat()+yOffset else headDistance
+        val distances = practiceNoteDistances(note, chartTime, geometry.heads[note.id],
+            geometry.tails[note.id], geometry.current[note.lineIndex], viewport.height)
+        val headDistance = distances.head
+        val tailDistance = distances.tail
         if (line.cover && time < target && (if (hold) tailDistance else headDistance) < -1f) return@forEach
         val bitmap = (if (note.isMulti) assets.notesMulti else assets.notes).getValue(note.type)
         val noteWidth = field.noteWidth * note.size * noteScale * bitmap.width / assets.notes.getValue(PracticeNoteType.TAP).width
@@ -2143,31 +2232,15 @@ private fun drawPracticeFrame(
         paint.colorFilter=null
         canvas.restoreToCount(state)
     }
-    val frameW = assets.hitFx.width / assets.fxColumns
-    val frameH = assets.hitFx.height / assets.fxRows
     effects.forEach { effect ->
         val elapsed = time-effect.time
-        if (elapsed < 0 || elapsed >= assets.fxDuration) return@forEach
-        val progress = (elapsed/assets.fxDuration).toFloat()
-        val frame = (progress * assets.fxColumns * assets.fxRows).toInt().coerceAtMost(assets.fxColumns*assets.fxRows-1)
-        val source = geometry.sourceRect(frame%assets.fxColumns*frameW,frame/assets.fxColumns*frameH,
-            (frame%assets.fxColumns+1)*frameW,(frame/assets.fxColumns+1)*frameH)
+        if (elapsed < 0 || elapsed >= maxOf(assets.fxDuration, PRACTICE_HIT_LIFETIME_SECONDS)) return@forEach
         val size = field.noteWidth * noteScale * assets.fxScale * 1.6f
-        val tint = if (effect.grade==PracticeGrade.PERFECT) NativeColor.rgb(255,237,165) else NativeColor.rgb(202,234,255)
-        paint.colorFilter=if (effect.grade==PracticeGrade.PERFECT) geometry.perfectTint else geometry.goodTint
-        paint.alpha=((1-progress)*255).roundToInt()
-        canvas.drawBitmap(assets.hitFx,source,geometry.targetRect(effect.x-size/2,effect.y-size/2,effect.x+size/2,effect.y+size/2),paint)
-        paint.colorFilter=null
-        paint.color=tint
-        paint.alpha=((1-progress)*(1-progress)*220).roundToInt()
-        repeat(4) { i ->
-            val angle = i * Math.PI / 2 + .35
-            val distance = size * (.15f + .6f * progress)
-            val cx = effect.x + cos(angle).toFloat()*distance
-            val cy = effect.y + sin(angle).toFloat()*distance
-            val radius = size*.025f*(1-progress)
-            canvas.drawRect(cx-radius,cy-radius,cx+radius,cy+radius,paint)
-        }
+        val tint = if (effect.grade==PracticeGrade.PERFECT) PRACTICE_HIT_PERFECT_TINT else PRACTICE_HIT_GOOD_TINT
+        effect.visual.draw(canvas, effect.x, effect.y, size, elapsed.toFloat(), assets.fxDuration.toFloat(),
+            assets.hitFx, assets.fxColumns, assets.fxRows, tint,
+            if (effect.grade == PracticeGrade.PERFECT) geometry.perfectTint else geometry.goodTint,
+            paint, geometry.sourceRect(0, 0, 0, 0), geometry.targetRect(0f, 0f, 0f, 0f))
     }
     canvas.restoreToCount(saved)
 }

@@ -42,6 +42,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -66,6 +69,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -123,6 +127,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.window.Dialog
@@ -150,6 +156,7 @@ import xyz.plcliangpicup.phigrosscore.data.B30Snapshot
 import xyz.plcliangpicup.phigrosscore.data.ChartRksSolution
 import xyz.plcliangpicup.phigrosscore.data.ConstantTableEntry
 import xyz.plcliangpicup.phigrosscore.data.CustomChartDraft
+import xyz.plcliangpicup.phigrosscore.data.CustomRankingEditOrder
 import xyz.plcliangpicup.phigrosscore.data.PlayScoreAndAccuracy
 import xyz.plcliangpicup.phigrosscore.data.RksCalculatorDraft
 import xyz.plcliangpicup.phigrosscore.data.RksGuessClue
@@ -229,6 +236,7 @@ internal fun MoreFeaturesPage(
     onSearchAchievementSongs: (String) -> Unit,
     onLoadAchievementRates: (String, String) -> Unit,
     onGenerateCustomRankingImage: () -> Unit,
+    onImportCustomRanking: () -> Unit,
     onClearCustomRanking: () -> Unit,
     onCheckin: (String, Boolean) -> Unit,
     onCheckinRanks: () -> Unit,
@@ -364,8 +372,11 @@ internal fun MoreFeaturesPage(
                         state.customP30ImageFile
                     },
                     isGenerating = state.isGeneratingCustomRankingImage,
+                    isImporting = state.isImportingCustomRanking,
+                    canImport = (state.isLoggedIn || state.snapshot != null) && !state.isLoading,
                     onDraftChange = onRksCalculatorDraftChange,
                     onGenerateImage = onGenerateCustomRankingImage,
+                    onImport = onImportCustomRanking,
                     onSearchSongs = onSearchAchievementSongs,
                     onClearAll = onClearCustomRanking,
                     modifier = Modifier.fillMaxSize(),
@@ -946,6 +957,7 @@ private fun GrowthCalculator(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CustomRankingScreen(
     draft: RksCalculatorDraft,
@@ -953,8 +965,11 @@ private fun CustomRankingScreen(
     remoteSongs: List<SongInfo>,
     imageFile: File?,
     isGenerating: Boolean,
+    isImporting: Boolean,
+    canImport: Boolean,
     onDraftChange: (RksCalculatorDraft) -> Unit,
     onGenerateImage: () -> Unit,
+    onImport: () -> Unit,
     onSearchSongs: (String) -> Unit,
     onClearAll: () -> Unit,
     modifier: Modifier = Modifier,
@@ -966,10 +981,27 @@ private fun CustomRankingScreen(
     val manual = inputMode == CustomInputMode.MANUAL
     val rksBySlot = if (manual) values.map { it.toDoubleOrNull() }
         else charts.mapIndexed { index, chart -> customRankingChartRks(chart, ranking.preferenceValue, index) }
-    val rows = xyz.plcliangpicup.phigrosscore.data.customRankingRows(
+    val sortedRows = xyz.plcliangpicup.phigrosscore.data.customRankingRows(
         rksBySlot, ranking.preferenceValue, if (manual) null else charts.map(::customChartKey),
     )
-    val resolvedCharts = xyz.plcliangpicup.phigrosscore.data.resolvedCustomRankingCharts(charts, ranking.preferenceValue)
+    var editOrder by remember(ranking, inputMode) { mutableStateOf(CustomRankingEditOrder()) }
+    var focusedInput by remember(ranking, inputMode) { mutableStateOf<String?>(null) }
+    val keyboardVisible = WindowInsets.isImeVisible
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    val rows = editOrder.rows ?: sortedRows
+    val resolvedCharts = rows.map { row -> charts[row.sourceIndex].let {
+        if (row.mirrored) it.copy(score = "1000000", accuracy = "100") else it
+    } }
+    LaunchedEffect(keyboardVisible, focusedInput, editOrder.rows != null) {
+        val next = editOrder.advance(keyboardVisible, focusedInput != null)
+        if (editOrder.rows != null && next.rows == null && editOrder.imeWasVisible) focusManager.clearFocus()
+        editOrder = next
+    }
+    fun inputFocus(key: String, focused: Boolean) {
+        if (focused) { editOrder = editOrder.begin(rows); focusedInput = key }
+        else if (focusedInput == key) focusedInput = null
+    }
     val displayedRks = rows.map { rksBySlot[it.sourceIndex] }
     val filled = if (manual) displayedRks.count { it != null } else resolvedCharts.count { customChartKey(it) != null }
     val composite = customRankingComposite(displayedRks)
@@ -988,8 +1020,7 @@ private fun CustomRankingScreen(
     }
     LaunchedEffect(focusedRowKey, focusedRowIndex, rankingViewportHeight) {
         if (focusedRowIndex < 0 || rankingViewportHeight <= 0) return@LaunchedEffect
-        // Wait for the reordered lazy items to be measured before targeting their new index.
-        // Tracking is outside the item composition so it also works for moves off screen.
+        // Keep the active field visible as the keyboard changes the available height.
         withFrameNanos { }
         rankingListState.animateScrollToItem(
             index = focusedRowIndex + 1, // The controls occupy lazy item zero.
@@ -1009,6 +1040,7 @@ private fun CustomRankingScreen(
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             CustomRanking.entries.forEach { item ->
                 FilterChip(selected = ranking == item,
+                    enabled = !isImporting,
                     onClick = { onDraftChange(draft.copy(customRanking = item.preferenceValue)) },
                     label = { Text(item.label) })
             }
@@ -1033,6 +1065,7 @@ private fun CustomRankingScreen(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     CustomInputMode.entries.forEach { mode ->
                         FilterChip(selected = inputMode == mode,
+                            enabled = !isImporting,
                             onClick = { onDraftChange(draft.copy(customInputMode = mode.preferenceValue)) },
                             label = { Text(if (mode == CustomInputMode.MANUAL) "输入 RKS" else "选择谱面") },
                             modifier = Modifier.weight(1f))
@@ -1041,7 +1074,13 @@ private fun CustomRankingScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("$filled / 36", color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = AppNumericFont, fontSize = 12.sp)
                     Spacer(Modifier.weight(1f))
-                    IconButton(onClick = { confirmClear = true }) { Icon(Icons.Default.DeleteOutline, "清空全部", modifier = Modifier.size(20.dp)) }
+                    TextButton(onClick = onImport, enabled = canImport && !isImporting && !isGenerating) {
+                        if (isImporting) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        else Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (isImporting) "正在导入…" else "导入我的 ${ranking.label}", fontSize = 12.sp)
+                    }
+                    IconButton(onClick = { confirmClear = true }, enabled = !isImporting) { Icon(Icons.Default.DeleteOutline, "清空全部", modifier = Modifier.size(20.dp)) }
                 }
                 LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().height(2.dp).clip(CircleShape))
             }
@@ -1066,13 +1105,17 @@ private fun CustomRankingScreen(
                             }
                         } else DecimalField(value = values[sourceIndex], onValueChange = { next ->
                             updateValues(values.toMutableList().apply { this[sourceIndex] = next })
-                        }, label = "RKS", placeholder = "0.0000", modifier = Modifier.weight(1f))
+                        }, label = "RKS", placeholder = "0.0000", imeAction = ImeAction.Done,
+                            onDone = { focusManager.clearFocus(); keyboard?.hide() },
+                            modifier = Modifier.weight(1f).onFocusChanged { inputFocus(row.stableKey, it.isFocused) })
                     }
                 } else {
                     CustomChartSlotCard(index, ranking, resolvedCharts[index], onPick = { pickerIndex = sourceIndex },
                         onClear = { updateCharts(charts.toMutableList().apply { this[sourceIndex] = CustomChartDraft() }) },
                         onScoreChange = { next -> updateCharts(charts.toMutableList().apply { this[sourceIndex] = this[sourceIndex].copy(score = next) }) },
                         onAccuracyChange = { next -> updateCharts(charts.toMutableList().apply { this[sourceIndex] = this[sourceIndex].copy(accuracy = next) }) },
+                        onInputFocus = { field, focused -> inputFocus("${row.stableKey}-$field", focused) },
+                        onInputDone = { focusManager.clearFocus(); keyboard?.hide() },
                         linkedFrom = if (row.mirrored) rows.take(3).indexOfFirst { it.sourceIndex == sourceIndex } + 1 else null)
                 }
             }
@@ -1080,7 +1123,7 @@ private fun CustomRankingScreen(
         item {
             AnimatedVisibility(!manual, enter = fadeIn(appTween(220)), exit = fadeOut(appTween(150))) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = onGenerateImage, enabled = validation.isSuccess && !isGenerating,
+                    Button(onClick = onGenerateImage, enabled = validation.isSuccess && !isGenerating && !isImporting && editOrder.rows == null && !keyboardVisible,
                         modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(16.dp)) {
                         if (isGenerating) {
                             CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
@@ -1287,6 +1330,8 @@ private fun CustomChartSlotCard(
     onClear: () -> Unit,
     onScoreChange: (String) -> Unit,
     onAccuracyChange: (String) -> Unit,
+    onInputFocus: (String, Boolean) -> Unit,
+    onInputDone: () -> Unit,
     linkedFrom: Int? = null,
 ) {
     val label = customSlotLabel(index, ranking)
@@ -1324,9 +1369,10 @@ private fun CustomChartSlotCard(
             if (selected && !perfect) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     IntegerField(chart.score, onScoreChange, label = "分数（可选）", placeholder = "1000000",
-                        maxValue = 1_000_000, modifier = Modifier.weight(1f))
+                        maxValue = 1_000_000, modifier = Modifier.weight(1f).onFocusChanged { onInputFocus("score", it.isFocused) })
                     DecimalField(chart.accuracy, onAccuracyChange, label = "ACC", placeholder = "99.50",
-                        maxValue = 100.0, modifier = Modifier.weight(1f))
+                        maxValue = 100.0, imeAction = ImeAction.Done, onDone = onInputDone,
+                        modifier = Modifier.weight(1f).onFocusChanged { onInputFocus("accuracy", it.isFocused) })
                 }
                 if (calculatedRks != null) Text("RKS ${formatNumber(calculatedRks, 4)}", color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 11.sp, fontFamily = AppNumericFont, modifier = Modifier.padding(vertical = 4.dp))
@@ -1434,6 +1480,8 @@ private fun DecimalField(
     label: String,
     placeholder: String,
     maxValue: Double? = null,
+    imeAction: ImeAction = ImeAction.Next,
+    onDone: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     OutlinedTextField(
@@ -1447,7 +1495,8 @@ private fun DecimalField(
         label = { Text(label) },
         placeholder = { Text(placeholder) },
         singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = imeAction),
+        keyboardActions = KeyboardActions(onDone = { onDone?.invoke() }),
         modifier = modifier.fillMaxWidth(),
     )
 }

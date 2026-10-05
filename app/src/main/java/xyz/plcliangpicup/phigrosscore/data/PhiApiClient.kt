@@ -221,13 +221,37 @@ class PhiApiClient(
         )
     }
 
-    suspend fun fetchLeaderboard(accessToken: String): LeaderboardResponse = executeJson(
-        Request.Builder()
-            .url(url("api/v2/leaderboard/rks/top?limit=1000&lite=true"))
-            .header("Authorization", "Bearer $accessToken")
-            .get()
-            .build(),
-    )
+    suspend fun fetchLeaderboard(accessToken: String): LeaderboardResponse {
+        val entries = ArrayList<LeaderboardEntry>(PLAYER_LEADERBOARD_LIMIT)
+        var total = 0
+        var cursor: String? = null
+        while (entries.size < PLAYER_LEADERBOARD_LIMIT) {
+            // 现有服务每页最多 1000 条；新版游标优先，旧版通过 offset 继续读取。
+            val requestUrl = url("api/v2/leaderboard/rks/top").toHttpUrlOrNull()
+                ?.newBuilder()
+                ?.addQueryParameter("limit", minOf(1000, PLAYER_LEADERBOARD_LIMIT - entries.size).toString())
+                ?.addQueryParameter("lite", "true")
+                ?.apply {
+                    if (cursor != null) addQueryParameter("cursor", cursor)
+                    else if (entries.isNotEmpty()) addQueryParameter("offset", entries.size.toString())
+                }
+                ?.build()
+                ?: throw IOException("排行榜接口地址无效")
+            val page = executeJson<LeaderboardResponse>(
+                Request.Builder()
+                    .url(requestUrl)
+                    .header("Authorization", "Bearer $accessToken")
+                    .get()
+                    .build(),
+            )
+            total = page.total
+            if (page.items.isEmpty()) break
+            entries.addAll(page.items.take(PLAYER_LEADERBOARD_LIMIT - entries.size))
+            if (entries.size >= total) break
+            cursor = page.nextCursor?.takeIf(String::isNotBlank)
+        }
+        return LeaderboardResponse(items = entries, total = total)
+    }
 
     suspend fun fetchLeaderboardMe(accessToken: String): LeaderboardMe = executeJson(
         Request.Builder()

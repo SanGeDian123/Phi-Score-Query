@@ -39,6 +39,7 @@ import xyz.plcliangpicup.phigrosscore.data.CustomRankingImageScore
 import xyz.plcliangpicup.phigrosscore.data.SongInfo
 import xyz.plcliangpicup.phigrosscore.data.calculateChartRks
 import xyz.plcliangpicup.phigrosscore.data.customRankingScores
+import xyz.plcliangpicup.phigrosscore.data.importOwnRanking
 import java.io.File
 
 enum class AppPage { HOME, B30, SONG, CONSTANT_TABLE, LEADERBOARD, IMAGE, MORE, SETTINGS }
@@ -102,6 +103,7 @@ data class AppUiState(
     val isGeneratingP30Image: Boolean = false,
     val p30ImageGenerationElapsedSeconds: Int = 0,
     val isGeneratingCustomRankingImage: Boolean = false,
+    val isImportingCustomRanking: Boolean = false,
     val showImagePagerGuide: Boolean = true,
     val showSuggestionSwipeGuide: Boolean = true,
     val showNavigationGuide: Boolean = true,
@@ -224,6 +226,35 @@ class AppViewModel(internal val repository: AppRepository) : ViewModel() {
         val normalized = repository.sanitizeRksCalculatorDraft(draft)
         repository.setRksCalculatorDraft(normalized)
         _state.update { it.copy(rksCalculatorDraft = normalized) }
+    }
+
+    fun importCustomRanking() {
+        val state = _state.value
+        if (state.isImportingCustomRanking || state.isGeneratingCustomRankingImage || state.isLoading) return
+        val ranking = state.rksCalculatorDraft.customRanking
+        _state.update { it.copy(isImportingCustomRanking = true, message = null) }
+        viewModelScope.launch {
+            try {
+                val snapshot = state.snapshot ?: repository.fetchB30()
+                val imported = repository.sanitizeRksCalculatorDraft(
+                    _state.value.rksCalculatorDraft.importOwnRanking(snapshot, ranking),
+                )
+                repository.setRksCalculatorDraft(imported)
+                _state.update {
+                    it.copy(
+                        snapshot = it.snapshot ?: snapshot,
+                        rksCalculatorDraft = imported,
+                        message = "已导入我的 ${ranking.uppercase()}，可继续编辑",
+                    )
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                _state.update { it.copy(message = readableError(error)) }
+            } finally {
+                _state.update { it.copy(isImportingCustomRanking = false) }
+            }
+        }
     }
 
     fun dismissNavigationGuide() {

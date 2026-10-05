@@ -113,4 +113,34 @@ fun practiceTangentDistance(touchX: Float, touchY: Float, lineX: Float, lineY: F
 }
 
 fun practiceTravelPixels(line: PracticeJudgeLine, from: Double, to: Double, height: Float): Float =
-    (line.travel.between(from,to) * height * (10.0 / 45.0 / .83175) / 2).toFloat()
+    (line.travel.between(from,to) * height * PRACTICE_TRAVEL_PIXEL_RATIO).toFloat()
+
+private const val PRACTICE_TRAVEL_PIXEL_RATIO = 10.0 / 45.0 / .83175 / 2.0
+
+/** Two primitive distances packed without a per-note allocation in the rendering loop. */
+@JvmInline
+value class PracticeNoteDistances internal constructor(private val bits: Long) {
+    val head: Float get() = Float.fromBits((bits ushr 32).toInt())
+    val tail: Float get() = Float.fromBits(bits.toInt())
+}
+
+/**
+ * Ordinary RPE holds use the integrated line height at both endpoints (Phira rpe.rs/note.rs).
+ * Official Phigros HoldControl.NoteMove instead uses duration * its own speed for body length;
+ * phigrosHoldSpeed explicitly preserves that mode when converting official charts.
+ * A held head retains yOffset. Pinning it to zero would incorrectly add yOffset to body length.
+ */
+fun practiceNoteDistances(note: PracticeNote, chartTime: Double, headTravel: Double, tailTravel: Double,
+    currentTravel: Double, height: Float): PracticeNoteDistances {
+    val factor = height * PRACTICE_TRAVEL_PIXEL_RATIO
+    val offset = note.yOffset * height / 900f * note.speed
+    val hold = note.type == PracticeNoteType.HOLD
+    val held = hold && chartTime >= note.startSeconds
+    val head = if (held) offset else ((headTravel - currentTravel) * factor * note.speed).toFloat() + offset
+    val tail = if (!hold) head else if (note.phigrosHoldSpeed != null) {
+        // Official speed -> RPE speed units is * 4.5, exactly as the official chart converter.
+        val remaining = (note.endSeconds - max(note.startSeconds, chartTime)).coerceAtLeast(0.0)
+        head + (remaining * note.phigrosHoldSpeed * 4.5 * factor).toFloat()
+    } else ((tailTravel - currentTravel) * factor * note.speed).toFloat() + offset
+    return PracticeNoteDistances((head.toRawBits().toLong() shl 32) or (tail.toRawBits().toLong() and 0xffffffffL))
+}

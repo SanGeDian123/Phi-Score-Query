@@ -365,10 +365,13 @@ data class SongScoreResult(
     val records: List<SongDifficultyScore>,
 )
 
+internal const val PLAYER_LEADERBOARD_LIMIT = 1_500
+
 @Serializable
 data class LeaderboardResponse(
     val items: List<LeaderboardEntry> = emptyList(),
     val total: Int = 0,
+    val nextCursor: String? = null,
 )
 
 @Serializable

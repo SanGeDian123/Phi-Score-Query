@@ -1,6 +1,7 @@
 package xyz.plcliangpicup.phigrosscore.data
 
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -18,6 +19,83 @@ class PhiApiClientTest {
     @After
     fun closeServer() {
         server.close()
+    }
+
+    @Test
+    fun `player leaderboard combines legacy pages up to rank 1500`() = runTest {
+        enqueueLeaderboardPage(1, 1000, 1756)
+        enqueueLeaderboardPage(1001, 500, 1756)
+        server.start()
+
+        val result = PhiApiClient(server.url("/").toString(), json).fetchLeaderboard("access")
+
+        assertEquals(1756, result.total)
+        assertEquals((1..1500).toList(), result.items.map { it.rank })
+        assertEquals(2, server.requestCount)
+        val first = server.takeRequest()
+        val second = server.takeRequest()
+        assertEquals("1000", first.requestUrl?.queryParameter("limit"))
+        assertEquals(null, first.requestUrl?.queryParameter("offset"))
+        assertEquals("500", second.requestUrl?.queryParameter("limit"))
+        assertEquals("1000", second.requestUrl?.queryParameter("offset"))
+        listOf(first, second).forEach { request ->
+            assertEquals("/api/v2/leaderboard/rks/top", request.requestUrl?.encodedPath)
+            assertEquals("true", request.requestUrl?.queryParameter("lite"))
+            assertEquals("Bearer access", request.getHeader("Authorization"))
+        }
+    }
+
+    @Test
+    fun `player leaderboard prefers encoded server cursor over offset`() = runTest {
+        val cursor = "next+page/with=chars"
+        enqueueLeaderboardPage(1, 1000, 1500, cursor)
+        enqueueLeaderboardPage(1001, 500, 1500)
+        server.start()
+
+        val result = PhiApiClient(server.url("/").toString(), json).fetchLeaderboard("access")
+
+        assertEquals((1..1500).toList(), result.items.map { it.rank })
+        server.takeRequest()
+        val second = server.takeRequest()
+        assertEquals(cursor, second.requestUrl?.queryParameter("cursor"))
+        assertEquals(null, second.requestUrl?.queryParameter("offset"))
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun `player leaderboard stops when all public players have been read`() = runTest {
+        enqueueLeaderboardPage(1, 8, 8)
+        server.start()
+
+        val result = PhiApiClient(server.url("/").toString(), json).fetchLeaderboard("access")
+
+        assertEquals(8, result.items.size)
+        assertEquals(8, result.total)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun `player leaderboard stops on an empty continuation page`() = runTest {
+        enqueueLeaderboardPage(1, 1000, 1756)
+        enqueueLeaderboardPage(1001, 0, 1756)
+        server.start()
+
+        val result = PhiApiClient(server.url("/").toString(), json).fetchLeaderboard("access")
+
+        assertEquals(1000, result.items.size)
+        assertEquals(2, server.requestCount)
+    }
+
+    private fun enqueueLeaderboardPage(firstRank: Int, count: Int, total: Int, cursor: String? = null) {
+        val page = LeaderboardResponse(
+            items = List(count) { index ->
+                val rank = firstRank + index
+                LeaderboardEntry(rank = rank, score = 18.0 - rank * .001)
+            },
+            total = total,
+            nextCursor = cursor,
+        )
+        server.enqueue(MockResponse().setBody(json.encodeToString(page)))
     }
 
     @Test

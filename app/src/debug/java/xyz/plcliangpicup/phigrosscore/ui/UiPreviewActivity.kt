@@ -65,6 +65,7 @@ class UiPreviewActivity : ComponentActivity() {
                         onSearchAchievementSongs = { query -> state = state.copy(achievementSongResults = catalog.search(query)) },
                         onLoadAchievementRates = { _, _ -> },
                         onGenerateCustomRankingImage = {},
+                        onImportCustomRanking = {},
                         onClearCustomRanking = {},
                         onStartRksGuess = { _ -> },
                         onRefreshRksGuess = {},

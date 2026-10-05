@@ -40,6 +40,13 @@ internal class PracticeMusicPlayer private constructor(
     private var outputWarm = false
     private var primingHead = 0L
     private var speed = 1f
+    private val noiseFilter = PracticeNoiseLowPass(sampleRate, channels)
+    // Retain partially written filtered PCM. Advancing the filter twice on an
+    // AudioTrack nonblocking retry would corrupt both sound and timing.
+    private val noiseOutput = ByteArray(maxOf(frameBytes, sampleRate / 100 * frameBytes))
+    private var noiseOutputOffset = 0
+    private var noiseOutputBytes = 0
+    @Volatile private var noiseBlockedRequested = false
     private var autoSchedule: PracticeAutoSoundSchedule? = null
     @Volatile private var autoSoundOffsetSeconds = 0.0
     private var autoHit: ((Int) -> Unit)? = null
@@ -56,6 +63,22 @@ internal class PracticeMusicPlayer private constructor(
     fun readPosition(): Position { failure?.let { throw it }; return position }
     val currentPosition: Int get() = readPosition().milliseconds
     fun setAutoSoundOffset(seconds: Double) { autoSoundOffsetSeconds = seconds }
+    fun setNoiseBlocked(blocked: Boolean) {
+        if (released || noiseBlockedRequested == blocked) return
+        noiseBlockedRequested = blocked
+        handler.post {
+            if (!released) {
+                if (isPlaying) noiseFilter.setBlocked(blocked)
+                else resetNoiseOwned()
+            }
+        }
+    }
+    private fun resetNoiseOwned() {
+        noiseBlockedRequested = false
+        noiseFilter.reset()
+        noiseOutputOffset = 0
+        noiseOutputBytes = 0
+    }
     suspend fun configureAutoSound(schedule: PracticeAutoSoundSchedule?, hit: ((Int) -> Unit)?) = withContext(dispatcher) {
         schedule?.seek(position.milliseconds / 1000.0, autoSoundOffsetSeconds)
         autoSchedule = schedule; autoHit = hit
@@ -77,6 +100,7 @@ internal class PracticeMusicPlayer private constructor(
         // consumed/presented frames may stop the track at the end of the song.
         val finished = if (presented != null) originFrame + presented - headBase >= frameCount else frame >= frameCount
         if (isPlaying && finished) {
+            resetNoiseOwned()
             isPlaying = false; track.setVolume(0f); onPlaybackState?.invoke(false)
         }
     }
@@ -92,8 +116,25 @@ internal class PracticeMusicPlayer private constructor(
         val available = (targetLead - (queuedFrames - head).coerceAtLeast(0)).coerceAtLeast(0).toInt() * frameBytes
         val bytes = minOf(available, if (music) pcm.size - writeFrame * frameBytes else silence.size, silence.size)
         if (bytes <= 0) return
-        val written = if (music) track.write(pcm, writeFrame * frameBytes, bytes, AudioTrack.WRITE_NON_BLOCKING)
-            else track.write(silence, 0, bytes, AudioTrack.WRITE_NON_BLOCKING)
+        val written = if (music) {
+            if (noiseOutputBytes > 0 || !noiseFilter.isBypassed) {
+                if (noiseOutputBytes == 0) {
+                    noiseOutputOffset = 0
+                    noiseOutputBytes = minOf(bytes, noiseOutput.size)
+                    noiseFilter.process(pcm, writeFrame * frameBytes, noiseOutputBytes, noiseOutput)
+                }
+                val result = track.write(noiseOutput, noiseOutputOffset, minOf(bytes, noiseOutputBytes), AudioTrack.WRITE_NON_BLOCKING)
+                if (result > 0) {
+                    noiseOutputOffset += result
+                    noiseOutputBytes -= result
+                }
+                result
+            } else {
+                val result = track.write(pcm, writeFrame * frameBytes, bytes, AudioTrack.WRITE_NON_BLOCKING)
+                if (result > 0) noiseFilter.observePcm(pcm, writeFrame * frameBytes, result)
+                result
+            }
+        } else track.write(silence, 0, bytes, AudioTrack.WRITE_NON_BLOCKING)
         check(written >= 0) { "音频输出失败：$written" }
         queuedFrames += written / frameBytes
         if (music) writeFrame += written / frameBytes
@@ -110,6 +151,7 @@ internal class PracticeMusicPlayer private constructor(
         handler.removeCallbacks(ticker)
         track.setVolume(0f)
         track.pause(); track.flush()
+        resetNoiseOwned()
         isPlaying = false
         outputSuspended = false
         originFrame = frame
@@ -143,6 +185,7 @@ internal class PracticeMusicPlayer private constructor(
                 if (isPlaying) sample()
                 isPlaying = false
                 outputSuspended = true
+                resetNoiseOwned()
                 track.setVolume(0f); track.pause()
                 handler.removeCallbacks(ticker)
             }.onFailure { failure = it }
@@ -156,6 +199,7 @@ internal class PracticeMusicPlayer private constructor(
         // tempo) instead of Android's device-dependent pitch-preserving DSP.
         check(track.setPlaybackRate((sampleRate * speed).toInt()) == AudioTrack.SUCCESS) { "设备不支持此播放速率" }
         this@PracticeMusicPlayer.speed = speed
+        noiseFilter.setPlaybackSpeed(speed)
         soundOffsetSeconds?.let { autoSoundOffsetSeconds = it }
         playbackClock.reset()
         timestampEpochNanos = System.nanoTime()
@@ -194,6 +238,7 @@ internal class PracticeMusicPlayer private constructor(
         onPlaybackState?.invoke(false)
         handler.post {
             handler.removeCallbacksAndMessages(null)
+            resetNoiseOwned()
             if (::track.isInitialized) track.release()
             thread.quitSafely()
         }

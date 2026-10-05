@@ -19,8 +19,10 @@ artifacts/
 keystore.properties
 signing/
 *.apk
+*.apk.sha256
 *.aab
 *.log
+/server-*.zip
 
 # Local-only or third-party runtime assets
 challenge/

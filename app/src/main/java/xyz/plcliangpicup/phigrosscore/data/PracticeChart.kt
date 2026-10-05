@@ -497,6 +497,8 @@ data class PracticeNote(
     val yOffset: Float = 0f,
     val visibleTime: Double = Double.POSITIVE_INFINITY,
     val fake: Boolean = false,
+    // Explicit opt-in for converted official holds. Ordinary RPE uses line-travel integration.
+    val phigrosHoldSpeed: Float? = null,
 )
 
 data class PracticeEvent(
@@ -542,6 +544,7 @@ data class PracticeChart(
     val durationSeconds: Double,
     val musicFile: File,
     val illustrationFile: File,
+    val blockAreas: List<PracticeBlockArea> = emptyList(),
 )
 
 object PracticeChartParser {
@@ -608,10 +611,15 @@ object PracticeChartParser {
 
         val lines = mutableListOf<PracticeJudgeLine>()
         val ungroupedNotes = mutableListOf<PracticeNote>()
+        val blockAreas = mutableListOf<PracticeBlockArea>()
         practiceJsonReader(reader).use { input ->
             input.beginObject()
             while (input.hasNext()) {
-                if (input.nextName() != "judgeLineList") { input.skipValue(); continue }
+                when (input.nextName()) {
+                    "blockAreaList" -> { input.practiceArray { blockAreas += readPracticeBlockArea(input) }; continue }
+                    "judgeLineList" -> Unit
+                    else -> { input.skipValue(); continue }
+                }
                 input.practiceArray {
                     val lineIndex = lines.size
                     var group = 0
@@ -682,6 +690,7 @@ object PracticeChartParser {
                                 yOffset = item.floatAt("yOffset", 0f),
                                 visibleTime = item.doubleAt("visibleTime", Double.POSITIVE_INFINITY),
                                 fake = item.intAt("isFake", 0) != 0,
+                                phigrosHoldSpeed = if (type == PracticeNoteType.HOLD) item.optionalFiniteFloatAt("phigrosHoldSpeed") else null,
                             )
                         }
                         else -> input.skipValue()
@@ -712,6 +721,7 @@ object PracticeChartParser {
             durationSeconds = notes.maxOfOrNull(PracticeNote::endSeconds) ?: 0.0,
             musicFile = musicFile,
             illustrationFile = illustrationFile,
+            blockAreas = blockAreas,
         )
     }
 
@@ -819,6 +829,13 @@ private fun JsonObject.floatAt(key: String, fallback: Float): Float =
     this[key]?.jsonPrimitive?.doubleOrNull?.toFloat() ?: fallback
 private fun JsonObject.intAt(key: String, fallback: Int): Int =
     this[key]?.jsonPrimitive?.intOrNull ?: fallback
+private fun JsonObject.optionalFiniteFloatAt(key: String): Float? {
+    val value = this[key] ?: return null
+    if (value == kotlinx.serialization.json.JsonNull) return null
+    val parsed = value.jsonPrimitive.doubleOrNull?.toFloat()
+    require(parsed != null && parsed.isFinite()) { "谱面 $key 数据无效" }
+    return parsed
+}
 private fun JsonObject.timeAt(key: String): Double {
     val values = this[key]?.jsonArray ?: return 0.0
     val beat = values.getOrNull(0)?.jsonPrimitive?.doubleOrNull ?: 0.0
