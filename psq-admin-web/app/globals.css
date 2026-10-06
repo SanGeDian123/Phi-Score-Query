@@ -580,8 +580,19 @@
   background-color: rgb(255 255 255 / 58%);
 }
 #dashboard,
-#announcement {
+#announcement,
+#feedback,
+#lan-access {
   scroll-margin-top: 6rem;
+}
+@media (max-width: 1023px) {
+  /* Leave room for the sticky topbar and the phone navigation row. */
+  #dashboard,
+  #announcement,
+  #feedback,
+  #lan-access {
+    scroll-margin-top: 8.5rem;
+  }
 }
 @media (max-width: 639px) {
   .psq-glass-card,

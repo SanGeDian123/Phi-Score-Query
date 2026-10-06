@@ -109,6 +109,7 @@ impl StatsStorage {
                     p.challenge_mode_rank,p.rks,p.created_at
              FROM suggestion_posts p
              WHERE p.status='active'{exclusion_filter}
+               AND NOT EXISTS (SELECT 1 FROM publicly_restricted_users blocked WHERE blocked.user_hash=p.user_hash)
              ORDER BY RANDOM()
              LIMIT 1"
         );
@@ -142,11 +143,29 @@ impl StatsStorage {
         &self,
         post_id: &str,
     ) -> Result<Option<SuggestionPostRecord>, AppError> {
+        self.load_suggestion_post(post_id, true).await
+    }
+
+    pub async fn suggestion_post_for_management(
+        &self,
+        post_id: &str,
+    ) -> Result<Option<SuggestionPostRecord>, AppError> {
+        self.load_suggestion_post(post_id, false).await
+    }
+
+    async fn load_suggestion_post(
+        &self,
+        post_id: &str,
+        public_only: bool,
+    ) -> Result<Option<SuggestionPostRecord>, AppError> {
         let row = sqlx::query(
             "SELECT id,user_hash,description,image_name,nickname,avatar,challenge_mode_rank,rks,created_at
-             FROM suggestion_posts WHERE id=? AND status='active' LIMIT 1",
+             FROM suggestion_posts p WHERE id=? AND status='active'
+               AND (?=0 OR NOT EXISTS (SELECT 1 FROM publicly_restricted_users blocked WHERE blocked.user_hash=p.user_hash))
+             LIMIT 1",
         )
         .bind(post_id)
+        .bind(i64::from(public_only))
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| AppError::Internal(format!("query suggestion post: {e}")))?;
@@ -171,8 +190,10 @@ impl StatsStorage {
     ) -> Result<Vec<SuggestionPostRecord>, AppError> {
         let rows = sqlx::query(
             "SELECT id,user_hash,description,image_name,nickname,avatar,challenge_mode_rank,rks,created_at
-             FROM suggestion_posts
-             WHERE user_hash=? AND status='active' ORDER BY created_at DESC LIMIT 50",
+             FROM suggestion_posts p
+             WHERE user_hash=? AND status='active'
+               AND NOT EXISTS (SELECT 1 FROM publicly_restricted_users blocked WHERE blocked.user_hash=p.user_hash)
+             ORDER BY created_at DESC LIMIT 50",
         )
         .bind(user_hash)
         .fetch_all(&self.pool)
@@ -206,6 +227,8 @@ impl StatsStorage {
              FROM suggestion_posts p
              JOIN suggestion_comments c ON c.post_id=p.id
              WHERE c.user_hash=? AND c.status='active' AND p.status='active'
+               AND NOT EXISTS (SELECT 1 FROM publicly_restricted_users blocked WHERE blocked.user_hash=p.user_hash)
+               AND NOT EXISTS (SELECT 1 FROM publicly_restricted_users blocked WHERE blocked.user_hash=c.user_hash)
              GROUP BY p.id ORDER BY latest_comment_at DESC LIMIT 50",
         )
         .bind(user_hash)
@@ -232,7 +255,8 @@ impl StatsStorage {
 
     pub async fn suggestion_post_exists(&self, post_id: &str) -> Result<bool, AppError> {
         let value: i64 = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM suggestion_posts WHERE id=? AND status='active')",
+            "SELECT EXISTS(SELECT 1 FROM suggestion_posts p WHERE id=? AND status='active'
+               AND NOT EXISTS (SELECT 1 FROM publicly_restricted_users blocked WHERE blocked.user_hash=p.user_hash))",
         )
         .bind(post_id)
         .fetch_one(&self.pool)
@@ -278,9 +302,12 @@ impl StatsStorage {
         post_id: &str,
     ) -> Result<Vec<SuggestionCommentRecord>, AppError> {
         let rows = sqlx::query(
-            "SELECT id,user_hash,text,image_name,nickname,avatar,challenge_mode_rank,rks,created_at
-             FROM suggestion_comments
-             WHERE post_id=? AND status='active' ORDER BY created_at ASC LIMIT 100",
+            "SELECT c.id,c.user_hash,c.text,c.image_name,c.nickname,c.avatar,c.challenge_mode_rank,c.rks,c.created_at
+             FROM suggestion_comments c JOIN suggestion_posts p ON p.id=c.post_id
+             WHERE c.post_id=? AND c.status='active' AND p.status='active'
+               AND NOT EXISTS (SELECT 1 FROM publicly_restricted_users blocked WHERE blocked.user_hash=c.user_hash)
+               AND NOT EXISTS (SELECT 1 FROM publicly_restricted_users blocked WHERE blocked.user_hash=p.user_hash)
+             ORDER BY c.created_at ASC LIMIT 100",
         )
         .bind(post_id)
         .fetch_all(&self.pool)
@@ -437,6 +464,8 @@ impl StatsStorage {
              FROM suggestion_posts p
              JOIN suggestion_comments c ON c.post_id=p.id
              WHERE p.user_hash=? AND p.status='active' AND c.status='active'
+               AND NOT EXISTS (SELECT 1 FROM publicly_restricted_users blocked WHERE blocked.user_hash=p.user_hash)
+               AND NOT EXISTS (SELECT 1 FROM publicly_restricted_users blocked WHERE blocked.user_hash=c.user_hash)
                AND c.user_hash<>? AND julianday(c.created_at)>julianday(?)
              GROUP BY p.id,p.description ORDER BY latest_comment_at ASC LIMIT 50",
         )
@@ -455,6 +484,26 @@ impl StatsStorage {
                 latest_comment_at: row.try_get("latest_comment_at").unwrap_or_default(),
             })
             .collect())
+    }
+
+    pub async fn suggestion_media_is_public(&self, image_name: &str) -> Result<bool, AppError> {
+        let visible: i64 = sqlx::query_scalar(
+            "SELECT EXISTS(
+               SELECT 1 FROM suggestion_posts p WHERE p.image_name=? AND p.status='active'
+                 AND NOT EXISTS (SELECT 1 FROM publicly_restricted_users blocked WHERE blocked.user_hash=p.user_hash)
+               UNION ALL
+               SELECT 1 FROM suggestion_comments c JOIN suggestion_posts p ON p.id=c.post_id
+               WHERE c.image_name=? AND c.status='active' AND p.status='active'
+                 AND NOT EXISTS (SELECT 1 FROM publicly_restricted_users blocked WHERE blocked.user_hash=c.user_hash)
+                 AND NOT EXISTS (SELECT 1 FROM publicly_restricted_users blocked WHERE blocked.user_hash=p.user_hash)
+             )",
+        )
+        .bind(image_name)
+        .bind(image_name)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| AppError::Internal(format!("query suggestion media visibility: {e}")))?;
+        Ok(visible != 0)
     }
 }
 

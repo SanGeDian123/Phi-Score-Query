@@ -71,3 +71,16 @@ Add authenticated daily checkin, Shanghai date boundaries, atomic unique reward 
 - Added filesystem discovery tests and a public route/ETag integration test. No APP update is published by the server package.
 
 - 2026-10-01: practice catalog includes size/revision and conditional ETag responses; thumbnail WebP previews and conditional GET/HEAD; preserve media cache headers through gateway.
+
+## 2026-10-06 用户管理与申诉
+
+- 新增按用户名搜索、公开展示限制、限时账户暂停、解除限制，以及文字和私有图片申诉与管理员审核接口；限制、申诉及审核记录持久化到现有统计数据库。
+- 在登录签发、会话续期、已有 Bearer 会话和旧式凭据请求中检查账户暂停；停止公开展示时隐藏公开资料与排行榜，并禁止建议评论。
+- 封禁、暂停和公开展示限制的错误提示追加“如需申诉，请将APP更新至最新版本”，供没有图文申诉入口的旧客户端展示。
+- 配套 Caddy 路由支持用户管理及申诉附件，部署时仅增补这些路由，保留现有资源与 APP 更新配置。
+- 公开展示限制与账户暂停统一排除公开排行榜、求建议帖子、评论与图片，以及谱面评级达成率的统计样本；解除限制后自动恢复，保留原始数据。
+- 建议图片原图和预览在读取前校验所属用户及帖子可见性，包括条件请求，禁止通过旧图片地址绕过限制；建议图片改为 no-store。
+- 封停提示中的暂停结束时间固定按 UTC+8 展示并附时区标记，供旧版 APP 显示；数据库和状态接口继续使用原始时间戳，实际限制到期时刻保持不变。
+- 暂停与封禁提示增加解除限制后重新登录的说明，触发旧客户端在主页刷新失败后关闭功能主界面；旧客户端续期返回 401 以清除登录会话，支持限制专页的新客户端通过 `X-PSQ-Moderation: 1` 保留 403 和申诉凭据。该标记只影响错误处理，不改变服务端限制。
+- 对已过期但签名有效的 Bearer 仍检查账户暂停，旧式 JSON 凭据在统一入口检查暂停，读取存档或成绩图缓存之前拒绝访问。服务端不能清除旧客户端内置数据、已缓存文件或强制修改离线界面；完全禁止离线使用需要客户端支持。
+- 被禁止公开展示的旧客户端在登录后第一次刷新成绩时返回一次包含限制原因、UTC+8 恢复时间及升级申诉说明的 403，沿用旧版页面底部提示；不包含重新登录触发文案，不清除登录会话，下一次刷新正常读取成绩。提醒按签名会话与限制更新时间去重，旧式 JSON 凭据按账号与限制更新时间去重；有界内存缓存会在服务重启或淘汰后再次提醒。

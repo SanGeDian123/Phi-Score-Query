@@ -65,8 +65,8 @@ export function FeedbackPanel({ token, connected }: { token: string; connected: 
     finally { setBusy(false); }
   }
   return <Card id="feedback" className="mt-6 min-w-0 scroll-mt-6">
-    <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3"><CardTitle>用户反馈</CardTitle><Button variant="outline" disabled={!connected || busy} onClick={() => void load()}>刷新</Button></CardHeader>
-    <CardContent className="space-y-4">
+    <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 px-4 sm:px-6"><CardTitle>用户反馈</CardTitle><Button variant="outline" disabled={!connected || busy} onClick={() => void load()}>刷新</Button></CardHeader>
+    <CardContent className="space-y-4 px-4 sm:px-6">
       {message && <p role="status" className="break-words text-sm">{message}</p>}
       {!connected ? <p className="text-muted-foreground">连接管理台后查看反馈</p> : busy && !items.length ? <p>正在加载…</p> : !items.length ? <p className="text-muted-foreground">暂无反馈</p> :
         <div className="grid gap-3 md:grid-cols-2">{items.map(item => <button key={item.id} disabled={busy} onClick={() => { setSelected(item); setStatus(item.status); setReply(item.reply); setMessage(''); }} className="min-w-0 rounded-2xl border p-4 text-left transition-colors hover:bg-primary/5 focus-visible:outline-2 focus-visible:outline-primary">

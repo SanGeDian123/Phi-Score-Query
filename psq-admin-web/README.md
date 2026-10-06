@@ -23,6 +23,21 @@ Windows 下直接双击项目根目录的 **`启动APP后台网页.cmd`**。脚�
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Start-AdminWeb.ps1
 ```
 
+可用参数：
+
+- `-NoBrowser`：启动后不自动打开浏览器。
+- `-LocalOnly`：只监听本机，禁止手机访问（默认监听局域网，供手机使用）。
+
+## 手机访问
+
+后台服务默认监听 `0.0.0.0`，因此手机与电脑连接同一个 Wi-Fi 后即可访问同一份数据：
+
+1. 电脑双击 `启动APP后台网页.cmd`，命令窗口会打印手机可用的地址，例如 `http://192.168.1.8:3000/`。
+2. 在手机上打开该地址，或打开电脑上的网页后点击右上角/导航栏的 **「手机访问」**，用手机相机扫描页面上的二维码。
+3. 手机上仍需输入一次管理员令牌：令牌不会写入本地存储，也不会随地址传递。
+
+页面显示的地址由构建期注入的本机局域网 IPv4 地址生成，虚拟网卡（Hyper-V / WSL）地址会排在真实网卡之后。手机与电脑不在同一网段时无法访问；若公司或校园网络启用了终端隔离，请改用电脑开热点。
+
 默认通过站点服务端代理连接 `https://api.plc-liangpi-cup.xyz`，浏览器不会直接跨域访问 PSQ。开发环境如需连接测试服务器，可设置服务端环境变量 `PSQ_API_ORIGIN`。
 
 ## 构建
@@ -42,7 +57,7 @@ npm run build
 
 公告接口沿用 `leaderboard.admin_tokens` 与 `X-Admin-Token`，不会增加另一套管理员凭据。旧版 `GET/POST /api/v2/admin/announcement` 继续由后端保留兼容。
 
-每日签到统计：显示签到人数、签到率和近 14 日签到人数折线图。依赖新版 `/api/v2/admin/dashboard` 的 `checkinTrend` 字段。签到率按北京时间，以当日签到人数除以截至当日排行榜与签到用户去重总数。
+每日签到统计：显示签到人数、日活签到率（签到用户 ÷ 日活用户）、总签到率（签到用户 ÷ 总用户数）和近 14 日签到人数折线图。依赖新版 `/api/v2/admin/dashboard` 的 `checkinTrend`、`dau` 与 `totalUsers` 字段，统计日期按北京时间计算。
 
 ## 用户反馈
 
@@ -54,3 +69,27 @@ npm run build
 - `GET /api/v2/admin/feedback/{id}/images/{position}`
 
 上述接口均沿用 `X-Admin-Token`。附件通过鉴权代理读取，不公开静态文件地址。应先升级后端，再发布管理台和客户端。
+
+## 用户管理与申诉
+
+按用户名或昵称搜索玩家，显示头像、RKS、课题模式等级和当前排行榜位次。可分别设置停止公开展示和暂停账户使用，选择预设或自定义分钟数，也可设置长期限制；两项限制都支持单独解除。
+
+用户搜索与申诉列表的课题等级沿用 APP 的颜色档位和等级组合，如“彩52”“金48”；服务端编码 552 对应彩52、448 对应金48。颜色档位依次为绿、蓝、红、金、彩，未取得有效课题记录时显示“—”。
+
+停止公开展示和暂停账户使用均会从公开排行榜与公开资料中移除该用户，隐藏其已有求建议帖子、评论及图片，并从谱面评级达成率的样本总数、评级人数与百分位计算中排除该用户。停止公开展示期间不能发布求建议或建议评论；暂停账户使用还会由后端拒绝会话签发、续期和已有会话的服务请求，旧版客户端同样受服务端检查约束。原始成绩和帖子保留，到期或手动解除后恢复。
+
+旧客户端通过服务端错误提示收到限制原因和“如需申诉，请将APP更新至最新版本”。仅服务器升级不会替换客户端界面，也不会发布 APP 更新清单；图文申诉入口需安装支持该功能的客户端。
+
+限制状态查询与图文申诉接口通过 SessionToken 识别账号，不要求有效的应用 Access Token，因此账户暂停后仍能调用申诉接口。两项限制的申诉状态分别返回；每项限制只能有一份待处理申诉。管理员通过申诉后自动解除对应限制，更新限制时会关闭旧申诉，防止旧申诉解除新限制。
+
+配套后端新增接口：
+
+- `GET /api/v2/admin/users/management/search?query=用户名`
+- `POST /api/v2/admin/users/management/restriction`
+- `GET /api/v2/admin/users/management/appeals?status=pending`
+- `POST /api/v2/admin/users/management/appeals/{id}`
+- `GET /api/v2/admin/users/management/appeals/{id}/images/{position}`
+- `POST /api/v2/users/me/moderation/status`
+- `POST /api/v2/users/me/moderation/appeals`
+
+管理接口沿用 `X-Admin-Token`。申诉图片最多 3 张，每张不超过 1 MB，仅支持 JPG、PNG、WebP，经鉴权后才能查看。部署须先更新 Rust 后端，再更新管理台；客户端申诉入口需要支持该功能的版本。

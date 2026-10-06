@@ -19,7 +19,7 @@ impl StatsStorage {
         Ok(CheckinStatus { server_date: date.into(), month: month.into(), total_coin: total.try_get("coin").map_err(error)?, total_days: total.try_get("days").map_err(error)?, today: today.map(|s| serde_json::from_str(&s)).transpose().map_err(error)?, dates })
     }
     pub async fn checkin_leaderboard(&self) -> Result<serde_json::Value, AppError> {
-        let rows = sqlx::query("SELECT c.user_hash,COUNT(*) days,MAX(c.date) last_date,CASE WHEN p.is_public=1 THEN COALESCE(NULLIF(p.nickname,''),NULLIF(p.alias,''),'Phigros Player') ELSE '匿名玩家' END nickname FROM daily_checkins c LEFT JOIN user_profile p ON p.user_hash=c.user_hash LEFT JOIN leaderboard_rks l ON l.user_hash=c.user_hash WHERE COALESCE(l.is_hidden,0)=0 GROUP BY c.user_hash ORDER BY days DESC,last_date ASC,c.user_hash ASC LIMIT 100").fetch_all(&self.pool).await.map_err(error)?;
+        let rows = sqlx::query("SELECT c.user_hash,COUNT(*) days,MAX(c.date) last_date,CASE WHEN p.is_public=1 THEN COALESCE(NULLIF(p.nickname,''),NULLIF(p.alias,''),'Phigros Player') ELSE '匿名玩家' END nickname FROM daily_checkins c LEFT JOIN user_profile p ON p.user_hash=c.user_hash LEFT JOIN leaderboard_rks l ON l.user_hash=c.user_hash WHERE COALESCE(l.is_hidden,0)=0 AND NOT EXISTS (SELECT 1 FROM publicly_restricted_users blocked WHERE blocked.user_hash=c.user_hash) GROUP BY c.user_hash ORDER BY days DESC,last_date ASC,c.user_hash ASC LIMIT 100").fetch_all(&self.pool).await.map_err(error)?;
         let items: Vec<_> = rows.iter().enumerate().map(|(i,r)| serde_json::json!({"rank":i+1,"nickname":r.get::<String,_>("nickname"),"totalDays":r.get::<i64,_>("days")})).collect();
         Ok(serde_json::json!({"items":items}))
     }

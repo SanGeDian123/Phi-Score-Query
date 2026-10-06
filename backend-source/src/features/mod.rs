@@ -11,6 +11,7 @@ pub mod save;
 pub mod song;
 pub mod stats;
 pub mod suggestion;
+pub mod user_moderation;
 
 pub mod feedback;
 pub mod practice;

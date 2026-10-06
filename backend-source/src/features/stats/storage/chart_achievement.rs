@@ -68,8 +68,10 @@ impl StatsStorage {
                SUM(CASE WHEN score BETWEEN 960000 AND 999999 AND is_full_combo=0 THEN 1 ELSE 0 END) AS v,
                SUM(CASE WHEN score < 1000000 AND is_full_combo<>0 THEN 1 ELSE 0 END) AS fc,
                SUM(CASE WHEN score=1000000 THEN 1 ELSE 0 END) AS ap
-             FROM chart_achievement_samples
-             WHERE song_id=? AND difficulty=?",
+             FROM chart_achievement_samples sample
+             WHERE song_id=? AND difficulty=?
+               AND NOT EXISTS (SELECT 1 FROM publicly_restricted_users blocked
+                 WHERE blocked.user_hash=sample.user_hash)",
         )
         .bind(song_id)
         .bind(difficulty)
@@ -94,7 +96,9 @@ impl StatsStorage {
         difficulty: &str,
     ) -> Result<i64, AppError> {
         let row = sqlx::query(
-            "SELECT COUNT(1) AS total FROM chart_achievement_samples WHERE song_id=? AND difficulty=?",
+            "SELECT COUNT(1) AS total FROM chart_achievement_samples sample WHERE song_id=? AND difficulty=?
+               AND NOT EXISTS (SELECT 1 FROM publicly_restricted_users blocked
+                 WHERE blocked.user_hash=sample.user_hash)",
         )
         .bind(song_id)
         .bind(difficulty)
@@ -114,9 +118,13 @@ impl StatsStorage {
             "SELECT mine.score, mine.is_full_combo,
                     (SELECT COUNT(1) FROM chart_achievement_samples other
                      WHERE other.song_id=mine.song_id AND other.difficulty=mine.difficulty
-                       AND other.score < mine.score) AS exceeded_count
+                       AND other.score < mine.score
+                       AND NOT EXISTS (SELECT 1 FROM publicly_restricted_users blocked
+                         WHERE blocked.user_hash=other.user_hash)) AS exceeded_count
              FROM chart_achievement_samples mine
              WHERE mine.user_hash=? AND mine.song_id=? AND mine.difficulty=?
+               AND NOT EXISTS (SELECT 1 FROM publicly_restricted_users blocked
+                 WHERE blocked.user_hash=mine.user_hash)
              LIMIT 1",
         )
         .bind(user_hash)

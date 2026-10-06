@@ -28,6 +28,8 @@ import {
 import { Line, LineChart, Area, AreaChart, CartesianGrid, XAxis, YAxis } from 'recharts';
 
 import { FeedbackPanel } from '@/components/feedback-panel';
+import { LanAccessButton, LanAccessCard } from '@/components/lan-access';
+import { UserManagementPanel } from '@/components/user-management';
 import { Badge } from '@/components/ui/badge';
 import {
   AlertDialog,
@@ -94,8 +96,9 @@ type UserCountRow = {
 
 type DashboardData = {
   todayCheckins?: number;
-  checkinRate?: number;
-  checkinTrend: Array<{date: string; count: number; totalUsers: number; rate: number}>;
+  dailyActiveCheckinRate?: number;
+  totalCheckinRate?: number;
+  checkinTrend: Array<{date: string; count: number}>;
   timezone: string;
   generatedAt: string;
   totalUsers: number;
@@ -471,7 +474,7 @@ export default function Home() {
 
   const metrics = [
     { label: '今日签到人数', value: number(data?.todayCheckins), note: '北京时间 · 每人每日一次', icon: CircleCheck, color: 'text-[#12a985]', glow: 'bg-[#12a985]/9' },
-    { label: '今日签到率', value: percent(data?.checkinRate), note: '签到人数 / 累计用户数', icon: CalendarClock, color: 'text-[#9a72cc]', glow: 'bg-[#9a72cc]/9' },
+    { kind: 'checkin-rates' as const },
     {
       label: '总用户数',
       value: number(data?.totalUsers),
@@ -572,6 +575,7 @@ export default function Home() {
               公告管理
             </Button>
             <Button variant="ghost" className="h-11 w-full justify-start gap-3 px-3 text-muted-foreground" onClick={() => document.getElementById('feedback')?.scrollIntoView({ behavior: 'smooth' })}><Send />用户反馈</Button>
+            <Button variant="ghost" className="h-11 w-full justify-start gap-3 px-3 text-muted-foreground" onClick={() => document.getElementById('user-management')?.scrollIntoView({ behavior: 'smooth' })}><Users />用户管理</Button>
           </nav>
 
           <div className="mt-auto rounded-2xl border border-primary/10 bg-primary/[0.035] p-4">
@@ -634,24 +638,57 @@ export default function Home() {
               </Button>
               {connected ? (
                 <Button
-                  className="psq-glass-control hidden h-9 rounded-xl px-3 sm:flex"
+                  className="psq-glass-control h-9 shrink-0 rounded-xl px-3"
                   onClick={disconnect}
                   variant="outline"
                 >
                   <LogOut />
-                  断开连接
+                  <span className="hidden sm:inline">断开连接</span>
                 </Button>
               ) : (
                 <Button
-                  className="hidden h-9 rounded-xl px-3 sm:flex"
+                  className="h-9 shrink-0 rounded-xl px-3"
                   onClick={() => setConnectOpen(true)}
                 >
                   <KeyRound />
-                  连接服务器
+                  <span className="hidden sm:inline">连接服务器</span>
                 </Button>
               )}
+              <LanAccessButton />
             </div>
           </header>
+
+          {/* Phones keep all three sections one tap away. */}
+          <nav
+            aria-label="页面导航"
+            className="psq-glass-topbar sticky top-[72px] z-10 border-b lg:hidden"
+          >
+            <div className="flex items-center gap-1.5 overflow-x-auto px-4 py-2 sm:px-7">
+              {[
+                { id: 'dashboard', label: '总览', icon: LayoutDashboard },
+                { id: 'announcement', label: '公告', icon: BellRing },
+                { id: 'user-management', label: '用户管理', icon: Users },
+                { id: 'feedback', label: '反馈', icon: Send },
+              ].map(({ id, label, icon: Icon }) => (
+                <Button
+                  className="h-9 shrink-0 rounded-xl px-3.5 text-xs"
+                  key={id}
+                  onClick={() =>
+                    document
+                      .getElementById(id)
+                      ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                  }
+                  variant="ghost"
+                >
+                  <Icon className="size-4" />
+                  {label}
+                </Button>
+              ))}
+              <span className="ml-auto shrink-0 pl-2">
+                <LanAccessButton className="border-primary/15 bg-primary/6 text-primary" />
+              </span>
+            </div>
+          </nav>
 
           <div className="px-4 py-6 sm:px-7 lg:px-9 lg:py-8" id="dashboard">
             <div className="psq-rise flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -681,8 +718,53 @@ export default function Home() {
               </p>
             </div>
 
-            <div className="psq-rise psq-rise-delay-1 mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="psq-rise psq-rise-delay-1 mt-6 grid grid-cols-2 gap-3 xl:grid-cols-4">
               {metrics.map((metric, index) => {
+                if ('kind' in metric) {
+                  return (
+                    <Card
+                      className="psq-glass-card col-span-2 ring-0 xl:col-span-1"
+                      key={metric.kind}
+                      style={{ animationDelay: `${90 + index * 55}ms` }}
+                    >
+                      <CardContent className="p-4 sm:p-5">
+                        <div className="flex items-center gap-3">
+                          <div className="psq-icon-float grid size-10 shrink-0 place-items-center rounded-xl bg-[#9a72cc]/9 text-[#9a72cc]">
+                            <CalendarClock className="size-[18px]" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-[11px] font-semibold tracking-[0.08em] text-muted-foreground">
+                              今日签到率
+                            </p>
+                            <p className="mt-1 text-[10px] text-muted-foreground">
+                              北京时间 · 每人每日一次
+                            </p>
+                          </div>
+                        </div>
+                        <div className="mt-4 grid grid-cols-2 divide-x divide-border/70">
+                          <div className="min-w-0 pr-3">
+                            <p className="text-[10px] font-semibold text-muted-foreground sm:text-[11px]">
+                              日活签到率
+                            </p>
+                            <AnimatedNumber
+                              className="mt-1 whitespace-nowrap text-[clamp(16px,1.55vw,22px)] font-black tracking-[-0.025em] tabular-nums"
+                              value={percent(data?.dailyActiveCheckinRate)}
+                            />
+                          </div>
+                          <div className="min-w-0 pl-3">
+                            <p className="text-[10px] font-semibold text-muted-foreground sm:text-[11px]">
+                              总签到率
+                            </p>
+                            <AnimatedNumber
+                              className="mt-1 whitespace-nowrap text-[clamp(16px,1.55vw,22px)] font-black tracking-[-0.025em] tabular-nums"
+                              value={percent(data?.totalCheckinRate)}
+                            />
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                }
                 const Icon = metric.icon;
                 return (
                   <Card
@@ -690,7 +772,7 @@ export default function Home() {
                     key={metric.label}
                     style={{ animationDelay: `${90 + index * 55}ms` }}
                   >
-                    <CardContent className="p-5">
+                    <CardContent className="p-4 sm:p-5">
                       <div className="flex items-start justify-between gap-3">
                         <div
                           className={`psq-icon-float grid size-10 place-items-center rounded-xl ${metric.glow} ${metric.color}`}
@@ -703,11 +785,11 @@ export default function Home() {
                           </span>
                         )}
                       </div>
-                      <p className="mt-5 text-[11px] font-semibold tracking-[0.08em] text-muted-foreground">
+                      <p className="mt-4 text-[11px] font-semibold tracking-[0.08em] text-muted-foreground sm:mt-5">
                         {metric.label}
                       </p>
                       <AnimatedNumber
-                        className="mt-1 text-[27px] font-black tracking-[-0.025em] tabular-nums"
+                        className="mt-1 text-[24px] font-black tracking-[-0.025em] tabular-nums sm:text-[27px]"
                         value={metric.value}
                       />
                     </CardContent>
@@ -717,11 +799,11 @@ export default function Home() {
             </div>
 
             <Card className="psq-glass-card mt-4 ring-0">
-              <CardHeader><CardTitle>签到人数</CardTitle><CardDescription>近 14 日 · 北京时间。签到率为当日签到人数 ÷ 截至当日累计用户数（排行榜用户与签到用户去重合并）。</CardDescription></CardHeader>
+              <CardHeader><CardTitle>签到人数</CardTitle><CardDescription>近 14 日 · 北京时间 · 每人每日一次。上方卡片分别按日活用户数与总用户数计算签到率。</CardDescription></CardHeader>
               <CardContent>
-                {data?.checkinTrend?.length ? <ChartContainer className="h-[260px] w-full" config={{count: {label: '签到人数',color: 'var(--psq-mint)'}}}>
-                  <LineChart data={data.checkinTrend} margin={{left: 0,right: 18,top: 12,bottom: 0}}>
-                    <CartesianGrid vertical={false}/><XAxis dataKey="date" tickFormatter={dateLabel}/><YAxis allowDecimals={false}/>
+                {data?.checkinTrend?.length ? <ChartContainer className="h-[220px] w-full sm:h-[260px]" config={{count: {label: '签到人数',color: 'var(--psq-mint)'}}}>
+                  <LineChart data={data.checkinTrend} margin={{left: 0,right: 12,top: 12,bottom: 0}}>
+                    <CartesianGrid vertical={false}/><XAxis dataKey="date" minTickGap={18} tickFormatter={dateLabel}/><YAxis allowDecimals={false} width={34}/>
                     <ChartTooltip content={<ChartTooltipContent/>}/><Line type="monotone" dataKey="count" stroke="var(--psq-mint)" strokeWidth={2} dot={{r:3}}/>
                   </LineChart>
                 </ChartContainer> : <p className="py-12 text-center text-sm text-muted-foreground">{connected ? '签到统计暂不可用，请先升级后端' : '连接服务器后查看签到趋势'}</p>}
@@ -738,7 +820,7 @@ export default function Home() {
                 <CardContent className="relative px-2 pb-2 sm:px-4">
                   {chartData.length > 0 ? (
                     <ChartContainer
-                      className="h-[300px] w-full"
+                      className="h-[240px] w-full sm:h-[300px]"
                       config={chartConfig}
                     >
                       <AreaChart
@@ -778,7 +860,7 @@ export default function Home() {
                           domain={[0, 'dataMax + 10']}
                           tickLine={false}
                           tickMargin={8}
-                          width={38}
+                          width={34}
                         />
                         <ChartTooltip
                           content={<ChartTooltipContent indicator="line" />}
@@ -799,7 +881,7 @@ export default function Home() {
                       </AreaChart>
                     </ChartContainer>
                   ) : (
-                    <div className="psq-glass-empty grid h-[300px] place-items-center rounded-xl">
+                    <div className="psq-glass-empty grid h-[240px] place-items-center rounded-xl sm:h-[300px]">
                       <div className="text-center">
                         <Activity className="mx-auto size-7 text-primary/35" />
                         <p className="mt-3 text-sm font-semibold">
@@ -826,7 +908,7 @@ export default function Home() {
                 <CardContent className="relative px-2 pb-2 sm:px-4">
                   {userCountChartData.length > 0 ? (
                     <ChartContainer
-                      className="h-[300px] w-full"
+                      className="h-[240px] w-full sm:h-[300px]"
                       config={userCountChartConfig}
                     >
                       <AreaChart
@@ -887,7 +969,7 @@ export default function Home() {
                       </AreaChart>
                     </ChartContainer>
                   ) : (
-                    <div className="psq-glass-empty grid h-[300px] place-items-center rounded-xl">
+                    <div className="psq-glass-empty grid h-[240px] place-items-center rounded-xl sm:h-[300px]">
                       <div className="text-center">
                         <Users className="mx-auto size-7 text-primary/35" />
                         <p className="mt-3 text-sm font-semibold">
@@ -906,7 +988,7 @@ export default function Home() {
                 className="psq-glass-card xl:col-start-2 xl:row-span-2 xl:row-start-1 ring-0"
                 id="announcement"
               >
-                <CardHeader className="flex flex-col gap-3 px-5 sm:flex-row sm:items-start sm:justify-between sm:px-6">
+                <CardHeader className="flex flex-col gap-3 px-4 sm:flex-row sm:items-start sm:justify-between sm:px-6">
                   <div className="flex min-w-0 items-start gap-3">
                     <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-[#315f9d]/9 text-[#315f9d]">
                       <ListFilter className="size-[18px]" />
@@ -937,7 +1019,7 @@ export default function Home() {
                     新增公告
                   </Button>
                 </CardHeader>
-                <CardContent className="px-5 sm:px-6">
+                <CardContent className="px-4 sm:px-6">
                   {announcementMessage && (
                     <div
                       aria-live="polite"
@@ -1067,7 +1149,11 @@ export default function Home() {
               </Card>
             </div>
 
+            <UserManagementPanel token={token} connected={connected} />
+
             <FeedbackPanel token={token} connected={connected} />
+
+            <LanAccessCard />
 
             <footer className="psq-rise psq-rise-delay-3 mt-6 flex flex-col gap-2 border-t border-primary/[0.075] pt-5 text-[11px] text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
               <span>PSQ Server Console · 项目组内部管理</span>

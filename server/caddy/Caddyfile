@@ -81,6 +81,7 @@ api.plc-liangpi-cup.xyz {
 
 	@suggestionMedia path /suggestion-media/*
 	handle @suggestionMedia {
+		header Cache-Control "no-store"
 		reverse_proxy 127.0.0.1:3939 {
 			header_up -X-Exchange-Secret
 			header_up -X-OpenApi-Token
@@ -130,6 +131,19 @@ api.plc-liangpi-cup.xyz {
 			header_up -X-OpenApi-Token
 		}
 	}
+
+	# BEGIN PSQ USER MODERATION
+	@userModerationApi path /api/v2/users/me/moderation/status /api/v2/users/me/moderation/appeals /api/v2/admin/users/management/*
+	handle @userModerationApi {
+		request_body {
+			max_size 5MB
+		}
+		reverse_proxy 127.0.0.1:3939 {
+			header_up -X-Exchange-Secret
+			header_up -X-OpenApi-Token
+		}
+	}
+	# END PSQ USER MODERATION
 
 	@adminConsoleApi path /api/v2/admin/dashboard /api/v2/admin/announcement /api/v2/admin/announcements /api/v2/admin/announcements/* /api/v2/admin/feedback /api/v2/admin/feedback/*
 	handle @adminConsoleApi {

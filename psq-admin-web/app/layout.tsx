@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 
 import './globals.css';
 
@@ -19,6 +19,17 @@ export const metadata: Metadata = {
     description: 'PSQ 服务器数据与公告管理控制台',
     images: ['/og.png'],
   },
+};
+
+// Mobile Safari/Chrome must be told to use the device width; without this the
+// page renders at a 980px fallback width and phones show a shrunken desktop
+// layout. `viewportFit: cover` also lets safe-area padding work on notched
+// phones.
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',
+  themeColor: '#f4f7fb',
 };
 
 export default function RootLayout({

@@ -797,6 +797,14 @@ pub async fn get_save_data(
     req: axum::extract::Request,
 ) -> Result<Response, AppError> {
     let t_total = Instant::now();
+    let legacy_notice = !crate::features::auth::bearer::supports_moderation_ui(req.headers())
+        && params.get("calculate_rks").is_some_and(|value| value == "true");
+    let legacy_session_id = req.extensions()
+        .get::<crate::session_auth::BearerAuthState>()
+        .and_then(|auth| match auth {
+            crate::session_auth::BearerAuthState::Valid(context) => Some(context.claims.jti.clone()),
+            _ => None,
+        });
 
     // Phase 1: 认证 + 身份推导
     let auth = authenticate_for_save(&state, req).await?;
@@ -804,6 +812,16 @@ pub async fn get_save_data(
     // Phase 2: 存档源验证
     let t_source = Instant::now();
     let source = validate_and_create_source(&auth.payload)?;
+    if legacy_notice
+        && let (Some(storage), Some(user_hash)) = (state.stats_storage.as_ref(), auth.user_hash.as_deref())
+        && let Some(notice) = storage
+            .take_legacy_public_hidden_notice(user_hash, legacy_session_id.as_deref())
+            .await?
+    {
+        // Old APP versions display this in the bottom snackbar after login.
+        // The following refresh is served normally; public visibility stays restricted.
+        return Err(AppError::Forbidden(notice));
+    }
     let source_ms = duration_ms_i64(t_source.elapsed());
     tracing::info!(
         target: "phi_backend::save::performance",

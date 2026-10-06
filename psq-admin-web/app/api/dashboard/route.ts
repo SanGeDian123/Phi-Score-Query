@@ -9,7 +9,7 @@ import {
 export const dynamic = 'force-dynamic';
 
 type DashboardResponse = {
-  checkinTrend?: Array<{ date: string; count: number; totalUsers: number; rate: number }>;
+  checkinTrend?: Array<{ date: string; count: number }>;
   timezone: string;
   totalUsers: number;
   userCountTrend: Array<{ date: string; totalUsers: number }>;
@@ -74,6 +74,18 @@ export async function GET(request: Request): Promise<Response> {
 
     const todayDau =
       dashboard.dau.find((row) => row.date === today)?.activeUsers ?? 0;
+    const todayCheckinRow = dashboard.checkinTrend?.find(
+      (row) => row.date === today,
+    );
+    const todayCheckins = todayCheckinRow?.count;
+    const dailyActiveCheckinRate =
+      todayCheckins !== undefined && todayDau > 0
+        ? (todayCheckins / todayDau) * 100
+        : undefined;
+    const totalCheckinRate =
+      todayCheckins !== undefined && dashboard.totalUsers > 0
+        ? (todayCheckins / dashboard.totalUsers) * 100
+        : undefined;
     const yesterday = offsetDate(today, -1);
     const yesterdayDau =
       dashboard.dau.find((row) => row.date === yesterday)?.activeUsers ?? 0;
@@ -90,8 +102,9 @@ export async function GET(request: Request): Promise<Response> {
 
     return jsonNoStore({
       checkinTrend: dashboard.checkinTrend ?? [],
-      todayCheckins: dashboard.checkinTrend?.find((r) => r.date === today)?.count,
-      checkinRate: dashboard.checkinTrend?.find((r) => r.date === today)?.rate,
+      todayCheckins,
+      dailyActiveCheckinRate,
+      totalCheckinRate,
       timezone: dashboard.timezone,
       generatedAt: new Date().toISOString(),
       totalUsers: dashboard.totalUsers,

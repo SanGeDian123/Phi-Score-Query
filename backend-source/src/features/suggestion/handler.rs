@@ -2,8 +2,10 @@ use std::path::PathBuf;
 
 use axum::{
     Extension, Json, Router,
-    extract::{DefaultBodyLimit, Multipart, Path as AxumPath, Query, State},
-    http::StatusCode,
+    extract::{DefaultBodyLimit, Multipart, Path as AxumPath, Query, Request, State},
+    http::{StatusCode, header},
+    middleware::Next,
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
 use chrono::{DateTime, Utc};
@@ -71,6 +73,31 @@ fn storage(state: &AppState) -> Result<&crate::features::stats::storage::StatsSt
         .stats_storage
         .as_deref()
         .ok_or_else(|| AppError::Internal("建议区存储未初始化".into()))
+}
+
+pub async fn media_visibility_middleware(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let Some(raw_name) = request.uri().path().strip_prefix("/suggestion-media/") else {
+        return next.run(request).await;
+    };
+    let name = match percent_encoding::percent_decode_str(raw_name).decode_utf8() {
+        Ok(name) if !name.is_empty() && !name.starts_with('.') && !name.contains('/') && !name.contains('\\') => name.into_owned(),
+        _ => return AppError::Search(SearchError::NotFound).into_response(),
+    };
+    let result = match storage(&state) {
+        Ok(storage) => storage.suggestion_media_is_public(&name).await,
+        Err(error) => Err(error),
+    };
+    let mut response = match result {
+        Ok(true) => next.run(request).await,
+        Ok(false) => AppError::Search(SearchError::NotFound).into_response(),
+        Err(error) => error.into_response(),
+    };
+    response.headers_mut().insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+    response
 }
 
 fn normalize_text(value: &str, max_chars: usize, fallback: &str) -> Result<String, AppError> {
@@ -203,6 +230,9 @@ async fn post_from_record(
     record: SuggestionPostRecord,
     viewer_user_hash: &str,
 ) -> Result<SuggestionPost, AppError> {
+    if storage.is_user_publicly_restricted(&record.user_hash).await? {
+        return Err(AppError::Search(SearchError::NotFound));
+    }
     let can_delete = record.user_hash == viewer_user_hash;
     let comments = storage
         .suggestion_comments(&record.id)
@@ -302,6 +332,7 @@ pub async fn create_post(
 ) -> Result<Json<SuggestionPost>, AppError> {
     let user_hash = require_user_hash(&bearer)?;
     let storage = storage(&state)?;
+    storage.ensure_user_can_publish_suggestions(user_hash).await?;
     ensure_cooldown(
         storage.latest_suggestion_post_at(user_hash).await?,
         POST_COOLDOWN_SECONDS,
@@ -423,7 +454,7 @@ pub async fn delete_post(
     let user_hash = require_user_hash(&bearer)?;
     let storage = storage(&state)?;
     let record = storage
-        .suggestion_post(&post_id)
+        .suggestion_post_for_management(&post_id)
         .await?
         .ok_or_else(|| AppError::Search(SearchError::NotFound))?;
     if record.user_hash != user_hash {
@@ -488,6 +519,7 @@ pub async fn create_comment(
 ) -> Result<Json<SuggestionComment>, AppError> {
     let user_hash = require_user_hash(&bearer)?;
     let storage = storage(&state)?;
+    storage.ensure_user_can_publish_suggestions(user_hash).await?;
     if !storage.suggestion_post_exists(&post_id).await? {
         return Err(AppError::Search(SearchError::NotFound));
     }

@@ -91,7 +91,10 @@ impl StatsStorage {
     ) -> Result<Option<SqliteRow>, AppError> {
         sqlx::query(
             "SELECT up.user_hash, up.is_public, up.show_rks_composition, up.show_best_top3, up.show_ap_top3, lr.total_rks, lr.updated_at
-             FROM user_profile up LEFT JOIN leaderboard_rks lr ON lr.user_hash=up.user_hash WHERE up.alias = ?",
+             FROM user_profile up LEFT JOIN leaderboard_rks lr ON lr.user_hash=up.user_hash
+             WHERE up.alias = ? AND NOT EXISTS (
+               SELECT 1 FROM publicly_restricted_users blocked WHERE blocked.user_hash=up.user_hash
+             )",
         )
         .bind(alias)
         .fetch_optional(&self.pool)

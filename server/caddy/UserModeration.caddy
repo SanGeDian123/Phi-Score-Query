@@ -1,0 +1,12 @@
+	# BEGIN PSQ USER MODERATION
+	@userModerationApi path /api/v2/users/me/moderation/status /api/v2/users/me/moderation/appeals /api/v2/admin/users/management/*
+	handle @userModerationApi {
+		request_body {
+			max_size 5MB
+		}
+		reverse_proxy 127.0.0.1:3939 {
+			header_up -X-Exchange-Secret
+			header_up -X-OpenApi-Token
+		}
+	}
+	# END PSQ USER MODERATION

@@ -6,6 +6,29 @@ use crate::error::AppError;
 
 use super::StatsStorage;
 
+const APPEAL_UPGRADE_HINT: &str = "如需申诉，请将APP更新至最新版本";
+
+static LEGACY_PUBLIC_NOTICE_CACHE: once_cell::sync::Lazy<
+    std::sync::Mutex<lru::LruCache<String, ()>>,
+> = once_cell::sync::Lazy::new(|| {
+    std::sync::Mutex::new(lru::LruCache::new(
+        std::num::NonZeroUsize::new(10_000).expect("notice cache capacity is non-zero"),
+    ))
+});
+
+fn moderation_date_utc8(value: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|time| {
+            time.with_timezone(
+                &chrono::FixedOffset::east_opt(8 * 60 * 60)
+                    .expect("UTC+8 is a valid offset"),
+            )
+            .format("%Y/%m/%d %H:%M UTC+8")
+            .to_string()
+        })
+        .unwrap_or_else(|_| value.to_owned())
+}
+
 fn push_admin_status_filter(qb: &mut QueryBuilder<'_, Sqlite>, status: &str) {
     if status.eq_ignore_ascii_case("active") {
         qb.push(" AND (ums.status IS NULL OR ums.status = 'active' COLLATE NOCASE)");
@@ -182,10 +205,82 @@ impl StatsStorage {
     }
 
     fn build_banned_detail(reason: Option<&str>) -> String {
-        if let Some(r) = reason.map(str::trim).filter(|v| !v.is_empty()) {
-            return format!("用户已被全局封禁，原因：{r}");
+        let reason = reason
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| format!("，原因：{value}"))
+            .unwrap_or_default();
+        format!("用户已被全局封禁{reason}。请在解除限制后重新登录。{APPEAL_UPGRADE_HINT}")
+    }
+
+    fn build_suspended_detail(reason: Option<&str>, expires_at: Option<&str>) -> String {
+        let reason = reason
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| format!("，原因：{value}"))
+            .unwrap_or_default();
+        let until = expires_at
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| {
+                let display = moderation_date_utc8(value);
+                format!("，暂停至 {display}")
+            })
+            .unwrap_or_default();
+        format!("账户已暂停使用{reason}{until}。请在解除限制后重新登录。{APPEAL_UPGRADE_HINT}")
+    }
+
+    pub async fn ensure_user_not_legacy_banned(&self, user_hash: &str) -> Result<(), AppError> {
+        if let Some((status, reason)) = self.get_user_moderation_state(user_hash).await?
+            && status.eq_ignore_ascii_case("banned")
+        {
+            return Err(AppError::Forbidden(Self::build_banned_detail(
+                reason.as_deref(),
+            )));
         }
-        "用户已被全局封禁".to_string()
+        Ok(())
+    }
+
+    /// Legacy clients show save request failures in their existing bottom snackbar.
+    /// Notify once for each signed session and restriction revision, then allow saves.
+    pub async fn take_legacy_public_hidden_notice(
+        &self,
+        user_hash: &str,
+        session_id: Option<&str>,
+    ) -> Result<Option<String>, AppError> {
+        let row = sqlx::query(
+            "SELECT reason, expires_at, updated_at FROM user_access_restrictions
+             WHERE user_hash = ? AND restriction_type = 'public_hidden'
+               AND revoked_at IS NULL
+               AND (expires_at IS NULL OR julianday(expires_at) > julianday('now'))",
+        )
+        .bind(user_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| AppError::Internal(format!("query public restriction notice: {e}")))?;
+        let Some(row) = row else { return Ok(None); };
+        let revision: String = row.try_get("updated_at")
+            .map_err(|e| AppError::Internal(format!("read public restriction revision: {e}")))?;
+        let key = format!("{user_hash}:{}:{revision}", session_id.unwrap_or("legacy-body"));
+        {
+            let mut cache = LEGACY_PUBLIC_NOTICE_CACHE.lock()
+                .map_err(|_| AppError::Internal("public restriction notice cache unavailable".into()))?;
+            if cache.get(&key).is_some() { return Ok(None); }
+            cache.put(key, ());
+        }
+        let reason = row.try_get::<Option<String>, _>("reason")
+            .unwrap_or(None)
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| format!("，原因：{value}"))
+            .unwrap_or_default();
+        let until = row.try_get::<Option<String>, _>("expires_at")
+            .unwrap_or(None)
+            .map(|value| format!("，限制至 {}", moderation_date_utc8(&value)))
+            .unwrap_or_default();
+        // Do not include the old client's re-login trigger: this restriction
+        // only hides public data and must keep the user logged in.
+        Ok(Some(format!(
+            "当前账号已禁止公开展示{reason}{until}。成绩已停止公开展示，无法发布求建议或建议评论。{APPEAL_UPGRADE_HINT}"
+        ).replace("重新登录", "再次登录")))
     }
 
     pub async fn get_user_moderation_state(
@@ -225,11 +320,51 @@ impl StatsStorage {
     }
 
     pub async fn ensure_user_not_banned(&self, user_hash: &str) -> Result<(), AppError> {
-        if let Some((status, reason)) = self.get_user_moderation_state(user_hash).await?
-            && status.eq_ignore_ascii_case("banned")
-        {
-            return Err(AppError::Forbidden(Self::build_banned_detail(
+        self.ensure_user_not_legacy_banned(user_hash).await?;
+        let row = sqlx::query(
+            "SELECT reason, expires_at
+             FROM user_access_restrictions
+             WHERE user_hash = ? AND restriction_type = 'account_suspended'
+               AND revoked_at IS NULL
+               AND (expires_at IS NULL OR julianday(expires_at) > julianday('now'))
+             LIMIT 1",
+        )
+        .bind(user_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| AppError::Internal(format!("query account suspension: {e}")))?;
+        if let Some(row) = row {
+            let reason = row.try_get::<Option<String>, _>("reason").unwrap_or(None);
+            let expires_at = row
+                .try_get::<Option<String>, _>("expires_at")
+                .unwrap_or(None);
+            return Err(AppError::Forbidden(Self::build_suspended_detail(
                 reason.as_deref(),
+                expires_at.as_deref(),
+            )));
+        }
+        Ok(())
+    }
+
+    pub async fn is_user_publicly_restricted(&self, user_hash: &str) -> Result<bool, AppError> {
+        let restricted: i64 = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM publicly_restricted_users WHERE user_hash=?)",
+        )
+        .bind(user_hash)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| AppError::Internal(format!("query public display restriction: {e}")))?;
+        Ok(restricted != 0)
+    }
+
+    pub async fn ensure_user_can_publish_suggestions(
+        &self,
+        user_hash: &str,
+    ) -> Result<(), AppError> {
+        self.ensure_user_not_banned(user_hash).await?;
+        if self.is_user_publicly_restricted(user_hash).await? {
+            return Err(AppError::Forbidden(format!(
+                "当前账号已禁止公开展示，无法发布求建议或建议评论。{APPEAL_UPGRADE_HINT}"
             )));
         }
         Ok(())

@@ -10,7 +10,7 @@ use crate::features::auth::bearer::{
     SessionClaims, build_embedded_auth_claim, decode_access_token,
     decode_access_token_allow_expired, decode_embedded_auth_with_claims, ensure_session_config,
     extract_bearer_token, resolve_exchange_secret, resolve_expected_exchange_secret,
-    resolve_jwt_secret, validate_bearer_not_revoked,
+    resolve_jwt_secret, supports_moderation_ui, validate_bearer_not_revoked,
 };
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -297,7 +297,16 @@ pub async fn post_session_refresh(
         .ok_or_else(|| AppError::Internal("统计存储未初始化，无法执行会话刷新".into()))?;
 
     let now = chrono::Utc::now();
-    validate_bearer_not_revoked(Some(storage), &authz.claims).await?;
+    if let Err(error) = validate_bearer_not_revoked(Some(storage), &authz.claims).await {
+        if let AppError::Forbidden(detail) = &error
+            && !supports_moderation_ui(&headers)
+        {
+            // Old clients clear their saved login only when refresh returns 401.
+            // Modern clients retain 403 and their credentials for the appeal screen.
+            return Err(AppError::Auth(detail.clone()));
+        }
+        return Err(error);
+    }
 
     let refresh_window_secs = saturating_u64_to_i64(resolve_refresh_window_secs(cfg));
     let expired_for_secs = now.timestamp().saturating_sub(authz.claims.exp);

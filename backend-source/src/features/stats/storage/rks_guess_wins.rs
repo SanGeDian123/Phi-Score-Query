@@ -33,7 +33,9 @@ impl StatsStorage {
              ELSE '匿名玩家' END nickname
              FROM rks_guess_wins w LEFT JOIN user_profile p ON p.user_hash=w.user_hash
              LEFT JOIN leaderboard_rks l ON l.user_hash=w.user_hash
-             WHERE COALESCE(l.is_hidden,0)=0 GROUP BY w.user_hash
+             WHERE COALESCE(l.is_hidden,0)=0
+               AND NOT EXISTS (SELECT 1 FROM publicly_restricted_users blocked WHERE blocked.user_hash=w.user_hash)
+             GROUP BY w.user_hash
              ORDER BY wins DESC,reached_at ASC,w.user_hash ASC LIMIT 100")
             .fetch_all(&mut *tx).await.map_err(error)?;
         let my_wins: i64 =

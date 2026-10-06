@@ -261,6 +261,52 @@ impl StatsStorage {
         );
         CREATE INDEX IF NOT EXISTS idx_moderation_flags_user_created ON moderation_flags(user_hash, created_at DESC);
 
+        CREATE TABLE IF NOT EXISTS user_access_restrictions (
+            user_hash TEXT NOT NULL,
+            restriction_type TEXT NOT NULL,
+            reason TEXT,
+            updated_by TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            expires_at TEXT,
+            revoked_at TEXT,
+            PRIMARY KEY(user_hash, restriction_type)
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_access_restrictions_active
+            ON user_access_restrictions(restriction_type, expires_at, revoked_at);
+
+        CREATE VIEW IF NOT EXISTS publicly_restricted_users AS
+            SELECT user_hash FROM user_access_restrictions
+            WHERE restriction_type IN ('public_hidden', 'account_suspended')
+              AND revoked_at IS NULL
+              AND (expires_at IS NULL OR julianday(expires_at)>julianday('now'))
+            UNION
+            SELECT user_hash FROM user_moderation_state WHERE status='banned' COLLATE NOCASE;
+
+        CREATE TABLE IF NOT EXISTS moderation_appeals (
+            id TEXT PRIMARY KEY,
+            user_hash TEXT NOT NULL,
+            restriction_type TEXT NOT NULL,
+            body TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            admin_reply TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_moderation_appeals_status_date
+            ON moderation_appeals(status, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_moderation_appeals_user_date
+            ON moderation_appeals(user_hash, created_at DESC);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_moderation_appeals_one_pending
+            ON moderation_appeals(user_hash, restriction_type)
+            WHERE status IN ('pending', 'reviewing');
+        CREATE TABLE IF NOT EXISTS moderation_appeal_images (
+            appeal_id TEXT NOT NULL REFERENCES moderation_appeals(id) ON DELETE CASCADE,
+            position INTEGER NOT NULL,
+            mime TEXT NOT NULL,
+            data BLOB NOT NULL,
+            PRIMARY KEY(appeal_id, position)
+        );
+
         CREATE TABLE IF NOT EXISTS suggestion_posts (
             id TEXT PRIMARY KEY,
             user_hash TEXT NOT NULL,
@@ -277,6 +323,7 @@ impl StatsStorage {
             ON suggestion_posts(status, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_suggestion_posts_user_created
             ON suggestion_posts(user_hash, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_suggestion_posts_image ON suggestion_posts(image_name);
 
         CREATE TABLE IF NOT EXISTS suggestion_comments (
             id TEXT PRIMARY KEY,
@@ -296,6 +343,8 @@ impl StatsStorage {
             ON suggestion_comments(post_id, status, created_at ASC);
         CREATE INDEX IF NOT EXISTS idx_suggestion_comments_user_created
             ON suggestion_comments(user_hash, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_suggestion_comments_image ON suggestion_comments(image_name)
+            WHERE image_name IS NOT NULL;
         ";
         sqlx::query(ddl)
             .execute(&self.pool)

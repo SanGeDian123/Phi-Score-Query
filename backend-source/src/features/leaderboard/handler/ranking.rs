@@ -444,7 +444,7 @@ pub async fn post_me(
 
     let total = storage.count_public_leaderboard_total().await?;
 
-    if total == 0 || my_score <= 0.0 {
+    if total == 0 || my_score <= 0.0 || storage.is_user_publicly_restricted(&user_hash).await? {
         return Ok(Json(MeResponse {
             rank: 0,
             score: 0.0,

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::{
     extract::{FromRequest, Request, State},
     middleware::Next,
-    response::Response,
+    response::{IntoResponse, Response},
 };
 use base64::Engine;
 use lru::LruCache;
@@ -185,6 +185,8 @@ pub(crate) async fn validate_bearer_not_revoked(
     let Some(storage) = storage else {
         return Ok(());
     };
+    // Keep the account restriction visible even when its session is also revoked.
+    storage.ensure_user_not_banned(&claims.sub).await?;
     let now_rfc3339 = chrono::Utc::now().to_rfc3339();
     let (blacklisted, logout_before) = storage
         .get_session_revoke_state(&claims.jti, &claims.sub, &now_rfc3339)
@@ -200,8 +202,14 @@ pub(crate) async fn validate_bearer_not_revoked(
             return Err(AppError::Auth("会话令牌已被用户作废".into()));
         }
     }
-    storage.ensure_user_not_banned(&claims.sub).await?;
     Ok(())
+}
+
+pub(crate) fn supports_moderation_ui(headers: &axum::http::HeaderMap) -> bool {
+    headers
+        .get("x-psq-moderation")
+        .and_then(|value| value.to_str().ok())
+        == Some("1")
 }
 
 fn should_skip_bearer_validation(path: &str) -> bool {
@@ -232,10 +240,24 @@ pub async fn bearer_auth_middleware(
                 Ok(claims) => {
                     match validate_bearer_not_revoked(state.stats_storage.as_ref(), &claims).await {
                         Ok(()) => BearerAuthState::Valid(BearerAuthContext { token, claims }),
+                        Err(e @ (AppError::Forbidden(_) | AppError::Internal(_))) => {
+                            return e.into_response();
+                        }
                         Err(e) => BearerAuthState::Invalid(e.to_string()),
                     }
                 }
-                Err(e) => BearerAuthState::Invalid(e.to_string()),
+                Err(e) => {
+                    // An expired but signed token still identifies a suspended account.
+                    // Checking it here prevents public handlers from treating that account
+                    // as an anonymous caller. This never authorizes an expired token.
+                    if let Ok(claims) = decode_access_token_allow_expired(&token, cfg)
+                        && let Some(storage) = state.stats_storage.as_ref()
+                        && let Err(restriction) = storage.ensure_user_not_banned(&claims.sub).await
+                    {
+                        return restriction.into_response();
+                    }
+                    BearerAuthState::Invalid(e.to_string())
+                }
             },
             Err(e) => BearerAuthState::Invalid(e.to_string()),
         }
@@ -262,11 +284,25 @@ where
 }
 
 pub async fn merge_auth_from_bearer_if_missing(
-    _stats_storage: Option<&Arc<crate::stats_contract::StatsStorage>>,
+    stats_storage: Option<&Arc<crate::stats_contract::StatsStorage>>,
     bearer: &BearerAuthState,
     auth: &mut UnifiedSaveRequest,
 ) -> Result<(), AppError> {
     if has_auth_credentials(auth) {
+        // Legacy clients send credentials in JSON rather than Authorization.
+        // Apply suspension before any handler can use its save or image cache.
+        if let Some(storage) = stats_storage {
+            let salt = crate::config::AppConfig::global()
+                .stats
+                .user_hash_salt
+                .clone()
+                .or_else(|| std::env::var("APP_STATS_USER_HASH_SALT").ok());
+            if let Some(user_hash) =
+                crate::identity_hash::derive_user_identity_from_auth(salt.as_deref(), auth).0
+            {
+                storage.ensure_user_not_banned(&user_hash).await?;
+            }
+        }
         return Ok(());
     }
 

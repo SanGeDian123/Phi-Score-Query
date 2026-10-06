@@ -8,12 +8,17 @@ use super::StatsStorage;
 
 const COUNT_PUBLIC_LEADERBOARD_TOTAL_SQL: &str = "SELECT COUNT(1) AS c
              FROM leaderboard_rks lr JOIN user_profile up ON up.user_hash=lr.user_hash AND up.is_public=1
-             WHERE lr.is_hidden=0";
+             WHERE lr.is_hidden=0
+               AND NOT EXISTS (SELECT 1 FROM publicly_restricted_users blocked
+                 WHERE blocked.user_hash=lr.user_hash)";
 
 const QUERY_LEADERBOARD_TOP_SEEK_SQL: &str =
     "SELECT lr.user_hash, lr.total_rks, lr.updated_at, up.alias, up.nickname, up.avatar, up.challenge_mode_rank, COALESCE(up.show_best_top3,0) AS sbt, COALESCE(up.show_ap_top3,0) AS sat
              FROM leaderboard_rks lr JOIN user_profile up ON up.user_hash=lr.user_hash AND up.is_public=1
-             WHERE lr.is_hidden=0 AND (
+             WHERE lr.is_hidden=0
+               AND NOT EXISTS (SELECT 1 FROM publicly_restricted_users blocked
+                 WHERE blocked.user_hash=lr.user_hash)
+               AND (
                lr.total_rks < ? OR (lr.total_rks = ? AND (lr.updated_at > ? OR (lr.updated_at = ? AND lr.user_hash > ?)))
              )
              ORDER BY lr.total_rks DESC, lr.updated_at ASC, lr.user_hash ASC
@@ -23,12 +28,17 @@ const QUERY_LEADERBOARD_TOP_OFFSET_SQL: &str =
     "SELECT lr.user_hash, lr.total_rks, lr.updated_at, up.alias, up.nickname, up.avatar, up.challenge_mode_rank, COALESCE(up.show_best_top3,0) AS sbt, COALESCE(up.show_ap_top3,0) AS sat
              FROM leaderboard_rks lr JOIN user_profile up ON up.user_hash=lr.user_hash AND up.is_public=1
              WHERE lr.is_hidden=0
+               AND NOT EXISTS (SELECT 1 FROM publicly_restricted_users blocked
+                 WHERE blocked.user_hash=lr.user_hash)
              ORDER BY lr.total_rks DESC, lr.updated_at ASC, lr.user_hash ASC
              LIMIT ? OFFSET ?";
 
 const COUNT_PUBLIC_LEADERBOARD_HIGHER_SQL: &str =
     "SELECT COUNT(1) as higher FROM leaderboard_rks lr JOIN user_profile up ON up.user_hash=lr.user_hash AND up.is_public=1
-             WHERE lr.is_hidden=0 AND (
+             WHERE lr.is_hidden=0
+               AND NOT EXISTS (SELECT 1 FROM publicly_restricted_users blocked
+                 WHERE blocked.user_hash=lr.user_hash)
+               AND (
                lr.total_rks > ? OR (lr.total_rks = ? AND (lr.updated_at < ? OR (lr.updated_at = ? AND lr.user_hash < ?)))
              )";
 
@@ -119,7 +129,8 @@ impl StatsStorage {
         for uh in user_hashes {
             separated.push_bind(uh);
         }
-        qb.push(")");
+        qb.push(") AND NOT EXISTS (SELECT 1 FROM publicly_restricted_users blocked
+            WHERE blocked.user_hash=leaderboard_details.user_hash)");
         let rows = qb
             .build()
             .fetch_all(&self.pool)

@@ -71,7 +71,8 @@ fn build_api_router(state: &AppState, config: &AppConfig) -> Router<AppState> {
         .merge(crate::features::checkin::router())
         .merge(crate::features::feedback::router())
         .merge(crate::features::stats::handler::create_stats_router())
-        .merge(crate::features::suggestion::create_suggestion_router());
+        .merge(crate::features::suggestion::create_suggestion_router())
+        .merge(crate::features::user_moderation::router());
 
     if config.open_platform.enabled {
         api_router = api_router
@@ -109,10 +110,14 @@ pub fn build_app(
         .nest_service("/suggestion-media", ServeDir::new(suggestion_media_root))
         .nest(&config.api.prefix, api_router)
         .merge(SwaggerUi::new("/docs").url("/api-docs/openapi.json", ApiDoc::openapi()))
-        .with_state(state);
+        .with_state(state.clone());
 
     app = app.layer(axum::middleware::from_fn_with_state(
         preview_roots, crate::features::media_preview::middleware,
+    ));
+    // Check ownership restrictions before originals, previews or conditional 304 responses.
+    app = app.layer(axum::middleware::from_fn_with_state(
+        state, crate::features::suggestion::handler::media_visibility_middleware,
     ));
     // /_ill 缓存头
     app = app.layer(axum::middleware::from_fn(ill_cache_control_middleware));
