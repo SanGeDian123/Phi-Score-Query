@@ -25,6 +25,7 @@ pub fn router() -> Router<AppState> {
         .route("/users/me/moderation/status", post(user_status))
         .route("/users/me/moderation/appeals", post(submit_appeal))
         .route("/admin/users/management/search", get(admin_search_users))
+        .route("/admin/users/management/restricted", get(admin_list_restricted_users))
         .route(
             "/admin/users/management/restriction",
             post(admin_set_restriction),
@@ -377,6 +378,28 @@ struct SearchResponse {
     items: Vec<AdminUser>,
 }
 
+fn admin_user_from_row(row: sqlx::sqlite::SqliteRow) -> AdminUser {
+    AdminUser {
+        user_hash: row.try_get("user_hash").unwrap_or_default(),
+        alias: row.try_get("alias").unwrap_or(None),
+        nickname: row.try_get("nickname").unwrap_or(None),
+        avatar: avatar_is_official(row.try_get("avatar").unwrap_or(None)),
+        rks: row.try_get("rks").unwrap_or(0.0),
+        challenge_mode_rank: row.try_get("challenge_mode_rank").unwrap_or(None),
+        leaderboard_rank: row.try_get("leaderboard_rank").unwrap_or(None),
+        public_hidden: AdminRestriction {
+            active: row.try_get::<i64, _>("public_active").unwrap_or(0) != 0,
+            reason: row.try_get("public_reason").unwrap_or(None),
+            expires_at: row.try_get("public_expires_at").unwrap_or(None),
+        },
+        account_suspended: AdminRestriction {
+            active: row.try_get::<i64, _>("account_active").unwrap_or(0) != 0,
+            reason: row.try_get("account_reason").unwrap_or(None),
+            expires_at: row.try_get("account_expires_at").unwrap_or(None),
+        },
+    }
+}
+
 async fn admin_search_users(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -422,27 +445,128 @@ async fn admin_search_users(
     .map_err(db)?;
     let items = rows
         .into_iter()
-        .map(|row| AdminUser {
-            user_hash: row.try_get("user_hash").unwrap_or_default(),
-            alias: row.try_get("alias").unwrap_or(None),
-            nickname: row.try_get("nickname").unwrap_or(None),
-            avatar: avatar_is_official(row.try_get("avatar").unwrap_or(None)),
-            rks: row.try_get("rks").unwrap_or(0.0),
-            challenge_mode_rank: row.try_get("challenge_mode_rank").unwrap_or(None),
-            leaderboard_rank: row.try_get("leaderboard_rank").unwrap_or(None),
-            public_hidden: AdminRestriction {
-                active: row.try_get::<i64, _>("public_active").unwrap_or(0) != 0,
-                reason: row.try_get("public_reason").unwrap_or(None),
-                expires_at: row.try_get("public_expires_at").unwrap_or(None),
-            },
-            account_suspended: AdminRestriction {
-                active: row.try_get::<i64, _>("account_active").unwrap_or(0) != 0,
-                reason: row.try_get("account_reason").unwrap_or(None),
-                expires_at: row.try_get("account_expires_at").unwrap_or(None),
-            },
-        })
+        .map(admin_user_from_row)
         .collect();
     Ok(Json(SearchResponse { items }))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RestrictedUsersQuery {
+    restriction_type: Option<String>,
+    query: Option<String>,
+    page: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RestrictionCounts {
+    all: i64,
+    public_hidden: i64,
+    account_suspended: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RestrictedUsersResponse {
+    items: Vec<AdminUser>,
+    total: i64,
+    page: u32,
+    page_size: u32,
+    counts: RestrictionCounts,
+}
+
+// Both queries use one database snapshot and expiry cutoff. The primary key on
+// (user_hash, restriction_type) keeps accounts with two restrictions in one row.
+const RESTRICTED_USERS_FROM: &str =
+    "FROM user_profile up
+     LEFT JOIN user_access_restrictions ph ON ph.user_hash=up.user_hash
+       AND ph.restriction_type='public_hidden' AND ph.revoked_at IS NULL
+       AND (ph.expires_at IS NULL OR julianday(ph.expires_at)>julianday(?))
+     LEFT JOIN user_access_restrictions su ON su.user_hash=up.user_hash
+       AND su.restriction_type='account_suspended' AND su.revoked_at IS NULL
+       AND (su.expires_at IS NULL OR julianday(su.expires_at)>julianday(?))
+     LEFT JOIN leaderboard_rks lr ON lr.user_hash=up.user_hash
+     WHERE (ph.user_hash IS NOT NULL OR su.user_hash IS NOT NULL)
+       AND (?='' OR up.alias LIKE ? ESCAPE '\\' COLLATE NOCASE
+         OR up.nickname LIKE ? ESCAPE '\\' COLLATE NOCASE)";
+
+async fn admin_list_restricted_users(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<RestrictedUsersQuery>,
+) -> Result<Json<RestrictedUsersResponse>, AppError> {
+    admin(&headers)?;
+    let filter = query.restriction_type.as_deref().unwrap_or("all").trim();
+    if filter != "all" {
+        restriction_type(filter)?;
+    }
+    let search = query.query.as_deref().unwrap_or("").trim();
+    if search.chars().count() > 40 {
+        return Err(AppError::Validation("用户名最多 40 个字符".into()));
+    }
+    let escaped = search.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+    let pattern = format!("%{escaped}%");
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut transaction = pool(&state)?.begin().await.map_err(db)?;
+    let count_sql = format!(
+        "SELECT COUNT(1) AS total,
+           COALESCE(SUM(CASE WHEN ph.user_hash IS NOT NULL THEN 1 ELSE 0 END),0) AS public_hidden,
+           COALESCE(SUM(CASE WHEN su.user_hash IS NOT NULL THEN 1 ELSE 0 END),0) AS account_suspended
+         {RESTRICTED_USERS_FROM}"
+    );
+    let row = sqlx::query(&count_sql)
+        .bind(&now)
+        .bind(&now)
+        .bind(search)
+        .bind(&pattern)
+        .bind(&pattern)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(db)?;
+    let counts = RestrictionCounts {
+        all: row.try_get("total").map_err(db)?,
+        public_hidden: row.try_get("public_hidden").map_err(db)?,
+        account_suspended: row.try_get("account_suspended").map_err(db)?,
+    };
+    let total = match filter {
+        PUBLIC_HIDDEN => counts.public_hidden,
+        ACCOUNT_SUSPENDED => counts.account_suspended,
+        _ => counts.all,
+    };
+    let page_size = 20;
+    let page_count = ((total + i64::from(page_size) - 1) / i64::from(page_size)).max(1);
+    let page = query.page.unwrap_or(1).clamp(1, page_count.min(u32::MAX as i64) as u32);
+    let list_sql = format!(
+        "SELECT up.user_hash, up.alias, up.nickname, up.avatar, up.challenge_mode_rank,
+           COALESCE(lr.total_rks,0.0) AS rks, NULL AS leaderboard_rank,
+           CASE WHEN ph.user_hash IS NOT NULL THEN 1 ELSE 0 END AS public_active,
+           ph.reason AS public_reason, ph.expires_at AS public_expires_at,
+           CASE WHEN su.user_hash IS NOT NULL THEN 1 ELSE 0 END AS account_active,
+           su.reason AS account_reason, su.expires_at AS account_expires_at
+         {RESTRICTED_USERS_FROM}
+           AND CASE ? WHEN 'public_hidden' THEN ph.user_hash IS NOT NULL
+             WHEN 'account_suspended' THEN su.user_hash IS NOT NULL ELSE 1 END
+         ORDER BY MAX(COALESCE(ph.updated_at,''),COALESCE(su.updated_at,'')) DESC, up.user_hash
+         LIMIT ? OFFSET ?"
+    );
+    let items = sqlx::query(&list_sql)
+        .bind(&now)
+        .bind(&now)
+        .bind(search)
+        .bind(&pattern)
+        .bind(&pattern)
+        .bind(filter)
+        .bind(i64::from(page_size))
+        .bind(i64::from(page - 1) * i64::from(page_size))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(db)?
+        .into_iter()
+        .map(admin_user_from_row)
+        .collect();
+    transaction.commit().await.map_err(db)?;
+    Ok(Json(RestrictedUsersResponse { items, total, page, page_size, counts }))
 }
 
 #[derive(Debug, Deserialize)]

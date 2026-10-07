@@ -74,6 +74,10 @@ npm run build
 
 按用户名或昵称搜索玩家，显示头像、RKS、课题模式等级和当前排行榜位次。可分别设置停止公开展示和暂停账户使用，选择预设或自定义分钟数，也可设置长期限制；两项限制都支持单独解除。
 
+新增“已禁止公开展示 / 暂停账号用户列表”，统一查看当前仍有效的限制。支持全部、禁止公开展示、暂停账号三种筛选，显示对应人数，并可按用户名或昵称搜索；每页 20 位，同一用户同时受到两类限制时只显示一条记录。列表显示用户资料、限制原因及 UTC+8 恢复时间，可直接修改限制、解除展示限制或恢复账户。
+
+限制变更与申诉处理后同步刷新列表；页面每分钟自动更新，也可手动刷新。到期或已解除的限制不再列入对应列表，某用户仍有另一项有效限制时会继续显示。
+
 用户搜索与申诉列表的课题等级沿用 APP 的颜色档位和等级组合，如“彩52”“金48”；服务端编码 552 对应彩52、448 对应金48。颜色档位依次为绿、蓝、红、金、彩，未取得有效课题记录时显示“—”。
 
 停止公开展示和暂停账户使用均会从公开排行榜与公开资料中移除该用户，隐藏其已有求建议帖子、评论及图片，并从谱面评级达成率的样本总数、评级人数与百分位计算中排除该用户。停止公开展示期间不能发布求建议或建议评论；暂停账户使用还会由后端拒绝会话签发、续期和已有会话的服务请求，旧版客户端同样受服务端检查约束。原始成绩和帖子保留，到期或手动解除后恢复。
@@ -85,6 +89,7 @@ npm run build
 配套后端新增接口：
 
 - `GET /api/v2/admin/users/management/search?query=用户名`
+- `GET /api/v2/admin/users/management/restricted?restrictionType=all&query=用户名&page=1`（`restrictionType` 可为 `all`、`public_hidden` 或 `account_suspended`，`query` 可为空）
 - `POST /api/v2/admin/users/management/restriction`
 - `GET /api/v2/admin/users/management/appeals?status=pending`
 - `POST /api/v2/admin/users/management/appeals/{id}`

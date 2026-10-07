@@ -9,7 +9,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
-$name = 'server-only-upgrade-UserManagement-20261006-Fix3'
+$name = 'server-only-upgrade-UserManagement-20261007-Fix4'
 $stage = Join-Path $OutputRoot ($name + '-stage')
 $zip = Join-Path $OutputRoot ($name + '.zip')
 $desktopZip = Join-Path ([Environment]::GetFolderPath('Desktop')) ($name + '.zip')
@@ -89,6 +89,7 @@ $manifest = [ordered]@{
     appealUpgradeHint = '如需申诉，请将APP更新至最新版本'
     legacySuspension = 'Home refresh closes the functional shell; session refresh clears legacy logins. Offline built-in data and local caches cannot be disabled by a server-only package.'
     publicHiddenLoginNotice = 'Legacy APP uses its bottom snackbar on the first score refresh; the next refresh succeeds. Login and other private features remain available.'
+    restrictedUserList = 'Admin-only list with active restrictions, type counts, username filtering, 20 users per page and direct account controls.'
     replaces = @('current/backend/phi-backend.exe', 'source/installed-backend-source.zip')
     patches = @('current/caddy/Caddyfile: user management and appeal handlers; suggestion images use no-store')
     adminConsole = 'Updated source and local launcher included; update the independent management website separately.'
@@ -103,6 +104,8 @@ $readme = @'
 
 ## 本次更新
 
+- 新增“已禁止公开展示 / 暂停账号用户列表”，支持类型筛选、用户名或昵称搜索、人数统计与每页 20 位的分页查看；同一用户受到两类限制时只显示一条记录。
+- 列表显示用户头像、RKS、完整课题等级、限制原因与 UTC+8 恢复时间，可直接修改限制或解除；限制操作、申诉处理后同步刷新，并每分钟自动更新。到期或解除的限制不再列入对应列表。
 - 管理后台按用户名或昵称搜索，显示头像、RKS、课题模式等级、排行榜位次；可停止公开展示、限时或长期暂停账户，以及解除限制。
 - 支持私有图文申诉、后台审核与通过后解除限制；每项限制只能有一份待处理申诉，防止旧申诉解除新限制。
 - 登录签发、续期、已有会话及旧式凭据接口均由服务端检查账户暂停；旧客户端同样受到限制。
@@ -132,8 +135,8 @@ $readme = @'
     $ErrorActionPreference = 'Stop'
     Set-ExecutionPolicy -Scope Process Bypass -Force
     $deployDesktop = [Environment]::GetFolderPath('Desktop')
-    $deployZip = Join-Path $deployDesktop 'server-only-upgrade-UserManagement-20261006-Fix3.zip'
-    $deployDir = Join-Path $deployDesktop ('PSQ-UserManagement-Fix3-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    $deployZip = Join-Path $deployDesktop 'server-only-upgrade-UserManagement-20261007-Fix4.zip'
+    $deployDir = Join-Path $deployDesktop ('PSQ-UserManagement-Fix4-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
     Expand-Archive -LiteralPath $deployZip -DestinationPath $deployDir
     & (Join-Path $deployDir 'scripts\Deploy-UserManagement.ps1') -InstallRoot 'C:\Services\PhigrosScore'
 }
@@ -156,7 +159,7 @@ $readme = @'
 
 ## 本地构建与交付状态
 
-后端已执行 `cargo build --release --locked --offline`，管理台此前已执行 `npm run build`，本次管理台源码未改动。
+后端已执行 `cargo build --release --locked --offline`，管理台已执行 `npm run build` 和 TypeScript 编译检查。
 本次未新增或运行测试，未打包 APK，未提交、推送、部署或发布。
 包校验只读取包结构、二进制格式、对应源码和 Caddy 语法，不启动服务；不计算文件哈希。它不代表正式服务器已升级。
 '@

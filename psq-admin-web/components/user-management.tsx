@@ -1,18 +1,22 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   Ban,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   ImagePlus,
   LoaderCircle,
+  RefreshCw,
   Search,
   Shield,
   ShieldAlert,
   ShieldCheck,
   UnlockKeyhole,
   UserRound,
+  UsersRound,
 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
@@ -65,6 +69,14 @@ type Appeal = {
   imageCount: number;
 };
 type RestrictionKind = 'public_hidden' | 'account_suspended';
+type RestrictionFilter = 'all' | RestrictionKind;
+type RestrictedUsersResponse = {
+  items: User[];
+  total: number;
+  page: number;
+  pageSize: number;
+  counts: { all: number; publicHidden: number; accountSuspended: number };
+};
 
 const durations = [
   { label: '1 小时', minutes: 60 },
@@ -83,7 +95,11 @@ async function readJson<T>(response: Response): Promise<T> {
 function dateLabel(value: string | null): string {
   if (!value) return '长期';
   const date = new Date(value);
-  return Number.isNaN(date.valueOf()) ? value : date.toLocaleString('zh-CN', { hour12: false });
+  return Number.isNaN(date.valueOf()) ? value : `${date.toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })}（UTC+8）`;
+}
+
+function displayName(user: Pick<User, 'nickname' | 'alias'>): string {
+  return user.nickname?.trim() || user.alias?.trim() || '未设置昵称';
 }
 
 function avatarUrl(name: string | null): string | null {
@@ -135,6 +151,18 @@ export function UserManagementPanel({ token, connected }: { token: string; conne
   const [users, setUsers] = useState<User[]>([]);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState('');
+  const [restrictedUsers, setRestrictedUsers] = useState<User[]>([]);
+  const [restrictionFilter, setRestrictionFilter] = useState<RestrictionFilter>('all');
+  const [restrictedQueryInput, setRestrictedQueryInput] = useState('');
+  const [restrictedQuery, setRestrictedQuery] = useState('');
+  const [restrictedPage, setRestrictedPage] = useState(1);
+  const [restrictedPageSize, setRestrictedPageSize] = useState(20);
+  const [restrictedTotal, setRestrictedTotal] = useState(0);
+  const [restrictedCounts, setRestrictedCounts] = useState<RestrictedUsersResponse['counts']>({ all: 0, publicHidden: 0, accountSuspended: 0 });
+  const [restrictedLoading, setRestrictedLoading] = useState(false);
+  const [restrictedLoaded, setRestrictedLoaded] = useState(false);
+  const [restrictedError, setRestrictedError] = useState('');
+  const restrictedRequest = useRef(0);
   const [appeals, setAppeals] = useState<Appeal[]>([]);
   const [appealFilter, setAppealFilter] = useState('pending');
   const [appealsLoading, setAppealsLoading] = useState(false);
@@ -148,6 +176,7 @@ export function UserManagementPanel({ token, connected }: { token: string; conne
   const [restrictionError, setRestrictionError] = useState('');
   const [viewer, setViewer] = useState<string | null>(null);
   const [busyUser, setBusyUser] = useState<string | null>(null);
+  const [userActionError, setUserActionError] = useState<{ userHash: string; message: string } | null>(null);
 
   const searchUsers = useCallback(async (event?: FormEvent) => {
     event?.preventDefault();
@@ -166,6 +195,29 @@ export function UserManagementPanel({ token, connected }: { token: string; conne
     }
   }, [connected, query, searching, token]);
 
+  const loadRestrictedUsers = useCallback(async () => {
+    const requestId = ++restrictedRequest.current;
+    if (!connected) return;
+    setRestrictedLoading(true);
+    setRestrictedError('');
+    try {
+      const params = new URLSearchParams({ restrictionType: restrictionFilter, query: restrictedQuery, page: String(restrictedPage) });
+      const response = await fetch(`/api/user-management/restricted?${params}`, { headers: { 'X-Admin-Token': token }, cache: 'no-store' });
+      const result = await readJson<RestrictedUsersResponse>(response);
+      if (requestId !== restrictedRequest.current) return;
+      setRestrictedUsers(result.items);
+      setRestrictedTotal(result.total);
+      setRestrictedCounts(result.counts);
+      setRestrictedPageSize(result.pageSize);
+      setRestrictedPage(result.page);
+      setRestrictedLoaded(true);
+    } catch (error) {
+      if (requestId === restrictedRequest.current) setRestrictedError(error instanceof Error ? error.message : '受限用户列表加载失败');
+    } finally {
+      if (requestId === restrictedRequest.current) setRestrictedLoading(false);
+    }
+  }, [connected, restrictedPage, restrictedQuery, restrictionFilter, token]);
+
   const loadAppeals = useCallback(async () => {
     if (!connected) return;
     setAppealsLoading(true);
@@ -180,15 +232,41 @@ export function UserManagementPanel({ token, connected }: { token: string; conne
     }
   }, [appealFilter, connected, token]);
 
+  useEffect(() => {
+    setUsers([]);
+    setAppeals([]);
+    setPendingUser(null);
+    setViewer(null);
+    setRestrictedUsers([]);
+    setRestrictedTotal(0);
+    setRestrictedCounts({ all: 0, publicHidden: 0, accountSuspended: 0 });
+    setRestrictedLoaded(false);
+    setRestrictedLoading(false);
+    setRestrictedError('');
+    setRestrictedPage(1);
+    setUserActionError(null);
+  }, [token, connected]);
   useEffect(() => { void loadAppeals(); }, [loadAppeals]);
-  useEffect(() => { setUsers([]); setAppeals([]); setPendingUser(null); setViewer(null); }, [token, connected]);
+  useEffect(() => {
+    void loadRestrictedUsers();
+    const timer = connected ? window.setInterval(() => void loadRestrictedUsers(), 60_000) : undefined;
+    return () => {
+      if (timer !== undefined) window.clearInterval(timer);
+      restrictedRequest.current++;
+    };
+  }, [connected, loadRestrictedUsers]);
 
   const openRestriction = (user: User, kind: RestrictionKind) => {
     const active = kind === 'public_hidden' ? user.publicHidden : user.accountSuspended;
     setRestrictionReason(active.reason ?? '');
     setDuration(active.expiresAt ? Math.max(1, Math.ceil((new Date(active.expiresAt).valueOf() - Date.now()) / 60_000)) : kind === 'account_suspended' && !active.active ? 1440 : null);
     setRestrictionError('');
+    setUserActionError(null);
     setPendingUser({ user, kind });
+  };
+
+  const refreshUserViews = async () => {
+    await Promise.all([loadRestrictedUsers(), loadAppeals(), query.trim() ? searchUsers() : Promise.resolve()]);
   };
 
   const saveRestriction = async () => {
@@ -203,7 +281,7 @@ export function UserManagementPanel({ token, connected }: { token: string; conne
       });
       await readJson<Restriction>(response);
       setPendingUser(null);
-      await searchUsers();
+      await refreshUserViews();
     } catch (error) {
       setRestrictionError(error instanceof Error ? error.message : '设置限制失败');
     } finally {
@@ -214,7 +292,7 @@ export function UserManagementPanel({ token, connected }: { token: string; conne
   const removeRestriction = async (user: User, kind: RestrictionKind) => {
     if (busyUser) return;
     setBusyUser(user.userHash);
-    setSearchError('');
+    setUserActionError(null);
     try {
       const response = await fetch('/api/user-management/restriction', {
       method: 'POST',
@@ -222,9 +300,9 @@ export function UserManagementPanel({ token, connected }: { token: string; conne
       body: JSON.stringify({ userHash: user.userHash, restrictionType: kind, active: false }),
       });
       await readJson<Restriction>(response);
-      await searchUsers();
+      await refreshUserViews();
     } catch (error) {
-      setSearchError(error instanceof Error ? error.message : '解除限制失败');
+      setUserActionError({ userHash: user.userHash, message: error instanceof Error ? error.message : '解除限制失败' });
     } finally {
       setBusyUser(null);
     }
@@ -240,8 +318,7 @@ export function UserManagementPanel({ token, connected }: { token: string; conne
         body: JSON.stringify({ status, reply: appealReply[appeal.id] ?? '' }),
       });
       await readJson<Appeal>(response);
-      await loadAppeals();
-      if (query.trim()) await searchUsers();
+      await refreshUserViews();
     } catch (error) {
       setAppealError(error instanceof Error ? error.message : '处理申诉失败');
     } finally {
@@ -249,8 +326,8 @@ export function UserManagementPanel({ token, connected }: { token: string; conne
     }
   };
 
-  const displayName = (user: User) => user.nickname?.trim() || user.alias?.trim() || '未设置昵称';
   const restrictionTitle = pendingUser?.kind === 'account_suspended' ? '暂停账户使用' : '停止公开展示';
+  const restrictedPageCount = Math.max(1, Math.ceil(restrictedTotal / restrictedPageSize));
 
   return (
     <section className="scroll-mt-28" id="user-management">
@@ -277,50 +354,56 @@ export function UserManagementPanel({ token, connected }: { token: string; conne
             </form>
             {searchError && <p className="mt-3 text-sm text-muted-foreground" role="status">{searchError}</p>}
             <div className="mt-4 space-y-3">
-              {users.map((user, index) => {
-                const name = displayName(user);
-                return (
-                  <article className="psq-glass-subcard rounded-2xl border p-4 sm:p-5" key={user.userHash} style={{ animationDelay: `${Math.min(index, 8) * 35}ms` }}>
-                    <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-                      <div className="flex min-w-0 items-center gap-3.5">
-                        <UserAvatar avatar={user.avatar} name={name} />
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <h3 className="truncate text-sm font-bold">{name}</h3>
-                            {user.publicHidden.active && <Badge className="border-amber-500/20 bg-amber-500/8 text-amber-700"><EyeOffIcon />公开隐藏</Badge>}
-                            {user.accountSuspended.active && <Badge className="border-destructive/20 bg-destructive/8 text-destructive"><Ban className="mr-1 size-3" />暂停中</Badge>}
-                          </div>
-                          <p className="mt-1 truncate text-[11px] text-muted-foreground">@{user.alias || '未设置用户名'} · {user.userHash.slice(0, 8)}••••</p>
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-3 gap-2 xl:min-w-[390px]">
-                        <Metric label="RKS" value={user.rks.toFixed(2)} />
-                        <Metric label="课题模式" value={challengeModeLabel(user.challengeModeRank)} />
-                        <Metric label="排行榜" value={user.leaderboardRank === null ? ((user.publicHidden.active || user.accountSuspended.active) ? '已停止展示' : '未上榜') : `第 ${user.leaderboardRank} 名`} />
-                      </div>
-                    </div>
-                    {(user.publicHidden.active || user.accountSuspended.active) && (
-                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                        {user.publicHidden.active && <RestrictionSummary title="公开展示限制" restriction={user.publicHidden} />}
-                        {user.accountSuspended.active && <RestrictionSummary title="账户暂停" restriction={user.accountSuspended} />}
-                      </div>
-                    )}
-                    <fieldset className="mt-4 flex flex-wrap gap-2 border-t border-primary/[0.07] pt-3 disabled:opacity-60" disabled={busyUser === user.userHash}>
-                      <Button className="h-9 rounded-xl" onClick={() => openRestriction(user, 'public_hidden')} variant={user.publicHidden.active ? 'outline' : 'secondary'}>
-                        {user.publicHidden.active ? <ShieldCheck /> : <ShieldAlert />}
-                        {user.publicHidden.active ? '更新公开限制' : '停止公开展示'}
-                      </Button>
-                      {user.publicHidden.active && <Button className="h-9 rounded-xl" onClick={() => void removeRestriction(user, 'public_hidden')} variant="ghost"><UnlockKeyhole />解除展示限制</Button>}
-                      <Button className="h-9 rounded-xl" onClick={() => openRestriction(user, 'account_suspended')} variant={user.accountSuspended.active ? 'outline' : 'destructive'}>
-                        {user.accountSuspended.active ? <ShieldCheck /> : <Ban />}
-                        {user.accountSuspended.active ? '更新暂停时长' : '暂停账户使用'}
-                      </Button>
-                      {user.accountSuspended.active && <Button className="h-9 rounded-xl" onClick={() => void removeRestriction(user, 'account_suspended')} variant="ghost"><UnlockKeyhole />恢复账户</Button>}
-                    </fieldset>
-                  </article>
-                );
-              })}
+              {users.map((user, index) => <ManagedUserCard key={user.userHash} user={user} index={index} disabled={!connected || Boolean(busyUser) || savingRestriction} working={busyUser === user.userHash} error={userActionError?.userHash === user.userHash ? userActionError.message : undefined} onRestrict={openRestriction} onRemove={(item, kind) => void removeRestriction(item, kind)} />)}
             </div>
+          </CardContent>
+        </Card>
+
+        <Card className="psq-glass-card overflow-hidden rounded-2xl border-primary/10 shadow-[0_16px_50px_rgb(30_76_142/5%)]">
+          <CardHeader className="gap-3 border-b border-primary/[0.07] pb-4 sm:flex sm:flex-row sm:items-end sm:justify-between">
+            <div className="min-w-0">
+              <div className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-primary"><UsersRound className="size-3.5" /> Restricted accounts</div>
+              <CardTitle className="text-lg font-black leading-relaxed sm:text-xl">已禁止公开展示 / 暂停账号用户列表</CardTitle>
+              <CardDescription className="mt-1">查看当前生效的限制，直接修改时长或解除。</CardDescription>
+            </div>
+            <Button className="h-9 w-fit shrink-0 rounded-xl" disabled={!connected || restrictedLoading} onClick={() => void loadRestrictedUsers()} variant="outline"><RefreshCw className={restrictedLoading ? 'animate-spin' : ''} />刷新列表</Button>
+          </CardHeader>
+          <CardContent className="space-y-4 p-4 sm:p-6">
+            <div aria-label="受限用户类型" className="grid grid-cols-3 gap-1.5 rounded-xl border border-primary/10 bg-primary/[0.035] p-1">
+              {([
+                ['all', '全部', restrictedCounts.all],
+                ['public_hidden', '禁止公开展示', restrictedCounts.publicHidden],
+                ['account_suspended', '暂停账号', restrictedCounts.accountSuspended],
+              ] as const).map(([key, label, count]) => <Button aria-pressed={restrictionFilter === key} className="h-auto min-h-10 min-w-0 flex-wrap gap-1.5 rounded-lg px-2 py-2 text-xs" disabled={!connected} key={key} onClick={() => { setRestrictionFilter(key); setRestrictedPage(1); }} variant={restrictionFilter === key ? 'secondary' : 'ghost'}><span>{label}</span><span className="rounded-md bg-primary/[0.06] px-1.5 py-0.5 text-[10px] tabular-nums">{restrictedLoaded ? count : '—'}</span></Button>)}
+            </div>
+            <form className="flex flex-col gap-2 sm:flex-row" onSubmit={(event) => {
+              event.preventDefault();
+              if (!connected || restrictedLoading) return;
+              const nextQuery = restrictedQueryInput.trim();
+              if (nextQuery === restrictedQuery && restrictedPage === 1) void loadRestrictedUsers();
+              else { setRestrictedQuery(nextQuery); setRestrictedPage(1); }
+            }}>
+              <div className="relative min-w-0 flex-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input aria-label="搜索受限用户" className="psq-glass-control h-10 rounded-xl border-primary/12 pl-9" disabled={!connected} maxLength={40} onChange={(event) => setRestrictedQueryInput(event.target.value)} placeholder="在受限用户中搜索用户名或昵称" value={restrictedQueryInput} />
+              </div>
+              <div className="flex gap-2">
+                <Button className="h-10 flex-1 rounded-xl px-4 sm:flex-none" disabled={!connected || restrictedLoading} type="submit"><Search />筛选</Button>
+                {restrictedQuery && <Button className="h-10 rounded-xl" disabled={!connected || restrictedLoading} onClick={() => { setRestrictedQueryInput(''); setRestrictedQuery(''); setRestrictedPage(1); }} type="button" variant="ghost">清空</Button>}
+              </div>
+            </form>
+            {restrictedError && <p className="text-sm text-destructive" role="alert">{restrictedError}</p>}
+            <div aria-busy={restrictedLoading} className="space-y-3">
+              {!connected ? <div className="grid min-h-32 place-items-center rounded-xl border border-dashed border-primary/15 px-4 text-center text-sm text-muted-foreground">连接后台后即可查看受限用户</div> : restrictedLoading && !restrictedLoaded ? <div className="grid min-h-32 place-items-center text-sm text-muted-foreground" role="status"><span className="flex items-center gap-2"><LoaderCircle className="size-5 animate-spin" />加载受限用户</span></div> : restrictedUsers.length ? restrictedUsers.map((user, index) => <ManagedUserCard key={user.userHash} user={user} index={index} disabled={restrictedLoading || Boolean(restrictedError) || Boolean(busyUser) || savingRestriction} working={busyUser === user.userHash} error={userActionError?.userHash === user.userHash ? userActionError.message : undefined} onRestrict={openRestriction} onRemove={(item, kind) => void removeRestriction(item, kind)} />) : !restrictedError && <div className="grid min-h-32 place-items-center rounded-xl border border-dashed border-primary/15 px-4 text-center text-sm text-muted-foreground"><span>{restrictedQuery ? '没有匹配的受限用户' : restrictionFilter === 'public_hidden' ? '暂无被禁止公开展示的用户' : restrictionFilter === 'account_suspended' ? '暂无被暂停账号的用户' : '暂无受限用户'}</span></div>}
+            </div>
+            {connected && restrictedLoaded && <div className="flex flex-col gap-3 border-t border-primary/[0.07] pt-3 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+              <p aria-live="polite">共 <span className="font-semibold tabular-nums text-foreground">{restrictedTotal}</span> 位用户 · 每页 {restrictedPageSize} 位</p>
+              <div className="flex items-center justify-between gap-3 sm:justify-end">
+                <Button aria-label="受限用户上一页" className="h-8 rounded-lg px-3 text-xs" disabled={restrictedLoading || restrictedPage <= 1} onClick={() => setRestrictedPage((page) => page - 1)} variant="outline"><ChevronLeft />上一页</Button>
+                <span className="tabular-nums">{restrictedPage} / {restrictedPageCount}</span>
+                <Button aria-label="受限用户下一页" className="h-8 rounded-lg px-3 text-xs" disabled={restrictedLoading || restrictedPage >= restrictedPageCount} onClick={() => setRestrictedPage((page) => page + 1)} variant="outline">下一页<ChevronRight /></Button>
+              </div>
+            </div>}
           </CardContent>
         </Card>
 
@@ -357,8 +440,8 @@ export function UserManagementPanel({ token, connected }: { token: string; conne
                   <Textarea className="min-h-16 rounded-xl border-primary/12" maxLength={4000} disabled={busyAppeal === appeal.id} onChange={(event) => setAppealReply((current) => ({ ...current, [appeal.id]: event.target.value }))} placeholder="填写给用户的处理说明（可选）" value={appealReply[appeal.id] ?? ''} />
                   <div className="flex shrink-0 flex-wrap gap-2 sm:flex-col sm:justify-end">
                     {appeal.status === 'pending' && <Button className="h-9 rounded-xl" disabled={busyAppeal === appeal.id} onClick={() => void reviewAppeal(appeal, 'reviewing')} variant="outline"><Clock3 />开始处理</Button>}
-                    {appeal.status !== 'accepted' && <Button className="h-9 rounded-xl" disabled={busyAppeal === appeal.id} onClick={() => void reviewAppeal(appeal, 'accepted')}><Check />通过并解除限制</Button>}
-                    {appeal.status !== 'rejected' && <Button className="h-9 rounded-xl" disabled={busyAppeal === appeal.id} onClick={() => void reviewAppeal(appeal, 'rejected')} variant="ghost">驳回申诉</Button>}
+                    <Button className="h-9 rounded-xl" disabled={busyAppeal === appeal.id} onClick={() => void reviewAppeal(appeal, 'accepted')}><Check />通过并解除限制</Button>
+                    <Button className="h-9 rounded-xl" disabled={busyAppeal === appeal.id} onClick={() => void reviewAppeal(appeal, 'rejected')} variant="ghost">驳回申诉</Button>
                   </div>
                 </div> : appeal.adminReply && <p className="mt-3 text-sm text-muted-foreground">处理说明：{appeal.adminReply}</p>}
                 <p className="mt-2 flex items-center gap-1 text-[11px] text-muted-foreground"><Clock3 className="size-3" />提交于 {dateLabel(appeal.createdAt)}</p>
@@ -400,6 +483,58 @@ export function UserManagementPanel({ token, connected }: { token: string; conne
         </DialogContent>
       </Dialog>
     </section>
+  );
+}
+
+function ManagedUserCard({ user, index, disabled, working, error, onRestrict, onRemove }: {
+  user: User;
+  index: number;
+  disabled: boolean;
+  working: boolean;
+  error?: string;
+  onRestrict: (user: User, kind: RestrictionKind) => void;
+  onRemove: (user: User, kind: RestrictionKind) => void;
+}) {
+  const name = displayName(user);
+  return (
+    <article className="psq-glass-subcard animate-in fade-in slide-in-from-bottom-1 rounded-2xl border p-4 duration-300 motion-reduce:animate-none sm:p-5" style={{ animationDelay: `${Math.min(index, 8) * 35}ms` }}>
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex min-w-0 items-center gap-3.5">
+          <UserAvatar avatar={user.avatar} name={name} />
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="max-w-full truncate text-sm font-bold" title={name}>{name}</h3>
+              {user.publicHidden.active && <Badge className="border-amber-500/20 bg-amber-500/8 text-amber-700"><EyeOffIcon />禁止公开展示</Badge>}
+              {user.accountSuspended.active && <Badge className="border-destructive/20 bg-destructive/8 text-destructive"><Ban className="mr-1 size-3" />暂停中</Badge>}
+            </div>
+            <p className="mt-1 truncate text-[11px] text-muted-foreground">@{user.alias || '未设置用户名'} · {user.userHash.slice(0, 8)}••••</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-3 gap-2 xl:min-w-[390px]">
+          <Metric label="RKS" value={user.rks.toFixed(2)} />
+          <Metric label="课题模式" value={challengeModeLabel(user.challengeModeRank)} />
+          <Metric label="排行榜" value={user.leaderboardRank === null ? ((user.publicHidden.active || user.accountSuspended.active) ? '已停止展示' : '未上榜') : `第 ${user.leaderboardRank} 名`} />
+        </div>
+      </div>
+      {(user.publicHidden.active || user.accountSuspended.active) && <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        {user.publicHidden.active && <RestrictionSummary title="公开展示限制" restriction={user.publicHidden} />}
+        {user.accountSuspended.active && <RestrictionSummary title="账户暂停" restriction={user.accountSuspended} />}
+      </div>}
+      <fieldset className="mt-4 flex flex-wrap gap-2 border-t border-primary/[0.07] pt-3 disabled:opacity-60" disabled={disabled}>
+        <Button className="h-9 rounded-xl" onClick={() => onRestrict(user, 'public_hidden')} variant={user.publicHidden.active ? 'outline' : 'secondary'}>
+          {user.publicHidden.active ? <ShieldCheck /> : <ShieldAlert />}
+          {user.publicHidden.active ? '更新公开限制' : '停止公开展示'}
+        </Button>
+        {user.publicHidden.active && <Button className="h-9 rounded-xl" onClick={() => onRemove(user, 'public_hidden')} variant="ghost"><UnlockKeyhole />解除展示限制</Button>}
+        <Button className="h-9 rounded-xl" onClick={() => onRestrict(user, 'account_suspended')} variant={user.accountSuspended.active ? 'outline' : 'destructive'}>
+          {user.accountSuspended.active ? <ShieldCheck /> : <Ban />}
+          {user.accountSuspended.active ? '更新暂停时长' : '暂停账户使用'}
+        </Button>
+        {user.accountSuspended.active && <Button className="h-9 rounded-xl" onClick={() => onRemove(user, 'account_suspended')} variant="ghost"><UnlockKeyhole />恢复账户</Button>}
+        {working && <LoaderCircle aria-label="正在更新用户状态" className="size-4 self-center animate-spin text-primary" />}
+      </fieldset>
+      {error && <p className="mt-2 text-sm text-destructive" role="alert">{error}</p>}
+    </article>
   );
 }
 

@@ -148,7 +148,7 @@ try {
     Start-ScheduledTask -TaskName 'PhigrosScore-Caddy'
     Wait-Health $PublicOrigin
     foreach ($origin in @($BackendOrigin, $PublicOrigin)) {
-        foreach ($route in @('/api/v2/admin/users/management/search?query=PSQDeployProbe', '/api/v2/admin/users/management/appeals?status=pending')) {
+        foreach ($route in @('/api/v2/admin/users/management/search?query=PSQDeployProbe', '/api/v2/admin/users/management/restricted?restrictionType=all&page=1', '/api/v2/admin/users/management/appeals?status=pending')) {
             $code = Status ($origin.TrimEnd('/') + $route)
             if ($code -ne 401) { throw "User management route did not reach authentication ($code): $route" }
         }

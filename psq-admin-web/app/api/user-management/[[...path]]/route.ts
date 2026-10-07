@@ -24,6 +24,15 @@ async function proxy(request: Request, context: Context): Promise<Response> {
       return jsonNoStore({ error: '请输入 1–40 个字符的用户名' }, { status: 422 });
     }
     upstreamPath = `/api/v2/admin/users/management/search?query=${encodeURIComponent(query)}`;
+  } else if (path.length === 1 && path[0] === 'restricted' && request.method === 'GET') {
+    const query = (url.searchParams.get('query') ?? '').trim();
+    const restrictionType = url.searchParams.get('restrictionType') ?? 'all';
+    const page = Number(url.searchParams.get('page') ?? '1');
+    if (Array.from(query).length > 40 || !['all', 'public_hidden', 'account_suspended'].includes(restrictionType) || !Number.isSafeInteger(page) || page < 1 || page > 0xffffffff) {
+      return jsonNoStore({ error: '请检查受限用户筛选条件' }, { status: 422 });
+    }
+    const params = new URLSearchParams({ query, restrictionType, page: String(page) });
+    upstreamPath = `/api/v2/admin/users/management/restricted?${params}`;
   } else if (path.length === 1 && path[0] === 'appeals' && request.method === 'GET') {
     const status = url.searchParams.get('status') ?? 'pending';
     if (!['pending', 'reviewing', 'accepted', 'rejected', 'all'].includes(status)) {
