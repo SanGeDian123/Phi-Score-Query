@@ -39,6 +39,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 
 type SongAliases = {
   songId: string;
@@ -53,7 +54,17 @@ type AliasDraft = {
   conflict?: boolean;
   latestAliases?: string[];
 };
-type AliasEditor = { songId: string; index: number | null; value: string };
+type AliasEditor = {
+  songId: string;
+  index: number | null;
+  value: string;
+  bulk?: boolean;
+};
+type AliasBatch = {
+  aliases: string[];
+  duplicates: number;
+  error: string | null;
+};
 type PendingAction =
   | { kind: 'delete'; songId: string; index: number; alias: string }
   | {
@@ -93,6 +104,38 @@ function validateAliases(aliases: string[]): string | null {
     seen.add(cleanAlias);
   }
   return null;
+}
+
+function parseAliasBatch(value: string, existing: string[]): AliasBatch {
+  const aliases: string[] = [];
+  const seen = new Set(existing.map((alias) => alias.trim()));
+  let duplicates = 0;
+  const lines = value.split(/\r\n|[\n\r\u2028\u2029]/u);
+  for (const [index, line] of lines.entries()) {
+    if (controlCharacters.test(line)) {
+      return { aliases, duplicates, error: `第 ${index + 1} 行包含控制字符` };
+    }
+    const alias = line.trim();
+    if (!alias) continue;
+    if (Array.from(alias).length > maxAliasCharacters) {
+      return {
+        aliases,
+        duplicates,
+        error: `第 ${index + 1} 行超过 128 个字符`,
+      };
+    }
+    if (seen.has(alias)) {
+      duplicates += 1;
+      continue;
+    }
+    seen.add(alias);
+    aliases.push(alias);
+  }
+  return {
+    aliases,
+    duplicates,
+    error: validateAliases([...existing, ...aliases]),
+  };
 }
 
 function isSongAliases(value: unknown): value is SongAliases {
@@ -233,6 +276,17 @@ export function SongAliasPanel({
   const selected = items.find((item) => item.songId === selectedId) ?? null;
   const selectedDraft = selected ? drafts[selected.songId] : undefined;
   const aliases = selectedDraft?.aliases ?? selected?.aliases ?? [];
+  const editorSong = editor
+    ? items.find((item) => item.songId === editor.songId)
+    : undefined;
+  const batch = editor?.bulk
+    ? parseAliasBatch(
+        editor.value,
+        editorSong
+          ? (drafts[editorSong.songId]?.aliases ?? editorSong.aliases)
+          : [],
+      )
+    : null;
   const dirty = !!selected && !sameAliases(aliases, selected.aliases);
   const busy = loading || saving;
   const visibleMessage =
@@ -263,6 +317,21 @@ export function SongAliasPanel({
     const song = items.find((item) => item.songId === editor.songId);
     if (!song) return;
     const nextAliases = [...(drafts[song.songId]?.aliases ?? song.aliases)];
+    if (editor.bulk) {
+      const parsed = parseAliasBatch(editor.value, nextAliases);
+      if (parsed.error || !parsed.aliases.length) {
+        setEditorError(
+          parsed.error ??
+            (parsed.duplicates
+              ? '这些别名已存在，无需重复添加'
+              : '请输入至少一条别名'),
+        );
+        return;
+      }
+      updateDraft(song, [...nextAliases, ...parsed.aliases]);
+      setEditor(null);
+      return;
+    }
     const value = editor.value;
     if (editor.index === null) nextAliases.push(value);
     else nextAliases[editor.index] = value;
@@ -559,21 +628,39 @@ export function SongAliasPanel({
                     <p className="text-xs text-muted-foreground">
                       {aliases.length} / {maxAliases} 条别名
                     </p>
-                    <Button
-                      variant="outline"
-                      disabled={busy || aliases.length >= maxAliases}
-                      onClick={() => {
-                        setEditor({
-                          songId: selected.songId,
-                          index: null,
-                          value: '',
-                        });
-                        setEditorError('');
-                      }}
-                    >
-                      <Plus />
-                      添加别名
-                    </Button>
+                    <div className="flex w-full flex-wrap gap-2 sm:w-auto">
+                      <Button
+                        variant="outline"
+                        disabled={busy || aliases.length >= maxAliases}
+                        onClick={() => {
+                          setEditor({
+                            songId: selected.songId,
+                            index: null,
+                            value: '',
+                          });
+                          setEditorError('');
+                        }}
+                      >
+                        <Plus />
+                        添加别名
+                      </Button>
+                      <Button
+                        variant="outline"
+                        disabled={busy || aliases.length >= maxAliases}
+                        onClick={() => {
+                          setEditor({
+                            songId: selected.songId,
+                            index: null,
+                            value: '',
+                            bulk: true,
+                          });
+                          setEditorError('');
+                        }}
+                      >
+                        <Tags />
+                        批量添加
+                      </Button>
+                    </div>
                   </div>
                   {aliases.length === 0 ? (
                     <div className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
@@ -667,10 +754,16 @@ export function SongAliasPanel({
         >
           <DialogHeader>
             <DialogTitle>
-              {editor?.index === null ? '添加曲目别名' : '编辑曲目别名'}
+              {editor?.bulk
+                ? '批量添加曲目别名'
+                : editor?.index === null
+                  ? '添加曲目别名'
+                  : '编辑曲目别名'}
             </DialogTitle>
             <DialogDescription>
-              输入用于搜索的名称，每条最多 128 个字符
+              {editor?.bulk
+                ? '每行一个别名，空行和重复项会自动跳过，每条最多 128 个字符'
+                : '输入用于搜索的名称，每条最多 128 个字符'}
             </DialogDescription>
           </DialogHeader>
           <form className="space-y-4" onSubmit={applyAlias}>
@@ -679,35 +772,68 @@ export function SongAliasPanel({
               htmlFor="song-alias-value"
             >
               <span>别名</span>
-              <Input
-                autoFocus
-                id="song-alias-value"
-                className="psq-glass-control h-11"
-                disabled={busy}
-                value={editor?.value ?? ''}
-                onPaste={(event) => {
-                  if (controlCharacters.test(event.clipboardData.getData('text'))) {
-                    event.preventDefault();
-                    setEditorError('别名不能包含控制字符');
-                  }
-                }}
-                onChange={(event) => {
-                  setEditor(
-                    (current) =>
-                      current && { ...current, value: event.target.value },
-                  );
-                  setEditorError('');
-                }}
-                placeholder="输入别名"
-              />
+              {editor?.bulk ? (
+                <Textarea
+                  autoFocus
+                  id="song-alias-value"
+                  className="psq-glass-control h-[min(36dvh,280px)] min-h-32 resize-y [field-sizing:fixed]"
+                  disabled={busy}
+                  aria-invalid={!!(editorError || batch?.error)}
+                  value={editor.value}
+                  onChange={(event) => {
+                    setEditor(
+                      (current) =>
+                        current && { ...current, value: event.target.value },
+                    );
+                    setEditorError('');
+                  }}
+                  placeholder="粘贴别名列表，每行一个"
+                />
+              ) : (
+                <Input
+                  autoFocus
+                  id="song-alias-value"
+                  className="psq-glass-control h-11"
+                  disabled={busy}
+                  value={editor?.value ?? ''}
+                  onPaste={(event) => {
+                    if (
+                      controlCharacters.test(
+                        event.clipboardData.getData('text'),
+                      )
+                    ) {
+                      event.preventDefault();
+                      setEditorError('别名不能包含控制字符');
+                    }
+                  }}
+                  onChange={(event) => {
+                    setEditor(
+                      (current) =>
+                        current && { ...current, value: event.target.value },
+                    );
+                    setEditorError('');
+                  }}
+                  placeholder="输入别名"
+                />
+              )}
             </label>
             <div className="flex justify-end text-xs text-muted-foreground">
-              {Array.from(editor?.value.trim() ?? '').length} /{' '}
-              {maxAliasCharacters}
+              {batch ? (
+                <span role="status">
+                  将添加 {batch.aliases.length} 条
+                  {batch.duplicates > 0 &&
+                    ` · 跳过 ${batch.duplicates} 条重复项`}
+                </span>
+              ) : (
+                <>
+                  {Array.from(editor?.value.trim() ?? '').length} /{' '}
+                  {maxAliasCharacters}
+                </>
+              )}
             </div>
-            {editorError && (
+            {(editorError || batch?.error) && (
               <p role="alert" className="text-sm text-destructive">
-                {editorError}
+                {editorError || batch?.error}
               </p>
             )}
             <DialogFooter className="-mx-5 -mb-5 px-5 sm:-mx-6 sm:-mb-6 sm:px-6">
@@ -719,9 +845,16 @@ export function SongAliasPanel({
               >
                 取消
               </Button>
-              <Button type="submit" disabled={busy}>
+              <Button
+                type="submit"
+                disabled={
+                  busy ||
+                  !!batch?.error ||
+                  (batch !== null && !batch.aliases.length)
+                }
+              >
                 <Check />
-                应用到草稿
+                {batch ? `添加 ${batch.aliases.length} 条别名` : '应用到草稿'}
               </Button>
             </DialogFooter>
           </form>

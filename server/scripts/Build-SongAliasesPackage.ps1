@@ -1,6 +1,6 @@
 ﻿[CmdletBinding()]
 param(
-    [string] $OutputRoot = 'D:\PhigrosAppBuild\SongAliases-20261011',
+    [string] $OutputRoot = 'D:\PhigrosAppBuild\SongAliases-20261011-BatchAdd',
     [string] $CargoTargetDir = 'D:\PhiAdminWebCargoTarget',
     [switch] $SkipBuild,
     [switch] $Offline
@@ -9,7 +9,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName 'System.IO.Compression', 'System.IO.Compression.FileSystem'
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
-$name = 'server-only-upgrade-SongAliases-20261011'
+$name = 'server-only-upgrade-SongAliases-20261011-BatchAdd'
 $stage = Join-Path $OutputRoot ($name + '-stage')
 $zip = Join-Path $OutputRoot ($name + '.zip')
 $desktopZip = Join-Path ([Environment]::GetFolderPath('Desktop')) ($name + '.zip')
@@ -99,7 +99,7 @@ Copy-Item -LiteralPath (Join-Path $repo '启动APP后台网页.cmd') -Destinatio
 $manifest = [ordered]@{
     package = $name; kind = 'server-only'; createdAt = '2026-10-11'
     includesApk = $false; publishesAppUpdate = $false; modifiesAppUpdate = $false
-    updates = @('Admin song alias listing and editing', 'Persisted per-song alias overrides applied immediately to song search')
+    updates = @('Admin song alias listing, editing, and newline-separated batch additions', 'Persisted per-song alias overrides applied immediately to song search')
     replaces = @('current/backend/phi-backend.exe', 'source/installed-backend-source.zip')
     patches = @('current/caddy/Caddyfile: add only a dedicated /api/v2/admin/songs/aliases handler with a 128KB request limit if needed')
     preserves = @('entire current/backend/info directory and server catalog', 'existing song-alias-overrides.json',

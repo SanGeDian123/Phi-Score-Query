@@ -1,12 +1,12 @@
 # 曲目别名管理服务器升级包
 
-交付文件：`server-only-upgrade-SongAliases-20261011.zip`。
+交付文件：`server-only-upgrade-SongAliases-20261011-BatchAdd.zip`。
 
 本包包含当前后端 Release 程序、对应 AGPL 源码、部署与回滚脚本，以及完整管理台源码和本地启动入口。不包含 APK、APP 更新清单、私有配置、用户数据库、运行时别名数据或依赖缓存。
 
 ## 本次效果
 
-- 管理台“曲目别名”页面可选择指定曲目，查看、添加和删除已有别名，保存到后端。
+- 管理台“曲目别名”页面可选择指定曲目，查看、添加、编辑和删除已有别名，保存到后端。保留单个添加入口，支持粘贴多行文本批量添加，每次换行算一条，自动忽略空行和完全重复项。
 - 管理员保存成功后，后端立即更新搜索使用的别名索引，随后请求即可使用新别名；重启后保留修改。
 - 每首曲目的管理结果以完整别名列表保存至运行时 `info/song-alias-overrides.json`，在原有 `nicklist.yaml` 基线上覆盖对应曲目。删除全部别名会保存空列表，不会被原始别名重新补回。
 - 管理接口 `GET/PUT /api/v2/admin/songs/aliases` 使用现有 `X-Admin-Token`。普通用户不能读取或修改管理员别名列表。
@@ -23,7 +23,7 @@
     $ErrorActionPreference = 'Stop'
     Set-ExecutionPolicy -Scope Process Bypass -Force
     $aliasDesktop = [Environment]::GetFolderPath('Desktop')
-    $aliasZip = Join-Path $aliasDesktop 'server-only-upgrade-SongAliases-20261011.zip'
+    $aliasZip = Join-Path $aliasDesktop 'server-only-upgrade-SongAliases-20261011-BatchAdd.zip'
     $aliasDir = Join-Path $aliasDesktop ('PSQ-SongAliases-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [Guid]::NewGuid().ToString('N').Substring(0,8))
     Expand-Archive -LiteralPath $aliasZip -DestinationPath $aliasDir
     $aliasDeploy = Join-Path $aliasDir 'scripts\Deploy-SongAliases.ps1'
@@ -47,7 +47,9 @@
 & .\admin-console\psq-admin-web\Start-AdminWeb.ps1
 ```
 
-首次自动安装依赖，需要 Node.js 22.13.0 或更新版本。继续填写现有服务器地址和管理员令牌，在“曲目别名”中选择曲目并管理别名。保存成功即同步服务器，无须重新部署后端。
+首次自动安装依赖，需要 Node.js 22.13.0 或更新版本。使用现有管理员令牌，在“曲目别名”中选择曲目并管理别名。保存成功即同步服务器，无须重新部署后端。
+
+“批量添加”中可直接粘贴多行别名列表，确认后追加到当前草稿，再点击“保存全部别名”。若服务器已经部署上一份曲目别名升级包，本次只需更新管理台源码并重新启动，无须重复升级后端；本包仍包含完整服务器升级内容，供尚未部署的服务器使用。
 
 已有本地管理台目录时，关闭旧页面服务，用包内 `admin-console\psq-admin-web` 源码覆盖原同名文件，保留自己的环境配置，再重新启动。避免旧服务占用 3000 端口而继续显示旧页面。
 
