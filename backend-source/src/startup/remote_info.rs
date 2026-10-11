@@ -130,7 +130,10 @@ pub async fn try_load_remote_info(
 
     // Phase 3: 解析
     let chart_constants = parse_chart_constants(Cursor::new(&difficulty_bytes))?;
-    let song_catalog = parse_song_catalog(Cursor::new(&info_bytes), Cursor::new(&nicklist_bytes))?;
+    let mut song_catalog = parse_song_catalog(Cursor::new(&info_bytes), Cursor::new(&nicklist_bytes))?;
+    // Network requests must not block administrator saves. Serialize only the disk commit.
+    let _guard = crate::features::song::aliases::catalog_write_lock().lock().await;
+    crate::features::song::aliases::apply_saved_aliases(&mut song_catalog, info_dir)?;
 
     // 只有三份文件都解析成功后才持久化。否则下一次重启仍会从旧的完整
     // 本地目录启动，不会因为远端半套数据而回退或污染曲库。

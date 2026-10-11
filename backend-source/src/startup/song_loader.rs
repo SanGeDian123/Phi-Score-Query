@@ -78,7 +78,9 @@ pub fn load_song_catalog(info_path: &Path) -> Result<SongCatalog, AppError> {
     let nicklist_reader = File::open(&nicklist_yaml)
         .map_err(|e| AppError::Internal(format!("打开 nicklist.yaml 失败: {e}")))?;
 
-    parse_song_catalog(info_reader, nicklist_reader)
+    let mut catalog = parse_song_catalog(info_reader, nicklist_reader)?;
+    crate::features::song::aliases::apply_saved_aliases(&mut catalog, info_path)?;
+    Ok(catalog)
 }
 
 /// 从 reader 解析 info.csv 和 nicklist.yaml，构建内存索引

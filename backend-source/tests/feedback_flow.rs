@@ -275,6 +275,224 @@ async fn admin_save_wakes_waiting_owner_without_waiting_for_poll_timeout() {
 }
 
 #[tokio::test]
+async fn admin_feedback_uses_latest_submitter_profile_and_public_rank() {
+    use serde_json::json;
+    init_test_config();
+    let storage = Arc::new(StatsStorage {
+        pool: sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap(),
+    });
+    storage.init_schema().await.unwrap();
+    let app = make_app(make_state(storage.clone()));
+    let token = exchange(&app, "r:feedback-profile-player").await;
+    let id = Uuid::new_v4().to_string();
+    let (status, created) = request(
+        &app,
+        "POST",
+        "/feedback",
+        &token,
+        false,
+        json!({
+            "id": id, "title": "提交者信息", "body": "检查反馈资料",
+            "submitter": {"nickname": "伪造昵称", "rks": 99, "leaderboardRank": 1}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let created: serde_json::Value = serde_json::from_slice(&created).unwrap();
+    assert!(created.get("submitter").is_none());
+    let user: String = sqlx::query_scalar("SELECT owner FROM feedback WHERE id=?")
+        .bind(&id)
+        .fetch_one(&storage.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO user_profile(user_hash,nickname,challenge_mode_rank,is_public,created_at,updated_at)
+         VALUES(?,'当前玩家',421,1,'',''),('higher','更高分',501,1,'',''),
+               ('earlier','更早更新',321,1,'',''),('000','同分前位',221,1,'',''),
+               ('zzz','同分后位',121,1,'','')",
+    )
+    .bind(&user)
+    .execute(&storage.pool)
+    .await
+    .unwrap();
+    for (player, rks, updated) in [
+        (user.as_str(), 17.25, "2026-10-08T00:00:00Z"),
+        ("higher", 18.0, "2026-10-08T00:00:00Z"),
+        ("earlier", 17.25, "2026-10-07T00:00:00Z"),
+        ("000", 17.25, "2026-10-08T00:00:00Z"),
+        ("zzz", 17.25, "2026-10-08T00:00:00Z"),
+    ] {
+        storage
+            .upsert_leaderboard_rks(player, rks, None, 0.0, false, updated)
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        request(&app, "GET", "/admin/feedback", &token, false, json!(null))
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, bytes) = request(
+        &app,
+        "GET",
+        "/admin/feedback",
+        "feedback-test-admin",
+        true,
+        json!(null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let items: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(items[0]["id"], id);
+    assert_eq!(items[0]["imageCount"], 0);
+    assert!(items[0].get("owner").is_none());
+    assert_eq!(
+        items[0]["submitter"],
+        json!({
+            "nickname": "当前玩家", "rks": 17.25,
+            "challengeModeRank": 421, "leaderboardRank": 4
+        })
+    );
+    sqlx::query(
+        "UPDATE user_profile SET nickname='更新昵称',challenge_mode_rank=505 WHERE user_hash=?",
+    )
+    .bind(&user)
+    .execute(&storage.pool)
+    .await
+    .unwrap();
+    storage
+        .upsert_leaderboard_rks(&user, 16.5, None, 0.0, false, "2026-10-08T01:00:00Z")
+        .await
+        .unwrap();
+    let (status, bytes) = request(
+        &app,
+        "GET",
+        "/admin/feedback",
+        "feedback-test-admin",
+        true,
+        json!(null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let items: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        items[0]["submitter"],
+        json!({
+            "nickname": "更新昵称", "rks": 16.5,
+            "challengeModeRank": 505, "leaderboardRank": 5
+        })
+    );
+    let (_, bytes) = request(&app, "GET", "/feedback/mine", &token, false, json!(null)).await;
+    let mine: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+    assert!(mine[0].get("submitter").is_none());
+}
+
+#[tokio::test]
+async fn admin_feedback_enriches_legacy_items_without_ranking_private_or_restricted_players() {
+    use serde_json::json;
+    use sqlx::Row;
+    init_test_config();
+    let storage = Arc::new(StatsStorage {
+        pool: sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap(),
+    });
+    storage.init_schema().await.unwrap();
+    for (user, nickname, rks, public, hidden) in [
+        ("alias-only", Some("  "), Some(16.25), 1, false),
+        ("zero", Some("零分玩家"), Some(0.0), 1, false),
+        ("private", Some("私密玩家"), Some(19.0), 0, false),
+        ("hidden", Some("隐藏玩家"), Some(19.0), 1, true),
+        ("restricted", Some("限制玩家"), Some(19.0), 1, false),
+        ("suspended", Some("暂停玩家"), Some(19.0), 1, false),
+        ("banned", Some("封禁玩家"), Some(19.0), 1, false),
+        ("orphan", None, Some(18.0), 0, false),
+        ("missing", None, None, 0, false),
+    ] {
+        if !["orphan", "missing"].contains(&user) {
+            sqlx::query("INSERT INTO user_profile(user_hash,nickname,alias,challenge_mode_rank,is_public,created_at,updated_at) VALUES(?,?,?,421,?,'','')")
+                .bind(user)
+                .bind(nickname)
+                .bind(if user == "alias-only" { Some("备用昵称") } else { None })
+                .bind(public)
+                .execute(&storage.pool)
+                .await
+                .unwrap();
+        }
+        if let Some(rks) = rks {
+            storage
+                .upsert_leaderboard_rks(user, rks, None, 0.0, hidden, "2026-10-07T00:00:00Z")
+                .await
+                .unwrap();
+        }
+        sqlx::query("INSERT INTO feedback(id,owner,title,body,created_at,updated_at) VALUES(?,?,?,'历史反馈','2026-09-01T00:00:00Z','2026-09-01T00:00:00Z')")
+            .bind(Uuid::new_v4().to_string())
+            .bind(user)
+            .bind(user)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query("INSERT INTO user_access_restrictions(user_hash,restriction_type,updated_by,updated_at) VALUES('restricted','public_hidden','admin',''),('suspended','account_suspended','admin','')")
+        .execute(&storage.pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO user_moderation_state(user_hash,status,updated_by,updated_at) VALUES('banned','BANNED','admin','')")
+        .execute(&storage.pool)
+        .await
+        .unwrap();
+    let board = storage.query_leaderboard_top_offset(30, 0).await.unwrap();
+    assert_eq!(board.len(), 2);
+    let app = make_app(make_state(storage));
+    let (status, bytes) = request(
+        &app,
+        "GET",
+        "/admin/feedback",
+        "feedback-test-admin",
+        true,
+        json!(null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let items: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(items.len(), 9);
+    for item in &items {
+        let user = item["title"].as_str().unwrap();
+        let public_rank = board
+            .iter()
+            .position(|row| row.get::<String, _>("user_hash") == user)
+            .map(|index| index + 1);
+        assert_eq!(
+            item["submitter"]["leaderboardRank"],
+            json!(public_rank),
+            "{user}"
+        );
+    }
+    let submitter =
+        |user: &str| &items.iter().find(|item| item["title"] == user).unwrap()["submitter"];
+    assert_eq!(submitter("alias-only")["nickname"], "备用昵称");
+    assert_eq!(submitter("zero")["rks"], 0.0);
+    assert_eq!(submitter("private")["nickname"], "私密玩家");
+    assert_eq!(submitter("private")["rks"], 19.0);
+    assert_eq!(submitter("private")["challengeModeRank"], 421);
+    assert_eq!(submitter("restricted")["nickname"], "限制玩家");
+    assert_eq!(submitter("orphan")["rks"], 18.0);
+    assert_eq!(
+        submitter("missing"),
+        &json!({
+            "nickname": null, "rks": null, "challengeModeRank": null, "leaderboardRank": null
+        })
+    );
+}
+
+#[tokio::test]
 async fn private_feedback_end_to_end() {
     use base64::Engine;
     use serde_json::json;

@@ -36,6 +36,12 @@ fn info_fingerprint(info_dir: &Path) -> Result<[u8; 32], AppError> {
         hasher.update((bytes.len() as u64).to_le_bytes());
         hasher.update(bytes);
     }
+    let alias_path = info_dir.join(crate::features::song::aliases::OVERRIDES_FILE);
+    match std::fs::read(alias_path) {
+        Ok(bytes) => { hasher.update(b"alias-overrides"); hasher.update(bytes); }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(AppError::Internal(format!("读取曲目别名配置失败: {error}"))),
+    }
     Ok(hasher.finalize().into())
 }
 
@@ -68,19 +74,12 @@ pub fn spawn(
 
             // 先尝试远端源。成功下载后 remote_info 会把三份文件持久化到
             // info 目录，进程重启也不会回退到旧文件。
-            let mut remote_applied = false;
             if let Some(base_url) = info_base_url.as_deref() {
                 match try_load_remote_info(base_url, &info_dir).await {
-                    Ok(Some(remote)) => {
-                        let remote_song_count = remote.song_catalog.by_id.len();
-                        chart_constants.replace(remote.chart_constants);
-                        song_catalog.replace(remote.song_catalog);
-                        last_fingerprint = info_fingerprint(&info_dir).ok();
-                        remote_applied = true;
-                        tracing::info!(
-                            song_count = remote_song_count,
-                            "运行时远端曲库已同步"
-                        );
+                    Ok(Some(_)) => {
+                        // Reload under the lock below: an administrator may have saved
+                        // new overrides between the download and snapshot publication.
+                        last_fingerprint = None;
                     }
                     Ok(None) => {}
                     Err(error) => {
@@ -89,9 +88,7 @@ pub fn spawn(
                 }
             }
 
-            if remote_applied {
-                continue;
-            }
+            let _guard = crate::features::song::aliases::catalog_write_lock().lock().await;
 
             let fingerprint = match info_fingerprint(&info_dir) {
                 Ok(value) => value,

@@ -81,11 +81,12 @@ impl StatsStorage {
         sqlx::query(
             "INSERT INTO leaderboard_rks(user_hash,total_rks,user_kind,suspicion_score,is_hidden,created_at,updated_at) VALUES(?,?,?,?,?,?,?)
              ON CONFLICT(user_hash) DO UPDATE SET
-               total_rks = CASE WHEN excluded.total_rks > leaderboard_rks.total_rks THEN excluded.total_rks ELSE leaderboard_rks.total_rks END,
-               updated_at = CASE WHEN excluded.total_rks > leaderboard_rks.total_rks THEN excluded.updated_at ELSE leaderboard_rks.updated_at END,
+               total_rks = excluded.total_rks,
+               updated_at = excluded.updated_at,
                user_kind = COALESCE(excluded.user_kind, leaderboard_rks.user_kind),
                suspicion_score = excluded.suspicion_score,
-               is_hidden = CASE WHEN leaderboard_rks.is_hidden=1 OR excluded.is_hidden=1 THEN 1 ELSE 0 END"
+               is_hidden = CASE WHEN leaderboard_rks.is_hidden=1 OR excluded.is_hidden=1 THEN 1 ELSE 0 END
+             WHERE excluded.updated_at >= leaderboard_rks.updated_at"
         )
         .bind(user_hash)
         .bind(total_rks)
@@ -129,7 +130,8 @@ impl StatsStorage {
                rks_composition_json = COALESCE(excluded.rks_composition_json, leaderboard_details.rks_composition_json),
                best_top3_json = COALESCE(excluded.best_top3_json, leaderboard_details.best_top3_json),
                ap_top3_json = COALESCE(excluded.ap_top3_json, leaderboard_details.ap_top3_json),
-               updated_at = excluded.updated_at"
+               updated_at = excluded.updated_at
+             WHERE excluded.updated_at >= leaderboard_details.updated_at"
         )
         .bind(user_hash)
         .bind(rks_comp_json)

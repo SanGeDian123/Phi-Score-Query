@@ -114,6 +114,64 @@ fn record(row: sqlx::sqlite::SqliteRow) -> Feedback {
 }
 const SELECT: &str = "SELECT f.*, (SELECT COUNT(*) FROM feedback_images i WHERE i.feedback_id=f.id) image_count FROM feedback f";
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedbackSubmitter {
+    nickname: Option<String>,
+    rks: Option<f64>,
+    challenge_mode_rank: Option<i64>,
+    leaderboard_rank: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct AdminFeedback {
+    #[serde(flatten)]
+    feedback: Feedback,
+    submitter: FeedbackSubmitter,
+}
+
+// Use the public RKS board's visibility rules and stable tie ordering. Keep the
+// submitter's profile available to admins even when the player is not ranked.
+const ADMIN_SELECT: &str = r#"
+WITH ranked_users AS (
+    SELECT lr.user_hash,
+           ROW_NUMBER() OVER (
+               ORDER BY lr.total_rks DESC, lr.updated_at ASC, lr.user_hash ASC
+           ) AS leaderboard_rank
+    FROM leaderboard_rks lr
+    JOIN user_profile up ON up.user_hash=lr.user_hash AND up.is_public=1
+    WHERE lr.is_hidden=0
+      AND NOT EXISTS (
+          SELECT 1 FROM publicly_restricted_users blocked
+          WHERE blocked.user_hash=lr.user_hash
+      )
+)
+SELECT f.*, (SELECT COUNT(*) FROM feedback_images i WHERE i.feedback_id=f.id) image_count,
+       COALESCE(NULLIF(TRIM(up.nickname),''), NULLIF(TRIM(up.alias),'')) AS submitter_nickname,
+       lr.total_rks AS submitter_rks,
+       up.challenge_mode_rank AS submitter_challenge_mode_rank,
+       ranked.leaderboard_rank AS submitter_leaderboard_rank
+FROM feedback f
+LEFT JOIN user_profile up ON up.user_hash=f.owner
+LEFT JOIN leaderboard_rks lr ON lr.user_hash=f.owner
+LEFT JOIN ranked_users ranked ON ranked.user_hash=f.owner
+ORDER BY f.created_at DESC, f.id DESC
+LIMIT 30 OFFSET ?
+"#;
+
+fn admin_record(row: sqlx::sqlite::SqliteRow) -> AdminFeedback {
+    let submitter = FeedbackSubmitter {
+        nickname: row.get("submitter_nickname"),
+        rks: row.get("submitter_rks"),
+        challenge_mode_rank: row.get("submitter_challenge_mode_rank"),
+        leaderboard_rank: row.get("submitter_leaderboard_rank"),
+    };
+    AdminFeedback {
+        feedback: record(row),
+        submitter,
+    }
+}
+
 async fn create(
     State(state): State<AppState>,
     Extension(auth): Extension<BearerAuthState>,
@@ -315,16 +373,14 @@ async fn admin_list(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(page): Query<Page>,
-) -> Result<Json<Vec<Feedback>>, AppError> {
+) -> Result<Json<Vec<AdminFeedback>>, AppError> {
     require_admin(&headers)?;
-    let rows = sqlx::query(&format!(
-        "{SELECT} ORDER BY created_at DESC,id DESC LIMIT 30 OFFSET ?"
-    ))
-    .bind(page.offset)
-    .fetch_all(pool(&state)?)
-    .await
-    .map_err(db)?;
-    Ok(Json(rows.into_iter().map(record).collect()))
+    let rows = sqlx::query(ADMIN_SELECT)
+        .bind(page.offset)
+        .fetch_all(pool(&state)?)
+        .await
+        .map_err(db)?;
+    Ok(Json(rows.into_iter().map(admin_record).collect()))
 }
 #[derive(Deserialize)]
 pub struct Update {

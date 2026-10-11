@@ -21,6 +21,7 @@ import {
   Send,
   Server,
   ShieldCheck,
+  Tags,
   Trash2,
   Users,
   X,
@@ -29,6 +30,7 @@ import { Line, LineChart, Area, AreaChart, CartesianGrid, XAxis, YAxis } from 'r
 
 import { FeedbackPanel } from '@/components/feedback-panel';
 import { LanAccessButton, LanAccessCard } from '@/components/lan-access';
+import { SongAliasPanel } from '@/components/song-alias-panel';
 import { UserManagementPanel } from '@/components/user-management';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -576,6 +578,18 @@ export default function Home() {
             </Button>
             <Button variant="ghost" className="h-11 w-full justify-start gap-3 px-3 text-muted-foreground" onClick={() => document.getElementById('feedback')?.scrollIntoView({ behavior: 'smooth' })}><Send />用户反馈</Button>
             <Button variant="ghost" className="h-11 w-full justify-start gap-3 px-3 text-muted-foreground" onClick={() => document.getElementById('user-management')?.scrollIntoView({ behavior: 'smooth' })}><Users />用户管理</Button>
+            <Button
+              variant="ghost"
+              className="h-11 w-full justify-start gap-3 px-3 text-muted-foreground"
+              onClick={() =>
+                document
+                  .getElementById('song-aliases')
+                  ?.scrollIntoView({ behavior: 'smooth' })
+              }
+            >
+              <Tags />
+              曲目别名
+            </Button>
           </nav>
 
           <div className="mt-auto rounded-2xl border border-primary/10 bg-primary/[0.035] p-4">
@@ -658,7 +672,7 @@ export default function Home() {
             </div>
           </header>
 
-          {/* Phones keep all three sections one tap away. */}
+          {/* Keep every management section accessible on smaller screens. */}
           <nav
             aria-label="页面导航"
             className="psq-glass-topbar sticky top-[72px] z-10 border-b lg:hidden"
@@ -668,6 +682,7 @@ export default function Home() {
                 { id: 'dashboard', label: '总览', icon: LayoutDashboard },
                 { id: 'announcement', label: '公告', icon: BellRing },
                 { id: 'user-management', label: '用户管理', icon: Users },
+                { id: 'song-aliases', label: '曲目别名', icon: Tags },
                 { id: 'feedback', label: '反馈', icon: Send },
               ].map(({ id, label, icon: Icon }) => (
                 <Button
@@ -1150,6 +1165,8 @@ export default function Home() {
             </div>
 
             <UserManagementPanel token={token} connected={connected} />
+
+            <SongAliasPanel token={token} connected={connected} />
 
             <FeedbackPanel token={token} connected={connected} />
 

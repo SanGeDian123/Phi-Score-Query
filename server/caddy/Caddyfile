@@ -145,6 +145,17 @@ api.plc-liangpi-cup.xyz {
 	}
 	# END PSQ USER MODERATION
 
+	@songAliasesApi path /api/v2/admin/songs/aliases
+	handle @songAliasesApi {
+		request_body {
+			max_size 128KB
+		}
+		reverse_proxy 127.0.0.1:3939 {
+			header_up -X-Exchange-Secret
+			header_up -X-OpenApi-Token
+		}
+	}
+
 	@adminConsoleApi path /api/v2/admin/dashboard /api/v2/admin/announcement /api/v2/admin/announcements /api/v2/admin/announcements/* /api/v2/admin/feedback /api/v2/admin/feedback/*
 	handle @adminConsoleApi {
 		request_body {

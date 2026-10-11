@@ -613,7 +613,7 @@ async fn compute_rks_and_details(
 
 // ── Phase 4b: 排行榜写入（后台 best-effort） ──
 
-fn spawn_leaderboard_write(
+async fn write_leaderboard_snapshot(
     storage: Arc<crate::stats_contract::StatsStorage>,
     user_hash: String,
     user_kind: Option<String>,
@@ -626,9 +626,10 @@ fn spawn_leaderboard_write(
     challenge_mode_rank: Option<i64>,
     game_record: &HashMap<String, Vec<super::models::DifficultyRecord>>,
     rks_guess_clues_json: Option<String>,
-) {
+    observed_at: String,
+) -> Result<(), AppError> {
     let total_rks = rks_result.total_rks;
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = observed_at;
     let chart_samples: Vec<crate::stats_contract::ChartAchievementSample> = game_record
         .iter()
         .flat_map(|(song_id, records)| {
@@ -642,47 +643,95 @@ fn spawn_leaderboard_write(
                 })
         })
         .collect();
+    let prev = match storage.get_prev_rks(&user_hash).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                target: "phi_backend::leaderboard",
+                user_hash = %user_hash,
+                "get_prev_rks failed (ignored): {e}"
+            );
+            None
+        }
+    };
+    let prev_rks = prev.as_ref().map_or(0.0, |v| v.0);
+    const RKS_JUMP_EPS: f64 = 1e-9;
+    let rks_jump = if prev_rks > 0.0 {
+        total_rks - prev_rks
+    } else {
+        0.0
+    };
+    let rks_jump = if rks_jump.abs() < RKS_JUMP_EPS {
+        0.0
+    } else {
+        rks_jump
+    };
+
+    let mut suspicion = 0.0_f64;
+    if total_rks > 20.0 {
+        suspicion += 0.5;
+    }
+    if rks_jump > 1.0 {
+        suspicion += 0.8;
+    } else if rks_jump > 0.5 {
+        suspicion += 0.3;
+    }
+    if let Some(kind) = user_kind.as_deref()
+        && kind == "session_token"
+    {
+        suspicion = (suspicion - 0.2).max(0.0);
+    }
+    let hide = suspicion >= 1.0;
+
+    // Persist public ranking data before returning /save; expensive sampling stays in the background.
+    storage
+        .upsert_leaderboard_rks(
+            &user_hash,
+            total_rks,
+            user_kind.as_deref(),
+            suspicion,
+            hide,
+            &now,
+        )
+        .await?;
+    storage
+        .upsert_details(
+            &user_hash,
+            rks_comp_json.as_deref(),
+            best_top3_json.as_deref(),
+            ap_top3_json.as_deref(),
+            &now,
+        )
+        .await?;
+
+    let cfg = crate::config::AppConfig::global();
+    if cfg.leaderboard.allow_public
+        && let Err(e) = storage
+            .ensure_default_public_profile(
+                &user_hash,
+                user_kind.as_deref(),
+                cfg.leaderboard.default_show_rks_composition,
+                cfg.leaderboard.default_show_best_top3,
+                cfg.leaderboard.default_show_ap_top3,
+                &now,
+            )
+            .await
+    {
+        tracing::warn!(target: "phi_backend::leaderboard", user_hash = %user_hash, "ensure_default_public_profile failed (ignored): {e}");
+    }
+    if let Err(e) = storage
+        .update_player_profile(
+            &user_hash,
+            nickname.as_deref(),
+            avatar.as_deref(),
+            challenge_mode_rank,
+            &now,
+        )
+        .await
+    {
+        tracing::warn!(target: "phi_backend::leaderboard", user_hash = %user_hash, "update player profile failed (ignored): {e}");
+    }
     tokio::spawn(async move {
-        let prev = match storage.get_prev_rks(&user_hash).await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(
-                    target: "phi_backend::leaderboard",
-                    user_hash = %user_hash,
-                    "get_prev_rks failed (ignored): {e}"
-                );
-                None
-            }
-        };
-        let prev_rks = prev.as_ref().map_or(0.0, |v| v.0);
-        const RKS_JUMP_EPS: f64 = 1e-9;
-        let rks_jump = if prev_rks > 0.0 {
-            total_rks - prev_rks
-        } else {
-            0.0
-        };
-        let rks_jump = if rks_jump.abs() < RKS_JUMP_EPS {
-            0.0
-        } else {
-            rks_jump
-        };
-
-        let mut suspicion = 0.0_f64;
-        if total_rks > 20.0 {
-            suspicion += 0.5;
-        }
-        if rks_jump > 1.0 {
-            suspicion += 0.8;
-        } else if rks_jump > 0.5 {
-            suspicion += 0.3;
-        }
-        if let Some(kind) = user_kind.as_deref()
-            && kind == "session_token"
-        {
-            suspicion = (suspicion - 0.2).max(0.0);
-        }
-        let hide = suspicion >= 1.0;
-
         if let Err(e) = storage
             .insert_submission(SubmissionRecord {
                 user_hash: &user_hash,
@@ -713,60 +762,8 @@ fn spawn_leaderboard_write(
                 tracing::warn!(target: "phi_backend::rks_guess", user_hash = %user_hash, "upsert RKS guess snapshot failed (ignored): {e}");
             }
         }
-        if let Err(e) = storage
-            .upsert_leaderboard_rks(
-                &user_hash,
-                total_rks,
-                user_kind.as_deref(),
-                suspicion,
-                hide,
-                &now,
-            )
-            .await
-        {
-            tracing::warn!(target: "phi_backend::leaderboard", user_hash = %user_hash, "upsert_leaderboard_rks failed (ignored): {e}");
-        }
-        if let Err(e) = storage
-            .upsert_details(
-                &user_hash,
-                rks_comp_json.as_deref(),
-                best_top3_json.as_deref(),
-                ap_top3_json.as_deref(),
-                &now,
-            )
-            .await
-        {
-            tracing::warn!(target: "phi_backend::leaderboard", user_hash = %user_hash, "upsert_details failed (ignored): {e}");
-        }
-
-        let cfg = crate::config::AppConfig::global();
-        if cfg.leaderboard.allow_public
-            && let Err(e) = storage
-                .ensure_default_public_profile(
-                    &user_hash,
-                    user_kind.as_deref(),
-                    cfg.leaderboard.default_show_rks_composition,
-                    cfg.leaderboard.default_show_best_top3,
-                    cfg.leaderboard.default_show_ap_top3,
-                    &now,
-                )
-                .await
-        {
-            tracing::warn!(target: "phi_backend::leaderboard", user_hash = %user_hash, "ensure_default_public_profile failed (ignored): {e}");
-        }
-        if let Err(e) = storage
-            .update_player_profile(
-                &user_hash,
-                nickname.as_deref(),
-                avatar.as_deref(),
-                challenge_mode_rank,
-                &now,
-            )
-            .await
-        {
-            tracing::warn!(target: "phi_backend::leaderboard", user_hash = %user_hash, "update player profile failed (ignored): {e}");
-        }
     });
+    Ok(())
 }
 
 // ── 主 Handler（编排器） ──
@@ -797,6 +794,7 @@ pub async fn get_save_data(
     req: axum::extract::Request,
 ) -> Result<Response, AppError> {
     let t_total = Instant::now();
+    let observed_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
     let legacy_notice = !crate::features::auth::bearer::supports_moderation_ui(req.headers())
         && params.get("calculate_rks").is_some_and(|value| value == "true");
     let legacy_session_id = req.extensions()
@@ -912,7 +910,7 @@ pub async fn get_save_data(
                     error
                 })
                 .ok();
-            spawn_leaderboard_write(
+            write_leaderboard_snapshot(
                 storage.clone(),
                 user_hash_ref.clone(),
                 auth.user_kind.clone(),
@@ -925,7 +923,9 @@ pub async fn get_save_data(
                 challenge_mode_rank,
                 &result.rks_game_record,
                 rks_guess_clues_json,
-            );
+                observed_at,
+            )
+            .await?;
         }
         let calc_ms = result.calc_ms;
         (Some(result), calc_ms)
@@ -1020,6 +1020,46 @@ pub fn create_save_router() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::{build_save_cache_key, official_avatar_name};
+
+    async fn leaderboard_storage() -> std::sync::Arc<crate::stats_contract::StatsStorage> {
+        let _ = crate::config::AppConfig::init_global();
+        let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1)
+            .connect("sqlite::memory:").await.unwrap();
+        let storage = std::sync::Arc::new(crate::stats_contract::StatsStorage { pool });
+        storage.init_schema().await.unwrap();
+        storage
+    }
+
+    #[tokio::test]
+    async fn leaderboard_snapshot_is_readable_immediately_after_save_write() {
+        let storage = leaderboard_storage().await;
+        for (second, score) in [16.1234, 16.0].into_iter().enumerate() {
+            let now = format!("2026-10-07T00:00:{second:02}.000000000Z");
+            let rks = super::PlayerRksResult { total_rks: score, b30_charts: vec![] };
+            super::write_leaderboard_snapshot(
+                storage.clone(), "u1".into(), Some("session_token".into()), &rks,
+                Some("[]".into()), Some("[]".into()), Some("{}".into()),
+                Some("Player".into()), None, None, &std::collections::HashMap::new(),
+                None, now.clone(),
+            ).await.unwrap();
+            // No sleep or polling: a successful /save already committed this score.
+            assert_eq!(storage.get_prev_rks("u1").await.unwrap().unwrap(), (score, now));
+        }
+        storage.pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn leaderboard_write_failure_is_reported_instead_of_returning_success() {
+        let storage = leaderboard_storage().await;
+        storage.pool.close().await;
+        let rks = super::PlayerRksResult { total_rks: 16.0, b30_charts: vec![] };
+        let result = super::write_leaderboard_snapshot(
+            storage, "u1".into(), None, &rks, None, None, None, None, None, None,
+            &std::collections::HashMap::new(), None,
+            "2026-10-07T00:00:00.000000000Z".into(),
+        ).await;
+        assert!(result.is_err());
+    }
 
     #[test]
     fn build_save_cache_key_requires_user_and_updated_at() {

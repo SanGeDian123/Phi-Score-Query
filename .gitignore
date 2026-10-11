@@ -37,3 +37,5 @@ backend-source/.env
 backend-source/.env.*
 backend-source/resources/*.db
 backend-source/resources/*.db-*
+backend-source/info/song-alias-overrides.json
+backend-source/info/song-alias-overrides.json.*.tmp

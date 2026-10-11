@@ -77,6 +77,8 @@ impl Modify for ApiServers {
         crate::features::open_platform::open_api::leaderboard::open_get_leaderboard_by_rank,
         crate::features::open_platform::open_api::rks::open_post_rks_history,
         crate::features::song::handler::search_songs,
+        crate::features::song::aliases::get_admin_song_aliases,
+        crate::features::song::aliases::put_admin_song_aliases,
         crate::features::song::handler::get_song_catalog,
         crate::features::song::handler::get_chart_achievement_rates,
         crate::features::image::handler::bn::render_bn,

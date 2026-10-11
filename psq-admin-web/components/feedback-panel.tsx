@@ -5,9 +5,24 @@ import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
+import { challengeModeLabel } from '@/lib/challenge-mode';
 
-type Feedback = { id: string; title: string; body: string; status: string; reply: string; createdAt: string; updatedAt: string; revision: number; imageCount: number };
+type FeedbackSubmitter = { nickname: string | null; rks: number | null; challengeModeRank: number | null; leaderboardRank: number | null };
+type Feedback = { id: string; title: string; body: string; status: string; reply: string; createdAt: string; updatedAt: string; revision: number; imageCount: number; submitter?: FeedbackSubmitter };
 const labels: Record<string, string> = { pending: '待处理', processing: '处理中', resolved: '已处理' };
+
+function FeedbackSubmitterInfo({ submitter, compact = false }: { submitter?: FeedbackSubmitter; compact?: boolean }) {
+  const rank = submitter?.leaderboardRank;
+  const metrics = [
+    { label: '昵称', value: submitter?.nickname?.trim() || '未设置昵称' },
+    { label: 'RKS', value: typeof submitter?.rks === 'number' && Number.isFinite(submitter.rks) ? submitter.rks.toFixed(2) : '—' },
+    { label: '课题模式', value: challengeModeLabel(submitter?.challengeModeRank ?? null) },
+    { label: '排行榜位次', value: typeof rank === 'number' && Number.isSafeInteger(rank) && rank > 0 ? `第 ${rank} 名` : submitter ? '未上榜' : '—' },
+  ];
+  return <dl className={`grid grid-cols-2 gap-3 rounded-xl bg-muted/40 p-3 ${compact ? '' : 'sm:grid-cols-4'}`}>
+    {metrics.map(metric => <div key={metric.label} className="min-w-0"><dt className="text-xs text-muted-foreground">{metric.label}</dt><dd className="mt-1 break-words text-sm font-medium tabular-nums">{metric.value}</dd></div>)}
+  </dl>;
+}
 
 function FeedbackImage({ token, id, position }: { token: string; id: string; position: number }) {
   const [url, setUrl] = useState('');
@@ -72,6 +87,7 @@ export function FeedbackPanel({ token, connected }: { token: string; connected: 
         <div className="grid gap-3 md:grid-cols-2">{items.map(item => <button key={item.id} disabled={busy} onClick={() => { setSelected(item); setStatus(item.status); setReply(item.reply); setMessage(''); }} className="min-w-0 rounded-2xl border p-4 text-left transition-colors hover:bg-primary/5 focus-visible:outline-2 focus-visible:outline-primary">
           <div className="flex flex-wrap items-center justify-between gap-2"><span className="break-words font-semibold">{item.title}</span><span className="text-sm text-primary">{labels[item.status] || item.status}</span></div>
           <p className="mt-2 line-clamp-2 break-words text-sm text-muted-foreground">{item.body}</p>
+          <div className="mt-3"><FeedbackSubmitterInfo submitter={item.submitter} compact /></div>
           <p className="mt-3 text-sm text-muted-foreground">{new Date(item.createdAt).toLocaleString('zh-CN')} · {item.imageCount} 张图片</p>
         </button>)}</div>}
       <div className="flex flex-wrap items-center justify-between gap-3"><Button variant="outline" disabled={busy || offset === 0} onClick={() => setOffset(Math.max(0, offset - 30))}>上一页</Button><span className="text-sm">第 {offset / 30 + 1} 页</span><Button variant="outline" disabled={busy || items.length < 30} onClick={() => setOffset(offset + 30)}>下一页</Button></div>
@@ -80,6 +96,7 @@ export function FeedbackPanel({ token, connected }: { token: string; connected: 
       <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader><DialogTitle className="break-words">{selected?.title}</DialogTitle><DialogDescription>查看反馈并回复提交者</DialogDescription></DialogHeader>
         {selected && <div className="space-y-4">
+          <FeedbackSubmitterInfo submitter={selected.submitter} />
           <p className="whitespace-pre-wrap break-words text-base">{selected.body}</p>
           <div className="grid gap-3 sm:grid-cols-2">{Array.from({ length: selected.imageCount }, (_, position) => <FeedbackImage key={`${selected.id}-${position}`} token={token} id={selected.id} position={position} />)}</div>
           <label className="block space-y-2 text-sm"><span>处理状态</span><select value={status} disabled={busy} onChange={event => setStatus(event.target.value)} className="block h-11 w-full rounded-xl border bg-background px-3">{Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>

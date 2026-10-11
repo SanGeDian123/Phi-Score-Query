@@ -64,6 +64,7 @@ fn build_api_router(state: &AppState, config: &AppConfig) -> Router<AppState> {
         .nest("/auth", auth::create_auth_router())
         .merge(save::create_save_router())
         .merge(song::create_song_router())
+        .merge(song::aliases::router(config.clone()))
         .merge(crate::features::image::create_image_router())
         .merge(create_leaderboard_router())
         .merge(crate::features::rks::handler::create_rks_router())

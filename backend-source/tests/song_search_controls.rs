@@ -992,9 +992,10 @@ async fn practice_catalog_query_is_public_and_separate_from_song_etag() {
     assert_eq!(normal.status(), StatusCode::OK);
     let etag = normal.headers()["etag"].clone();
     let practice = app.oneshot(Request::builder().uri("/api/v2/songs/catalog?practice=true")
-        .header("If-None-Match", etag).body(Body::empty()).unwrap()).await.unwrap();
+        .header("If-None-Match", &etag).body(Body::empty()).unwrap()).await.unwrap();
     assert_eq!(practice.status(), StatusCode::OK);
-    assert_eq!(practice.headers()["cache-control"], "no-store");
+    assert_eq!(practice.headers()["cache-control"], "no-cache");
+    assert_ne!(practice.headers()["etag"], etag);
     let body = axum::body::to_bytes(practice.into_body(), 1024 * 1024).await.unwrap();
     let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert!(value["practiceCharts"].is_array());

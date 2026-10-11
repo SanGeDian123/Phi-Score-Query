@@ -1,6 +1,6 @@
 # PSQ Server Console
 
-PSQ 项目组内部使用的服务器数据与 APP 公告管理网页。
+PSQ 项目组内部使用的服务器数据、APP 公告、用户反馈、用户管理与曲目别名管理网页。
 
 ## 功能
 
@@ -8,6 +8,7 @@ PSQ 项目组内部使用的服务器数据与 APP 公告管理网页。
 - 展示排行榜已登记用户总数、今日活跃与请求数、用户活跃率、请求成功率，以及近 14 日 DAU 和总用户数趋势。
 - 数据每 5 秒自动刷新，同时保留手动刷新；指标变化时按增减方向切换数字。
 - 按发布时间最新优先查看全部公告，并通过页面内二次确认快捷新增、编辑和删除公告。
+- 按曲名、歌曲 ID 或别名筛选曲目，逐条添加、编辑、删除别名，并将整份列表保存到服务器。
 - 使用 APP 同款 `source_han_sans_saira_hybrid.ttf` 字体和 PSQ 浅色主题。
 - 适配电脑、平板与手机，包含完整的加载、错误、空数据和发布结果状态。
 
@@ -53,6 +54,8 @@ npm run build
 - `PUT /api/v2/admin/announcements/{id}`
 - `DELETE /api/v2/admin/announcements/{id}`
 - `GET /api/v2/admin/dashboard`
+- `GET /api/v2/admin/songs/aliases`
+- `PUT /api/v2/admin/songs/aliases`
 - 运行进程环境变量 `APP_ANNOUNCEMENT_DIR`
 
 公告接口沿用 `leaderboard.admin_tokens` 与 `X-Admin-Token`，不会增加另一套管理员凭据。旧版 `GET/POST /api/v2/admin/announcement` 继续由后端保留兼容。
@@ -62,6 +65,8 @@ npm run build
 ## 用户反馈
 
 管理台新增用户反馈列表，支持分页、查看私有附件、修改待处理/处理中/已处理状态和填写管理员回复。已处理必须填写回复；并发更新通过 revision 检查，防止覆盖其他管理员的处理结果。
+
+反馈列表和详情显示提交者的昵称、RKS、课题模式等级及公开 RKS 排行榜位次，读取后台最新保存的资料，历史反馈也适用。未上榜显示“未上榜”，缺少成绩或课题资料显示“—”；昵称为空时使用已有用户名。这些资料仅在管理员接口中返回。应同时更新 Rust 后端及管理台网页，无需发布新的 APP 版本。
 
 依赖配套后端接口：
 - `GET /api/v2/admin/feedback?offset=0`
@@ -98,3 +103,16 @@ npm run build
 - `POST /api/v2/users/me/moderation/appeals`
 
 管理接口沿用 `X-Admin-Token`。申诉图片最多 3 张，每张不超过 1 MB，仅支持 JPG、PNG、WebP，经鉴权后才能查看。部署须先更新 Rust 后端，再更新管理台；客户端申诉入口需要支持该功能的版本。
+
+## 曲目别名管理
+
+曲目别名区域读取后端完整曲库，在页面中按曲名、歌曲 ID 或别名筛选后选择曲目。支持逐条添加、编辑和删除，草稿显示“未保存”；切换曲目仍保留当前页面的草稿，保存成功显示“已同步”，并立即用于后端曲目搜索。清空列表可删除该曲目的全部别名。
+
+每首曲目最多 200 条别名；原始输入不得包含控制字符（含制表符、换行），每条去除首尾空白后须为 1–128 个字符，同一曲目不能保存完全相同的别名。符号别名保留原文，空别名列表有效。添加、编辑、删除和保存均使用页面内弹窗，适配电脑、平板和手机。
+
+依赖同一套 `X-Admin-Token` 鉴权接口：
+
+- `GET /api/v2/admin/songs/aliases`，无查询参数，返回 `{ items: [{ songId, name, composer, aliases, revision }] }`。
+- `PUT /api/v2/admin/songs/aliases`，正文为 `{ songId, aliases, revision }`，返回更新后的单曲对象；别名以整份列表保存。
+
+并发修改由 `revision` 检查。收到 409 时保留草稿并提示刷新；刷新后展示服务器最新别名供核对，再确认保存。管理接口与网页代理均不缓存响应。部署时先更新配套 Rust 后端，再更新管理台，无需发布新的 APP 版本。
