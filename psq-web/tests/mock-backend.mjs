@@ -29,7 +29,7 @@ export function createMockBackend() {
       if (path === '/api/v2/auth/qrcode/test-qr/status') return send(res, 200, ++qrPoll >= 2 ? { status: 'Confirmed', sessionToken: 'psq-local-test-qr-session' } : { status: 'Pending', retryAfter: 3 });
       if (path === '/api/v2/songs/catalog') { if (req.headers['if-none-match']) { res.writeHead(304, { ETag: '"' + catalog.version + '"' }); return res.end(); } res.setHeader('ETag', '"' + catalog.version + '"'); return send(res, 200, catalog); }
       if (path === '/app-announcement/index.json') return send(res, 200, { items: [] });
-      if (path === '/app-update/latest.json') return send(res, 200, { versionName: 'Pre-0.9.8.0', versionCode: 112, changelog: ['新增RKS趋势图，在概览页面点击RKS数字即可进入。'] });
+      if (path === '/app-update/latest.json') return send(res, 200, { versionName: 'Pre-0.9.8.0', versionCode: 112, publishedAt: '2026-10-25', apkUrl: 'https://api.plc-liangpi-cup.xyz/app-update/Phi_Score_Query_Pre-0.9.8.0-v112.apk', sizeBytes: 10878091, changelog: ['新增RKS趋势图，在概览页面点击RKS数字即可进入。'] });
       if (path === '/_ill/ill/slow-test.png') {
         res.writeHead(200, { 'Content-Type': 'image/png' });
         const chunk = Buffer.alloc(65536); res.write(chunk); let count = 0;

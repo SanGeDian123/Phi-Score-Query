@@ -125,3 +125,5 @@ web.3 已核对全部 30,888 个字形轮廓和水平度量与 APP 原字体一�
 网页版原创代码采用 Apache-2.0，见 [LICENSE](LICENSE) 与 [NOTICE](NOTICE)。React、Lucide、QR 库、混合字体及倒计时 Manrope 回退字体的声明随网页提供，见 `public/licenses.txt`。原有后端独立采用 AGPL-3.0，其源码见仓库 `backend-source/`；本部署包只代理现有服务，不包含后端实现。
 
 Phigros、TapTap、曲绘、曲目信息及游戏素材仍归其各自权利人所有，详见项目根目录 `ASSETS.md`。本项目为非官方玩家项目，与南京鸽游网络有限公司及《Phigros》官方不存在授权、合作或运营关系。
+
+官网 Android 下载按钮直接使用正式更新清单中的 APK 文件地址；更新信息获取失败时在页面内重试，不跳转 GitHub 发布页。
