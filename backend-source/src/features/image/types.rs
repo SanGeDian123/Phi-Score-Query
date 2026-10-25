@@ -21,6 +21,19 @@ pub enum BnMode {
     B30,
     /// 单曲 RKS 最高的 30 张 All Perfect。
     P30,
+    /// 按单谱 RKS 排序的前 N 张成绩，不额外绘制 P3。
+    BestN,
+}
+
+pub(crate) const MAX_BEST_N: u32 = 200;
+
+pub(crate) fn validate_best_n(n: u32) -> Result<(), crate::error::AppError> {
+    if !(1..=MAX_BEST_N).contains(&n) {
+        return Err(crate::error::AppError::Validation(format!(
+            "N 必须在 1–{MAX_BEST_N} 之间"
+        )));
+    }
+    Ok(())
 }
 
 /// BN 渲染请求体
@@ -30,8 +43,8 @@ pub struct RenderBnRequest {
     /// 认证方式（二选一）：sessionToken 或 externalCredentials
     #[serde(flatten)]
     pub auth: UnifiedSaveRequest,
-    /// 取前 N 条 RKS 最高的成绩（默认 30）
-    #[schema(example = 30)]
+    /// 取前 N 条 RKS 最高的成绩（1–200，默认 30）
+    #[schema(example = 30, minimum = 1, maximum = 200)]
     #[serde(default = "default_n")]
     pub n: u32,
     /// 渲染主题：white/black（默认 black）

@@ -40,6 +40,7 @@ pub(super) struct BnComputeInput {
     pub(super) song_catalog: Arc<SongCatalog>,
     pub(super) n: u32,
     pub(super) mode: BnMode,
+    pub(super) time_rewind: bool,
 }
 
 pub(super) fn build_bn_compute_output(input: BnComputeInput) -> BnComputeOutput {
@@ -49,6 +50,7 @@ pub(super) fn build_bn_compute_output(input: BnComputeInput) -> BnComputeOutput 
         song_catalog,
         n,
         mode,
+        time_rewind,
     } = input;
 
     let known_song_ids = song_catalog.by_id.keys()
@@ -108,10 +110,10 @@ pub(super) fn build_bn_compute_output(input: BnComputeInput) -> BnComputeOutput 
     let t_push_start = Instant::now();
     // 预计算推分 ACC（批量求解：避免每谱面重复扫描全量 records）
     let engine_all = build_engine_records_from_render_records(&all);
-    let push_acc_map = match mode {
-        BnMode::B30 => calculate_push_acc_map(&all, &engine_all, top_len),
+    let push_acc_map = if time_rewind { super::time_rewind::push_hints(&all, top_len) } else { match mode {
+        BnMode::B30 | BnMode::BestN => calculate_push_acc_map(&all, &engine_all, top_len),
         BnMode::P30 => HashMap::new(),
-    };
+    }};
     let push_acc_duration = t_push_start.elapsed();
     tracing::info!(target: "bestn_performance", "推分ACC计算完成，计算数量: {}, 耗时: {:?}ms", push_acc_map.len(), push_acc_duration.as_millis());
 
@@ -121,15 +123,16 @@ pub(super) fn build_bn_compute_output(input: BnComputeInput) -> BnComputeOutput 
     // 统计计算：RKS 详情与平均值
     let (player_rks, _rounded) =
         crate::rks_contract::engine::calculate_player_rks_details(&engine_all);
-    let ap_top_3_avg = calculate_ap_top_3_avg(&all);
+    let ap_top_3_avg = if time_rewind { super::time_rewind::select_phi(&all).map(|r| r.rks) } else { calculate_ap_top_3_avg(&all) };
     let best_27_avg = match mode {
-        BnMode::B30 => calculate_best_27_avg(&selected),
+        BnMode::B30 => if time_rewind { average_top_records(&selected, 19) } else { calculate_best_27_avg(&selected) },
         BnMode::P30 => average_top_records(&selected, 30),
+        BnMode::BestN => average_top_records(&selected, top_len),
     };
-    let exact_rks = match mode {
-        BnMode::B30 => player_rks,
+    let exact_rks = if time_rewind { super::time_rewind::ranking_rks(if matches!(mode, BnMode::P30) { &selected } else { &all }) } else { match mode {
+        BnMode::B30 | BnMode::BestN => player_rks,
         BnMode::P30 => calculate_p30_rks(&selected),
-    };
+    }};
     let stats_duration = t_stats_start.elapsed();
     tracing::info!(target: "bestn_performance", "统计数据计算完成，精确RKS: {:?}, AP Top3: {:?}, Best27: {:?}, 耗时: {:?}ms",
                    exact_rks, ap_top_3_avg, best_27_avg, stats_duration.as_millis());
@@ -165,9 +168,9 @@ pub(super) fn build_bn_compute_output(input: BnComputeInput) -> BnComputeOutput 
     tracing::info!(target: "bestn_performance", "更新时间解析完成, 耗时: {:?}ms", time_parse_duration.as_millis());
 
     let ap_top_3_scores = match mode {
-        BnMode::B30 => collect_ap_top_3_scores(&all),
+        BnMode::B30 => if time_rewind { super::time_rewind::select_phi(&all).cloned().into_iter().collect() } else { collect_ap_top_3_scores(&all) },
         // P30 本体就是 30 张 AP，不能再额外绘制 B30 专用的 AP Top 3 区域。
-        BnMode::P30 => Vec::new(),
+        BnMode::P30 | BnMode::BestN => Vec::new(),
     };
 
     let top: Vec<RenderRecord> = selected.into_iter().take(top_len).collect();
@@ -189,7 +192,7 @@ pub(super) fn build_bn_compute_output(input: BnComputeInput) -> BnComputeOutput 
 
 fn select_mode_records(records: &[RenderRecord], mode: BnMode) -> Vec<RenderRecord> {
     match mode {
-        BnMode::B30 => records.to_vec(),
+        BnMode::B30 | BnMode::BestN => records.to_vec(),
         BnMode::P30 => records
             .iter()
             .filter(|record| record.acc >= 100.0 && record.score == Some(1_000_000.0))
@@ -282,5 +285,37 @@ mod tests {
         ];
 
         assert!((calculate_p30_rks(&records) - 0.4).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn time_rewind_p1_ties_match_android_regardless_of_save_order_and_titles() {
+        use crate::save_contract::{Difficulty, DifficultyRecord};
+        use crate::features::song::models::SongInfo;
+        use crate::startup::chart_loader::ChartConstants;
+        let constants = ChartConstants { ez: None, hd: None, in_level: Some(16.0), at: Some(16.0) };
+        let mut catalog = SongCatalog::default();
+        for (id, name) in [("A.song", "Zulu"), ("Z.song", "Alpha")] {
+            catalog.by_id.insert(id.into(), Arc::new(SongInfo { id: id.into(), name: name.into(),
+                composer: String::new(), illustrator: String::new(), chart_constants: constants.clone() }));
+        }
+        let chart_constants = Arc::new([("A.song".into(), constants.clone()), ("Z.song".into(), constants)].into_iter().collect());
+        let catalog = Arc::new(catalog);
+        for reverse in [false, true] {
+            for _ in 0..12 {
+                let mut diffs = vec![Difficulty::AT, Difficulty::IN];
+                if reverse { diffs.reverse(); }
+                let game_record = ["A.song", "Z.song"].into_iter().map(|id| (id.into(), diffs.iter().map(|difficulty| DifficultyRecord {
+                    difficulty: *difficulty, score: 1_000_000, accuracy: 100.0, is_full_combo: true,
+                    chart_constant: None, push_acc: None, push_acc_hint: None,
+                }).collect())).collect();
+                let parsed = ParsedSave { game_record, game_progress: None, user: None, settings: None,
+                    game_key: None, summary_parsed: None, updated_at: None };
+                let output = build_bn_compute_output(BnComputeInput { parsed, chart_constants: Arc::clone(&chart_constants),
+                    song_catalog: Arc::clone(&catalog), n: 19, mode: BnMode::B30, time_rewind: true });
+                assert_eq!(output.ap_top_3_scores.len(), 1);
+                let phi = &output.ap_top_3_scores[0];
+                assert_eq!((&*phi.song_id, &*phi.difficulty), ("A.song", "IN"));
+            }
+        }
     }
 }

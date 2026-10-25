@@ -1,0 +1,5 @@
+# Add this site block to your existing configuration.
+phiscorequery.top {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:4173
+}

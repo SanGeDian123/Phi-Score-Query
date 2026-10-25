@@ -1,0 +1,106 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { sealSession } from '../server/session.mjs';
+import { createMockBackend } from './mock-backend.mjs';
+const root = new URL('..', import.meta.url), { server, history } = createMockBackend();
+await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+const apiPort = server.address().port, webPort = 4518;
+const fixtureDir = await mkdtemp(join(process.env.PSQ_TEST_DIR || process.env.TEMP, 'psq-closed-'));
+const accessConfig = join(fixtureDir, 'access.config.json');
+await writeFile(accessConfig, JSON.stringify({ newWebLogins: false, openAfterCountdown: false, websitePreviewPath: '/preview/', countdownTarget: '2026-10-11T12:00:00+08:00' }));
+const child = spawn(process.execPath, ['server/index.mjs'], { cwd: root, env: { ...process.env, PSQ_API_ORIGIN: 'http://127.0.0.1:' + apiPort, PSQ_PORT: String(webPort), PSQ_COOKIE_SECRET: 'isolated-test-key-never-used-in-production', PSQ_LOCAL_HTTP: '1', PSQ_PUBLIC_ORIGIN: '', PSQ_ACCESS_CONFIG: accessConfig, PSQ_BUILD_DIR: process.env.PSQ_BUILD_DIR || 'D:\\PSQWebBuild\\dist' }, stdio: ['ignore', 'pipe', 'pipe'] });
+const ready = new Promise((resolve, reject) => { child.stdout.on('data', data => { if (String(data).includes('ready:')) resolve(); }); child.once('exit', code => reject(new Error('Test server exited: ' + code))); child.stderr.on('data', data => reject(new Error(String(data)))); });
+await ready;
+const base = 'http://127.0.0.1:' + webPort;
+const headers = { 'X-PSQ-Request': '1', 'Content-Type': 'application/json' };
+test('closed web beta preserves existing sessions, refresh, proxy APIs and private page access', async t => {
+  t.after(async () => { child.kill(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  const health = await fetch(base + '/api/health').then(r => r.json()); assert.equal(health.productVersion, 'Pre-0.9.8.0');
+  assert.equal((await fetch(base + '/api/backend/save', { method: 'POST', headers, body: '{}' })).status, 401);
+  assert.equal((await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 403);
+  assert.equal((await fetch(base + '/api/auth/login', { method: 'POST', headers: { ...headers, Origin: 'https://another-origin.test' }, body: '{}' })).status, 403);
+  const beforeLogin = history.length;
+  const login = await fetch(base + '/api/auth/login', { method: 'POST', headers, body: JSON.stringify({ sessionToken: 'psq-local-test-proxy-session' }) }); assert.equal(login.status, 403); assert.equal((await login.json()).code, 'WEB_LOGIN_CLOSED');
+  assert.equal((await fetch(base + '/api/auth/qr', { method: 'POST', headers, body: '{}' })).status, 403);
+  assert.equal((await fetch(base + '/api/auth/qr/test-qr')).status, 403);
+  assert.equal(history.length, beforeLogin, 'closed login and QR requests must not reach the backend');
+  const status = await fetch(base + '/api/auth/status').then(r => r.json()); assert.equal(status.loggedIn, false); assert.equal(status.loginEnabled, false);
+  // Recreate a cookie issued before the beta gate, using an isolated fixture key.
+  const testKey = createHash('sha256').update('isolated-test-key-never-used-in-production').digest();
+  const current = { sessionToken: 'psq-local-test-proxy-session', accessToken: 'mock-access', accessExpiresAt: Date.now() + 3600000, expiresAt: Date.now() + 2592000000 };
+  const cookie = 'psq_session=' + sealSession(current, testKey); assert.equal(cookie.includes('psq-local-test'), false);
+  assert.equal((await fetch(base + '/api/auth/status', { headers: { Cookie: cookie } }).then(r => r.json())).loggedIn, true);
+  for (const path of ['/app', '/app/', '/preview', '/preview/']) {
+    const anonymous = await fetch(base + path, { redirect: 'manual' }); assert.equal(anonymous.status, 302); assert.equal(anonymous.headers.get('location'), '/');
+    const existing = await fetch(base + path, { headers: { Cookie: cookie } }); assert.equal(existing.status, 200); assert.equal(existing.headers.get('cache-control'), 'private, no-store'); assert.match(existing.headers.get('x-robots-tag'), /noindex/);
+  }
+  for (const invalid of [sealSession({ ...current, expiresAt: 0 }, testKey), sealSession({ sessionToken: 'qr', qrId: 'test-qr', expiresAt: Date.now() + 600000 }, testKey), 'tampered']) {
+    assert.equal((await fetch(base + '/app/', { headers: { Cookie: 'psq_session=' + invalid }, redirect: 'manual' })).status, 302);
+  }
+  const auth = { ...headers, Cookie: cookie };
+  const snapshot = await fetch(base + '/api/backend/save?calculate_rks=true', { method: 'POST', headers: auth, body: '{"taptapVersion":"cn"}' }); assert.equal(snapshot.status, 200); assert.equal(snapshot.headers.get('cache-control'), 'no-store');
+  const save = await snapshot.json(); assert.ok(save.rks.b30Charts.length === 30); assert.equal(history.find(h => h.path === '/api/v2/save').headers.authorization, 'Bearer mock-access');
+  await t.test('Phi-Plugin B30 uses the shared renderer with 33 records and uncached image responses', async () => {
+    const search = '?format=png&width=1440&template=phi-plugin';
+    const image = await fetch(base + '/api/backend/image/bn' + search, { method: 'POST', headers: auth, body: JSON.stringify({ n: 33, theme: 'black', embedImages: false, appVersion: 'Pre-0.9.7.12' }) });
+    assert.equal(image.status, 200);
+    assert.equal(image.headers.get('content-type'), 'image/png');
+    assert.equal(image.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(Buffer.from(await image.arrayBuffer()).subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    const forwarded = history.find(item => item.path === '/api/v2/image/bn');
+    assert.equal(forwarded.search, search);
+    assert.equal(forwarded.data.n, 33);
+    assert.equal(forwarded.headers.authorization, 'Bearer mock-access');
+    const p30 = await fetch(base + '/api/backend/image/p30' + search, { method: 'POST', headers: auth, body: JSON.stringify({ theme: 'black', embedImages: false }) });
+    assert.equal(p30.status, 200);
+    const p30Forwarded = history.find(item => item.path === '/api/v2/image/p30');
+    assert.equal(p30Forwarded.search, search);
+    assert.equal(p30Forwarded.data.n, undefined);
+  });
+  await t.test('RKS history and Best N preserve authentication, pagination and rewind query', async () => {
+    for (const path of ['rks/history', 'image/bestn']) assert.equal((await fetch(base + '/api/backend/' + path, { method: 'POST', headers, body: '{}' })).status, 401);
+    const historyResponse = await fetch(base + '/api/backend/rks/history', { method: 'POST', headers: auth, body: JSON.stringify({ auth: {}, limit: 200, cursor: '200' }) });
+    assert.equal(historyResponse.status, 200); const page = await historyResponse.json(); assert.equal(page.items.length, 200); assert.equal(page.nextCursor, '400');
+    assert.equal(history.findLast(h => h.path === '/api/v2/rks/history').headers.authorization, 'Bearer mock-access');
+    const image = await fetch(base + '/api/backend/image/bestn?format=png&template=phi-plugin', { method: 'POST', headers: auth, body: JSON.stringify({ n: 200 }) });
+    assert.equal(image.status, 200); assert.equal(history.findLast(h => h.path === '/api/v2/image/bestn').data.n, 200);
+    const rewind = await fetch(base + '/api/backend/image/bn?time_rewind=true&template=phi-plugin', { method: 'POST', headers: auth, body: JSON.stringify({ n: 19 }) });
+    assert.equal(rewind.status, 200); assert.equal(history.findLast(h => h.path === '/api/v2/image/bn').search, '?time_rewind=true&template=phi-plugin');
+  });
+  const catalog = await fetch(base + '/api/catalog'), etag = catalog.headers.get('etag'); assert.equal(catalog.status, 200); assert.equal((await fetch(base + '/api/catalog', { headers: { 'If-None-Match': etag } })).status, 304);
+  assert.equal((await fetch(base + '/api/backend/admin/users', { headers: auth })).status, 404);
+  assert.equal((await fetch(base + '/api/assets?path=' + encodeURIComponent('/avatar/Introduction.png'))).status, 404);
+  const avatar = await fetch(base + '/api/avatar?name=Introduction');
+  assert.equal(avatar.status, 200); assert.equal(avatar.headers.get('content-type'), 'image/png');
+  assert.equal(avatar.headers.get('cache-control'), 'public, max-age=300');
+  assert.ok(history.some(item => item.path === '/avatar/b605350bc00209520b7cd8f546322663356ba630708f71bbf30aead6b3dd608e.png'));
+  assert.equal((await fetch(base + '/api/avatar?name=...')).status, 400);
+  assert.equal((await fetch(base + '/api/assets?path=' + encodeURIComponent('/avatar/../../.env'))).status, 400);
+  assert.equal((await fetch(base + '/api/media?path=' + encodeURIComponent('/suggestion-media/test.png'))).status, 401);
+  const form = new FormData(); form.append('description', '仅用于本地接口验证'); form.append('image', new Blob([Buffer.from('mock-png')], { type: 'image/png' }), 'test.png');
+  const post = await fetch(base + '/api/backend/suggestions/posts', { method: 'POST', headers: { Cookie: cookie, 'X-PSQ-Request': '1' }, body: form }); assert.equal(post.status, 200); const postData = await post.json(); assert.equal(postData.description, '仅用于本地接口验证');
+  assert.match(history.find(h => h.path === '/api/v2/suggestions/posts').headers['content-type'], /multipart\/form-data; boundary=/);
+  const deleted = await fetch(base + '/api/backend/suggestions/posts/' + postData.id, { method: 'DELETE', headers: auth }); assert.equal(deleted.status, 204); assert.equal(await deleted.text(), '');
+  const mod = await fetch(base + '/api/moderation', { headers: { Cookie: cookie } }); assert.equal(mod.status, 200); assert.equal(history.find(h => h.path.endsWith('/moderation/status')).data.sessionToken, 'psq-local-test-proxy-session');
+  assert.equal((await fetch(base + '/api/moderation/appeal', { method: 'POST', headers: auth, body: JSON.stringify({ restrictionType: 'public_hidden', body: '本地验证', images: [] }) })).status, 200);
+  const expiring = 'psq_session=' + sealSession({ ...current, accessExpiresAt: 0 }, testKey);
+  const refreshed = await fetch(base + '/api/backend/save', { method: 'POST', headers: { ...headers, Cookie: expiring }, body: '{}' }); assert.equal(refreshed.status, 200); assert.match(refreshed.headers.get('set-cookie'), /psq_session=.*HttpOnly/); assert.ok(history.some(h => h.path === '/api/v2/auth/session/refresh'));
+  const html = await fetch(base + '/'); assert.equal(html.status, 200); assert.equal(html.headers.get('cache-control'), 'no-cache'); assert.match(html.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+  const source = await html.text(); assert.doesNotMatch(source, /href="\/app\/"|href="\/preview\/"|rel="manifest"|rel="preload"[^>]*fonts/);
+  const sw = await fetch(base + '/sw.js'); assert.equal(sw.status, 200); assert.equal(sw.headers.get('cache-control'), 'no-cache'); assert.match(await sw.text(), /Authenticated API responses/);
+  assert.equal((await fetch(base + '/missing-script.js')).status, 404);
+  await t.test('disconnecting during a streamed image does not terminate the web server', async () => {
+    const controller = new AbortController();
+    const streamed = await fetch(base + '/api/assets?path=' + encodeURIComponent('/_ill/ill/slow-test.png'), { signal: controller.signal });
+    assert.equal(streamed.status, 200);
+    const reader = streamed.body.getReader(); await reader.read(); controller.abort();
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(child.exitCode, null, 'web server must remain running after a cancelled image');
+    assert.equal((await fetch(base + '/api/health').then(r => r.json())).ok, true);
+  });
+  assert.equal((await fetch(base + '/api/auth/logout', { method: 'POST', headers: auth, body: '{}' })).status, 200);
+});

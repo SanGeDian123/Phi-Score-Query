@@ -34,7 +34,7 @@ fn custom_phi_plugin_p30_has_36_unique_numbered_cards() {
         assert_eq!(svg.matches(&format!("UniqueSong{i:02}")).count(), 1);
         assert_eq!(svg.matches(&format!(">P{}</text>", i + 1)).count(), 1);
     }
-    let divider = svg.find("class=\"overflow\">OVER FLOW").unwrap();
+    let divider = svg.find(">OVER FLOW</text>").unwrap();
     assert!(svg.find(">P30</text>").unwrap() < divider);
     assert!(svg.find(">P31</text>").unwrap() > divider);
     assert_eq!(svg.matches("filter=\"url(#card-edge-halo-gold)\"").count(), 3);
@@ -52,6 +52,105 @@ fn ensure_config_inited() {
         }
         let _ = crate::config::AppConfig::init_global();
     });
+}
+
+#[test]
+fn long_png_strips_preserve_blur_shadow_seams_and_watermark() {
+    ensure_config_inited();
+    let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="96" height="2400">
+      <defs><linearGradient id="g" x2="0" y2="1"><stop stop-color="#124978"/><stop offset="1" stop-color="#a4bb42"/></linearGradient>
+      <filter id="b" x="-20%" y="-10%" width="140%" height="120%"><feGaussianBlur stdDeviation="10"/></filter>
+      <filter id="s" x="-50%" y="-50%" width="200%" height="200%"><feDropShadow dx="2" dy="4" stdDeviation="10"/></filter></defs>
+      <rect width="96" height="2400" fill="#202030"/><rect x="10" width="70" height="2400" fill="url(#g)" filter="url(#b)"/>
+      <g fill="#dcb247" filter="url(#s)"><rect x="22" y="490" width="45" height="45"/><rect x="22" y="1010" width="45" height="45"/><rect x="22" y="2020" width="45" height="45"/></g></svg>"##;
+    let opts = super::raster_options::build_usvg_options().unwrap();
+    let tree = resvg::usvg::Tree::from_str(svg, &opts).unwrap();
+    let mut reference = resvg::tiny_skia::Pixmap::new(129, 3225).unwrap();
+    let scale = 129.0 / 96.0;
+    resvg::render(&tree, resvg::tiny_skia::Transform::from_scale(scale, scale), &mut reference.as_mut());
+    let png = render_svg_unified(svg, false, Some("png"), Some(129), None, None).unwrap().0;
+    let actual = image::load_from_memory(&png).unwrap().to_rgba8();
+    assert_eq!(actual.dimensions(), (129, 3225));
+    let delta: u64 = actual.as_raw().iter().zip(reference.data()).map(|(a,b)| a.abs_diff(*b) as u64).sum();
+    assert!(delta as f64 / (actual.as_raw().len() as f64) < 0.3, "strip mean channel error: {delta}");
+    for boundary in (512usize..3225).step_by(512) {
+        let start = (boundary - 2) * 129 * 4;
+        let end = (boundary + 2).min(3225) * 129 * 4;
+        let seam_delta: u64 = actual.as_raw()[start..end].iter().zip(&reference.data()[start..end]).map(|(a,b)| a.abs_diff(*b) as u64).sum();
+        assert!(seam_delta as f64 / ((end-start) as f64) < 0.5, "visible seam at {boundary}");
+    }
+    let marked = render_svg_unified(svg, true, Some("png"), Some(129), None, None).unwrap().0;
+    assert_eq!(&image::load_from_memory(&marked).unwrap().to_rgba8().as_raw()[..4], &[1,2,3,255]);
+}
+
+#[test]
+fn oversized_raster_is_rejected_before_canvas_allocation() {
+    ensure_config_inited();
+    for (svg, width) in [
+        (r#"<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="9000"/>"#, Some(100000)),
+        (r#"<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="9999999"/>"#, None),
+    ] {
+        assert!(matches!(render_svg_unified(svg, false, Some("png"), width, None, None), Err(crate::error::AppError::Validation(_))));
+    }
+}
+
+#[test]
+fn bestn_three_styles_render_exact_count_without_b30_sections() {
+    ensure_config_inited();
+    let records: Vec<RenderRecord> = (0..200).map(|i| RenderRecord {
+        song_id: format!("bestn-fixture-{i}"),
+        song_name: format!("BestFixture{i:03}"),
+        difficulty: if i % 4 == 0 { "AT".into() } else { "IN".into() },
+        score: Some(if i < 3 { 1_000_000.0 } else { 998_765.0 - i as f64 * 101.0 }),
+        acc: if i < 3 { 100.0 } else { 99.8 - i as f64 * 0.005 },
+        rks: 16.4 - i as f64 * 0.01,
+        difficulty_value: 16.4 - i as f64 * 0.005,
+        is_fc: i % 3 == 0,
+    }).collect();
+    for n in [1usize, 30, 200] {
+        let stats = PlayerStats {
+            image_title: format!("Best {n}"), ap_top_3_avg: Some(16.39), best_27_avg: Some(16.25),
+            real_rks: Some(16.2640), player_name: Some("Phi Score Query".into()), player_avatar: None,
+            update_time: chrono::DateTime::parse_from_rfc3339("2026-10-18T04:00:00Z").unwrap().with_timezone(&Utc),
+            n: n as u32, ap_top_3_scores: vec![], challenge_rank: Some(("Gold".into(), "48".into())),
+            data_string: Some("Data: 2 GiB 248 MiB".into()), grade_counts: Default::default(),
+            custom_footer_text: Some("Phi Score Query · Pre-0.9.7.13".into()), is_user_generated: false,
+        };
+        for (style, template) in [("classic", None), ("minimal", Some("minimal")), ("phi-plugin", Some("phi-plugin"))] {
+            let svg = generate_svg_string::<std::collections::hash_map::RandomState>(
+                &records[..n], &stats, None, &Theme::White, false, None, template,
+            ).unwrap();
+            assert!(svg.contains(&format!("Best {n}")), "{style}");
+            for score in &records[..n] {
+                assert_eq!(svg.matches(&score.song_name).count(), 1, "{style}: {}", score.song_name);
+            }
+            assert!(!svg.contains(">P1</text>"), "{style}");
+            assert!(!svg.contains("OVER FLOW"), "{style}");
+            assert!(!svg.contains("phi-rks-histogram"), "{style}");
+            assert!(!svg.contains("class=\"text section-title\">B27</text>"), "{style}");
+            if n == 30 {
+                if let Ok(output_dir) = std::env::var("BEST_N_PREVIEW_DIR") {
+                    let mut preview_records = records[..n].to_vec();
+                    let mut covers: Vec<PathBuf> = fs::read_dir("resources/ill/illLow").unwrap().flatten()
+                        .map(|entry| entry.path()).filter(|path| path.extension().is_some_and(|ext| ext == "png" || ext == "jpg")).collect();
+                    covers.sort();
+                    for (i, record) in preview_records.iter_mut().enumerate() {
+                        if let Some(cover) = covers.get(i % covers.len().max(1)) {
+                            record.song_id = cover.file_stem().unwrap().to_string_lossy().into_owned();
+                            record.song_name = record.song_id.split('.').next().unwrap().to_string();
+                        }
+                    }
+                    let preview = generate_svg_string::<std::collections::hash_map::RandomState>(
+                        &preview_records, &stats, None, &Theme::White, true, None, template,
+                    ).unwrap();
+                    fs::create_dir_all(&output_dir).unwrap();
+                    fs::write(PathBuf::from(&output_dir).join(format!("best30-{style}.svg")), &preview).unwrap();
+                    let (png, _) = render_svg_unified(&preview, false, Some("png"), Some(1200), None, None).unwrap();
+                    fs::write(PathBuf::from(output_dir).join(format!("best30-{style}.png")), png).unwrap();
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -395,9 +494,9 @@ fn generate_bn_svg_renders_phi_plugin_b30_with_overflow() {
     use crate::features::save::models::{CfcPCounts, CfcPCountsByDifficulty};
     let stats = PlayerStats {
         image_title: "B30".to_string(),
-        ap_top_3_avg: Some(16.6),
-        best_27_avg: Some(15.7),
-        real_rks: Some(15.7424),
+        ap_top_3_avg: Some(16.22),
+        best_27_avg: Some(15.86),
+        real_rks: Some(15.8960),
         player_name: Some("Phi-Plugin Preview".to_string()),
         player_avatar: preview_avatar_name.clone(),
         update_time: Utc::now(),
@@ -443,10 +542,16 @@ fn generate_bn_svg_renders_phi_plugin_b30_with_overflow() {
         svg.matches("filter=\"url(#card-edge-halo-gold)\"").count(),
         3
     );
-    assert_eq!(svg.matches("filter=\"url(#card-edge-halo)\"").count(), 33);
+    assert_eq!(svg.matches("filter=\"url(#card-edge-halo)\"").count(), 27);
     assert!(svg.contains(">#33</text>"));
     assert!(svg.contains(">48</text>"));
     assert!(svg.contains("Phi Score Query · Pre-0.9.7.7"));
+    assert!(svg.contains("id=\"phi-rks-histogram\""));
+    assert_eq!(svg.matches("class=\"histogram-slot\"").count(), 30);
+    assert!(svg.contains("data-slot=\"P3\""));
+    assert!(svg.contains("data-slot=\"B27\""));
+    assert!(!svg.contains("data-slot=\"B28\""));
+    assert!(svg.contains("AVG 15.8960"));
     if let Ok(preview_svg_path) = std::env::var("PHI_PLUGIN_PREVIEW_SVG_PATH") {
         fs::write(preview_svg_path, &svg).unwrap();
     }
@@ -505,10 +610,11 @@ fn generate_bn_svg_renders_phi_plugin_b30_with_overflow() {
     );
     assert_eq!(
         p30_svg.matches("filter=\"url(#card-edge-halo)\"").count(),
-        30
+        27
     );
     assert!(p30_svg.contains(">#30</text>"));
     assert!(p30_svg.contains(">15.7500</text>"));
+    assert!(!p30_svg.contains("id=\"phi-rks-histogram\""));
     if let Ok(preview_svg_path) = std::env::var("PHI_PLUGIN_P30_PREVIEW_SVG_PATH") {
         fs::write(preview_svg_path, &p30_svg).unwrap();
     }

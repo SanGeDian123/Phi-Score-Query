@@ -3130,6 +3130,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "ttf-parser",
  "unicode-width",
  "utoipa",
  "utoipa-swagger-ui",

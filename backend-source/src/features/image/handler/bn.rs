@@ -89,6 +89,7 @@ pub async fn render_bn(
 ) -> Result<Response, AppError> {
     let (mut req, bearer_state) =
         crate::session_auth::parse_json_with_bearer_state::<RenderBnRequest>(request).await?;
+    super::super::types::validate_best_n(req.n)?;
     crate::session_auth::merge_auth_from_bearer_if_missing(
         state.stats_storage.as_ref(),
         &bearer_state,
@@ -99,6 +100,40 @@ pub async fn render_bn(
     render_ranking_image(state, q, req, bearer_state, BnMode::B30, "/image/bn").await
 }
 
+#[utoipa::path(
+    post,
+    path = "/image/bestn",
+    summary = "生成 Best N 图片",
+    description = "按单谱 RKS 排序取前 N 张成绩，N 为 1–200；不额外绘制 P3。支持经典、minimal、phi-plugin 三种样式。",
+    request_body = RenderBnRequest,
+    params(
+        ("format" = Option<String>, Query, description = "png|jpeg|webp|svg，默认 png"),
+        ("template" = Option<String>, Query, description = "不传为经典，或 minimal、phi-plugin"),
+        ("width" = Option<u32>, Query, description = "目标宽度像素")
+    ),
+    responses(
+        (status = 200, description = "成绩图片", content((crate::features::image::types::BinaryImage = "image/png"))),
+        (status = 422, description = "N 超出 1–200 或参数无效", body = crate::error::ProblemDetails)
+    ),
+    tag = "Image"
+)]
+pub async fn render_bestn(
+    State(state): State<AppState>,
+    Query(q): Query<ImageQueryOpts>,
+    request: axum::extract::Request,
+) -> Result<Response, AppError> {
+    let (mut req, bearer_state) =
+        crate::session_auth::parse_json_with_bearer_state::<RenderBnRequest>(request).await?;
+    super::super::types::validate_best_n(req.n)?;
+    crate::session_auth::merge_auth_from_bearer_if_missing(
+        state.stats_storage.as_ref(),
+        &bearer_state,
+        &mut req.auth,
+    )
+    .await?;
+    render_ranking_image(state, q, req, bearer_state, BnMode::BestN, "/image/bestn").await
+}
+
 pub(super) async fn render_ranking_image(
     state: AppState,
     q: ImageQueryOpts,
@@ -107,16 +142,23 @@ pub(super) async fn render_ranking_image(
     mode: BnMode,
     route: &'static str,
 ) -> Result<Response, AppError> {
+    let time_rewind = q.time_rewind;
+    if time_rewind && !matches!(mode, BnMode::B30) {
+        return Err(AppError::Validation("时间回溯模式仅支持 B19，不支持 Best N 或 P30".into()));
+    }
+    // 在存档获取、缓存查询和渲染排队之前拒绝超限请求。
+    super::super::types::validate_best_n(req.n)?;
+    validate_image_query_opts(&q)?;
     let metric_name = match mode {
-        BnMode::B30 => "bn",
+        BnMode::B30 | BnMode::BestN => "bn",
         BnMode::P30 => "p30",
     };
     let cache_hit_event = match mode {
-        BnMode::B30 => "bn_hit",
+        BnMode::B30 | BnMode::BestN => "bn_hit",
         BnMode::P30 => "p30_hit",
     };
     let cache_miss_event = match mode {
-        BnMode::B30 => "bn_miss",
+        BnMode::B30 | BnMode::BestN => "bn_miss",
         BnMode::P30 => "p30_miss",
     };
     // 全流程计时：从请求进入到返回响应
@@ -137,7 +179,9 @@ pub(super) async fn render_ranking_image(
     // SVG 模式强制外链曲绘且不内嵌图片；缓存维度在同一处归一化，避免 hit/put 分叉。
     let output = ImageOutputCacheSpec::from_query(&q, req.embed_images);
     let app_version = normalized_app_version(req.app_version.as_deref());
-    let filtered_cache_version = format!("{updated_for_cache}:known-song-filter-v1");
+    let filtered_cache_version = if time_rewind {
+        format!("{updated_for_cache}:known-song-filter-v1:time-rewind-20250214-{}", super::time_rewind::P1_RULES_VERSION)
+    } else { format!("{updated_for_cache}:known-song-filter-v1") };
     let fmt_code = output.fmt_code;
     let embed_images_effective = output.embed_images_effective;
     let public_illustration_base_url = output.public_illustration_base_url;
@@ -194,7 +238,11 @@ pub(super) async fn render_ranking_image(
                     "BestN 图片缓存命中，整体耗时 {total_ms}ms"
                 );
             }
-            let headers = image_content_headers(output.content_type);
+            let mut headers = image_content_headers(output.content_type);
+            if time_rewind {
+                headers.insert("X-PSQ-Time-Rewind", "20250214".parse().unwrap());
+                headers.insert("X-PSQ-Time-Rewind-Rules", super::time_rewind::P1_RULES_VERSION.parse().unwrap());
+            }
 
             let total_duration = t_total.elapsed();
             tracing::info!(target: "bestn_performance", "BestN缓存命中完成，总耗时: {:?}ms (缓存命中)", total_duration.as_millis());
@@ -230,7 +278,9 @@ pub(super) async fn render_ranking_image(
     let save_ms = duration_ms_i64(t_save.elapsed());
 
     // 扁平化为渲染记录 + 排序与推分预计算耗时
-    let n = req.n.max(1);
+    let n = if time_rewind && matches!(mode, BnMode::B30) {
+        if q.template.as_deref() == Some("phi-plugin") { 21 } else { 19 }
+    } else { req.n };
     let BnComputeOutput {
         top,
         push_acc_map,
@@ -245,7 +295,7 @@ pub(super) async fn render_ranking_image(
         flatten_ms,
     } = {
         // 逻辑阶段（扁平化/排序/推分/统计）属于 CPU 密集 + 大量分配，避免阻塞 Tokio worker。
-        let chart_constants = chart_constants.clone();
+        let chart_constants = if time_rewind { super::time_rewind::constants().clone() } else { chart_constants.clone() };
         let song_catalog = state.song_catalog.snapshot();
         let join = tokio::task::spawn_blocking(move || {
             bn_compute::build_bn_compute_output(BnComputeInput {
@@ -254,6 +304,7 @@ pub(super) async fn render_ranking_image(
                 song_catalog,
                 n,
                 mode,
+                time_rewind,
             })
         })
         .await;
@@ -273,8 +324,9 @@ pub(super) async fn render_ranking_image(
 
     let stats = PlayerStats {
         image_title: match mode {
-            crate::features::image::BnMode::B30 => "B30".to_string(),
+            crate::features::image::BnMode::B30 => if time_rewind { "B19" } else { "B30" }.to_string(),
             crate::features::image::BnMode::P30 => "P30".to_string(),
+            crate::features::image::BnMode::BestN => format!("Best {n}"),
         },
         ap_top_3_avg,
         best_27_avg,
@@ -287,7 +339,9 @@ pub(super) async fn render_ranking_image(
         challenge_rank,
         data_string,
         grade_counts,
-        custom_footer_text: image_footer_text(app_version.as_deref()),
+        custom_footer_text: if time_rewind { Some(format!("{} · 时间回溯模式，仅供娱乐",
+            image_footer_text(app_version.as_deref()).unwrap_or_else(|| "Phi Score Query".into()))) }
+            else { image_footer_text(app_version.as_deref()) },
         is_user_generated: false,
     };
 
@@ -307,7 +361,7 @@ pub(super) async fn render_ranking_image(
     let svg_options = SvgRenderOptions::from_query(public_illustration_base_url, &q);
     // 克隆一份 top 用于后续 v4 签名计算 Merkle 树（top 将被 move 入 SVG 生成闭包）。
     let top_for_sig = top.clone();
-    let svg = spawn_blocking_svg_generation(move || {
+    let svg = spawn_blocking_svg_generation(&render_permit, move || {
         renderer::generate_svg_string(
             &top,
             &stats,
@@ -367,7 +421,7 @@ pub(super) async fn render_ranking_image(
 
     let t_render_start = Instant::now();
     // 输出格式与宽度处理（svg 直接返回，不做栅格化渲染）
-    let (bytes, content_type) = render_svg_output_bytes(signed_svg, fmt_code, false, &q).await?;
+    let (bytes, content_type) = render_svg_output_bytes(signed_svg, fmt_code, false, &q, &render_permit).await?;
     let render_duration = t_render_start.elapsed();
     let render_ms = duration_ms_i64(render_duration);
     let bytes_len = bytes.len();
@@ -386,6 +440,10 @@ pub(super) async fn render_ranking_image(
     }
 
     let mut headers = image_content_headers(content_type);
+    if time_rewind {
+        headers.insert("X-PSQ-Time-Rewind", "20250214".parse().unwrap());
+        headers.insert("X-PSQ-Time-Rewind-Rules", super::time_rewind::P1_RULES_VERSION.parse().unwrap());
+    }
     // 签名串放入响应头，便于客户端从任意格式（SVG/PNG/JPEG）直接提取验签字段。
     if let Some(ref line) = sig_header {
         headers.insert("X-Lilith-Sig", line.parse().unwrap());

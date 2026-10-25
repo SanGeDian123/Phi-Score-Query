@@ -440,7 +440,7 @@ private data class PracticeAssets(
 )
 
 private data class PracticeLoaded(val chart: PracticeChart, val assets: PracticeAssets, var player: PracticeMusicPlayer,
-    val noiseRenderer: PracticeNoiseRenderer?) {
+    var noiseRenderer: PracticeNoiseRenderer?) {
     val geometry = PracticeRenderGeometry(chart)
     val noiseRuntime = PracticeNoiseRuntime(chart.blockAreas)
 }
@@ -527,6 +527,9 @@ fun PracticePlayerScreen(pezFile: File, chartSource: PracticeChartSource, segmen
     var countdown by remember { mutableIntStateOf(3) }
     var latencyMs by remember { mutableIntStateOf(preferences.getInt("latency_ms", 0)) }
     var noteScale by remember { mutableFloatStateOf(preferences.getFloat("note_scale", 1f).coerceIn(.6f, 1.6f)) }
+    var mirroredEnabled by remember { mutableStateOf(preferences.getBoolean("mirror_enabled", false)) }
+    var hitSoundVolume by remember { mutableFloatStateOf(preferences.getFloat("hit_sound_volume", 1f).coerceIn(0f, 1f)) }
+    var noiseCompatibilityEnabled by remember { mutableStateOf(noiseSettings.compatibilityMode) }
     var autoPlayEnabled by remember { mutableStateOf(preferences.getBoolean("auto_play_enabled", false)) }
     var realtimeAccEnabled by remember { mutableStateOf(preferences.getBoolean("realtime_acc_enabled", false)) }
     var judgeDetailsEnabled by remember { mutableStateOf(preferences.getBoolean("judge_details_enabled", false)) }
@@ -595,7 +598,8 @@ fun PracticePlayerScreen(pezFile: File, chartSource: PracticeChartSource, segmen
         }
         val frame = bundle.noiseRuntime.frame(atTime - bundle.chart.offsetSeconds, vp.field.width, vp.field.height)
         val blocked = bundle.noiseRuntime.updateTouches(frame, rawFingers.mapValues { (_, point) ->
-            PracticeNoisePoint(point.x - vp.field.left, vp.field.height - point.y)
+            val x = if (mirroredEnabled) vp.width - point.x else point.x
+            PracticeNoisePoint(x - vp.field.left, vp.field.height - point.y)
         })
         blocked.forEach { fingers.remove(it) }
         bundle.player.setNoiseBlocked(blocked.isNotEmpty())
@@ -870,6 +874,7 @@ fun PracticePlayerScreen(pezFile: File, chartSource: PracticeChartSource, segmen
             withContext(Dispatchers.IO) { loadPractice(context, pezFile) }
         }
         result.onSuccess { bundle ->
+            bundle.assets.hitAudio.volume = hitSoundVolume
             loaded = bundle
             audioDuration = bundle.player.duration.coerceAtLeast(1) / 1000.0
             range = PracticeRange.bounded(
@@ -1267,7 +1272,8 @@ fun PracticePlayerScreen(pezFile: File, chartSource: PracticeChartSource, segmen
                 val blocked = syncNoiseTouches(bundle, sampleVisualTime, vp)
                 for (index in 0 until event.pointerCount) {
                     val id = event.getPointerId(index).toLong()
-                    val samplePosition = rawFingers.getValue(id)
+                    val rawPosition = rawFingers.getValue(id)
+                    val samplePosition = if (mirroredEnabled) Offset(vp.width - rawPosition.x, rawPosition.y) else rawPosition
                     if (id in blocked) continue
                     val previous = fingers[id]
                     var swipe = previous?.swipe ?: PracticeSwipe()
@@ -1383,30 +1389,47 @@ fun PracticePlayerScreen(pezFile: File, chartSource: PracticeChartSource, segmen
                             RectF(index * 4f, 0f, index * 4f + 3f, 3f), framePaint)
                     }
                 }
-                val drawScene: (NativeCanvas) -> Unit = { sceneCanvas -> drawPracticeFrame(
-                    canvas = sceneCanvas,
-                    viewport = viewportFor(IntSize(size.width.toInt(), size.height.toInt())),
-                    chart = bundle.chart,
-                    assets = bundle.assets,
-                    judgeLineColor = judgeLineColor,
-                    time = chartSeconds,
-                    noteScale = noteScale,
-                    outcomes = outcomes,
-                    effects = if (renderWarmup != null) listOf(
-                        PracticeEffect(2f, 2f, PracticeGrade.PERFECT, chartSeconds),
-                        PracticeEffect(6f, 2f, PracticeGrade.GOOD, chartSeconds),
-                    ) else effects,
-                    paint = framePaint,
-                    geometry = bundle.geometry,
-                ) }
+                val sceneViewport = viewportFor(IntSize(size.width.toInt(), size.height.toInt()))
+                val drawScene: (NativeCanvas) -> Unit = { sceneCanvas ->
+                    val saved = sceneCanvas.save()
+                    try {
+                        if (mirroredEnabled) sceneCanvas.scale(-1f, 1f, sceneViewport.centerX, 0f)
+                        drawPracticeFrame(
+                            canvas = sceneCanvas,
+                            viewport = sceneViewport,
+                            chart = bundle.chart,
+                            assets = bundle.assets,
+                            judgeLineColor = judgeLineColor,
+                            time = chartSeconds,
+                            noteScale = noteScale,
+                            outcomes = outcomes,
+                            effects = if (renderWarmup != null) listOf(
+                                PracticeEffect(2f, 2f, PracticeGrade.PERFECT, chartSeconds),
+                                PracticeEffect(6f, 2f, PracticeGrade.GOOD, chartSeconds),
+                            ) else effects,
+                            paint = framePaint,
+                            geometry = bundle.geometry,
+                        )
+                    } finally {
+                        sceneCanvas.restoreToCount(saved)
+                    }
+                }
                 val noiseRenderer = bundle.noiseRenderer
                 if (noiseRenderer == null) drawScene(composeCanvas.nativeCanvas)
-                else noiseRenderer.drawScene(composeCanvas.nativeCanvas,
-                    bundle.noiseRuntime.frame(chartSeconds - bundle.chart.offsetSeconds, viewport.field.width, viewport.field.height),
-                    viewport.field.left, viewport.field.width, viewport.field.height,
-                    rawFingers.filterKeys { bundle.noiseRuntime.isFingerBlocked(it) }.mapValues { (_, point) ->
-                        PracticeNoisePoint(point.x - viewport.field.left, viewport.field.height - point.y)
-                    }, bundle.assets.background, viewport.width, warmUp = renderWarmup != null, scene = drawScene)
+                else {
+                    val noiseFrame = bundle.noiseRuntime.frame(chartSeconds - bundle.chart.offsetSeconds,
+                        viewport.field.width, viewport.field.height)
+                    val displayedNoiseFrame = if (mirroredEnabled) noiseFrame.copy(regions = noiseFrame.regions.map { region ->
+                        region.copy(center = region.center.copy(x = viewport.field.width - region.center.x),
+                            rotationDegrees = -region.rotationDegrees)
+                    }) else noiseFrame
+                    noiseRenderer.drawScene(composeCanvas.nativeCanvas, displayedNoiseFrame,
+                        viewport.field.left, viewport.field.width, viewport.field.height,
+                        rawFingers.filterKeys { bundle.noiseRuntime.isFingerBlocked(it) }.mapValues { (_, point) ->
+                            val x = if (mirroredEnabled) viewport.width - point.x else point.x
+                            PracticeNoisePoint(x - viewport.field.left, viewport.field.height - point.y)
+                        }, bundle.assets.background, viewport.width, warmUp = renderWarmup != null, scene = drawScene)
+                }
                 renderWarmup?.complete(Unit)
             }
         }
@@ -1606,6 +1629,9 @@ fun PracticePlayerScreen(pezFile: File, chartSource: PracticeChartSource, segmen
             backgroundArtwork = loaded?.assets?.background,
             initialDelayMs = latencyMs,
             initialNoteScale = noteScale,
+            initialMirrorEnabled = mirroredEnabled,
+            initialHitSoundVolume = hitSoundVolume,
+            initialNoiseCompatibilityEnabled = noiseCompatibilityEnabled,
             initialAutoPlay = autoPlayEnabled,
             initialRealtimeAcc = realtimeAccEnabled,
             initialJudgeDetails = judgeDetailsEnabled,
@@ -1624,13 +1650,29 @@ fun PracticePlayerScreen(pezFile: File, chartSource: PracticeChartSource, segmen
                 autoPlayThisRun = true
                 queueSeek(0.0, PracticeMode.PREVIEW_PLAYING)
             },
-            onSave = { delayValue, sizeValue, autoValue, newSpeedStep, gestureValue, accValue, detailsValue, strictValue, pauseDoubleTapValue ->
+            onSave = { delayValue, sizeValue, mirrorValue, hitSoundVolumeValue, noiseCompatibilityValue,
+                autoValue, newSpeedStep, gestureValue, accValue, detailsValue, strictValue, pauseDoubleTapValue ->
                 playerScope.launch {
                 runCatching {
                     applySpeed(newSpeedStep)
                     latencyMs = delayValue
                     chartSeconds = practiceVisualTime(audioCursor, delayValue, practiceSpeed(speedStep))
                     noteScale = sizeValue
+                    mirroredEnabled = mirrorValue
+                    hitSoundVolume = hitSoundVolumeValue
+                    loaded?.assets?.hitAudio?.volume = hitSoundVolumeValue
+                    if (noiseCompatibilityValue != noiseCompatibilityEnabled) {
+                        val bundle = loaded
+                        val replacement = if (bundle?.chart?.blockAreas?.isNotEmpty() == true) {
+                            withContext(Dispatchers.IO) {
+                                PracticeNoiseRenderer(context, compatibilityMode = noiseCompatibilityValue)
+                            }
+                        } else null
+                        bundle?.noiseRenderer?.release()
+                        if (bundle != null) bundle.noiseRenderer = replacement
+                        noiseSettings.setCompatibilityMode(noiseCompatibilityValue)
+                        noiseCompatibilityEnabled = noiseCompatibilityValue
+                    }
                     autoPlayEnabled = autoValue
                     realtimeAccEnabled = accValue
                     judgeDetailsEnabled = detailsValue
@@ -1642,6 +1684,8 @@ fun PracticePlayerScreen(pezFile: File, chartSource: PracticeChartSource, segmen
                     preferences.edit()
                         .putInt("latency_ms", delayValue)
                         .putFloat("note_scale", sizeValue)
+                        .putBoolean("mirror_enabled", mirrorValue)
+                        .putFloat("hit_sound_volume", hitSoundVolumeValue)
                         .putBoolean("auto_play_enabled", autoValue)
                         .putBoolean("realtime_acc_enabled", accValue)
                         .putBoolean("judge_details_enabled", detailsValue)
@@ -1720,6 +1764,9 @@ private fun PracticeSettingsDialog(
     backgroundArtwork: Bitmap?,
     initialDelayMs: Int,
     initialNoteScale: Float,
+    initialMirrorEnabled: Boolean,
+    initialHitSoundVolume: Float,
+    initialNoiseCompatibilityEnabled: Boolean,
     initialAutoPlay: Boolean,
     initialRealtimeAcc: Boolean,
     initialJudgeDetails: Boolean,
@@ -1730,11 +1777,14 @@ private fun PracticeSettingsDialog(
     showSeekGestureOption: Boolean,
     requireChoice: Boolean,
     onCalibrate: () -> Unit,
-    onSave: (Int, Float, Boolean, Int, Boolean, Boolean, Boolean, Boolean, Boolean) -> Unit,
+    onSave: (Int, Float, Boolean, Float, Boolean, Boolean, Int, Boolean, Boolean, Boolean, Boolean, Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var delayValue by remember(initialDelayMs) { mutableIntStateOf(initialDelayMs) }
     var scaleValue by remember(initialNoteScale) { mutableFloatStateOf(initialNoteScale) }
+    var mirrorValue by remember(initialMirrorEnabled) { mutableStateOf(initialMirrorEnabled) }
+    var hitSoundVolumeValue by remember(initialHitSoundVolume) { mutableFloatStateOf(initialHitSoundVolume) }
+    var noiseCompatibilityValue by remember(initialNoiseCompatibilityEnabled) { mutableStateOf(initialNoiseCompatibilityEnabled) }
     var autoValue by remember(initialAutoPlay) { mutableStateOf(initialAutoPlay) }
     var realtimeAccValue by remember(initialRealtimeAcc) { mutableStateOf(initialRealtimeAcc) }
     var judgeDetailsValue by remember(initialJudgeDetails) { mutableStateOf(initialJudgeDetails) }
@@ -1777,6 +1827,26 @@ private fun PracticeSettingsDialog(
                     val rightSettings: @Composable () -> Unit = {
                         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             PracticeGlassGroup {
+                                PracticeGlassToggle("谱面镜像", mirrorValue) { mirrorValue = it }
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text("噪域兼容模式", style = MaterialTheme.typography.titleSmall)
+                                        Text("使用旧版噪域样式", color = Color.White.copy(alpha = .65f),
+                                            style = MaterialTheme.typography.bodySmall)
+                                    }
+                                    Switch(checked = noiseCompatibilityValue,
+                                        onCheckedChange = { noiseCompatibilityValue = it })
+                                }
+                            }
+                            PracticeGlassGroup {
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    Text("打击音效音量", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                                    Text("${(hitSoundVolumeValue * 100).roundToInt()}%", color = AppAccent)
+                                }
+                                Slider(value = hitSoundVolumeValue,
+                                    onValueChange = { hitSoundVolumeValue = it }, valueRange = 0f..1f)
+                            }
+                            PracticeGlassGroup {
                                 Row(Modifier.fillMaxWidth().clickable(onClick = onCalibrate).padding(vertical = 4.dp),
                                     verticalAlignment = Alignment.CenterVertically) {
                                     Icon(Icons.Default.Settings, null, tint = AppAccent)
@@ -1813,7 +1883,9 @@ private fun PracticeSettingsDialog(
                         Spacer(Modifier.height(12.dp))
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
                             androidx.compose.material3.TextButton(onClick = onDismiss) { Text(if (requireChoice) "退出练习" else "取消") }
-                            Button(onClick = { onSave(delayValue, scaleValue, autoValue, speedValue, seekGestureValue, realtimeAccValue, judgeDetailsValue, strictValue, pauseDoubleTapValue) },
+                            Button(onClick = { onSave(delayValue, scaleValue, mirrorValue, hitSoundVolumeValue,
+                                noiseCompatibilityValue, autoValue, speedValue, seekGestureValue, realtimeAccValue,
+                                judgeDetailsValue, strictValue, pauseDoubleTapValue) },
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = Color.White.copy(alpha = .18f), contentColor = Color.White)) {
                                 Text(if (requireChoice) "保存并开始" else "保存")

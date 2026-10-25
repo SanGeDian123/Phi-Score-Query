@@ -9,6 +9,8 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas as AndroidCanvas
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -65,6 +67,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -132,6 +135,7 @@ import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.RateReview
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SystemUpdate
@@ -163,6 +167,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.rememberDrawerState
@@ -200,6 +205,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.imageResource
@@ -226,6 +232,8 @@ import coil.imageLoader
 import coil.compose.AsyncImage
 import coil.decode.SvgDecoder
 import coil.request.ImageRequest
+import coil.request.SuccessResult
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -250,6 +258,7 @@ import xyz.plcliangpicup.phigrosscore.data.PlayerProfile
 import androidx.lifecycle.repeatOnLifecycle
 import xyz.plcliangpicup.phigrosscore.data.PracticeCharts
 import xyz.plcliangpicup.phigrosscore.data.RksCalculatorDraft
+import xyz.plcliangpicup.phigrosscore.data.RksTrendRange
 import xyz.plcliangpicup.phigrosscore.data.ScoreSnapshotEntry
 import xyz.plcliangpicup.phigrosscore.data.SongDifficultyScore
 import xyz.plcliangpicup.phigrosscore.data.SongChartInfo
@@ -306,11 +315,26 @@ private val navItems = listOf(
 
 private val primaryNavItems = navItems.filter { it.page in setOf(AppPage.HOME, AppPage.B30, AppPage.SONG, AppPage.MORE) }
 
+private fun navigationItems(timeRewindMode: Boolean): List<NavItem> = navItems
+    .filter { !timeRewindMode || it.page in timeRewindPages }
+    .map { if (it.page == AppPage.B30) it.copy(title = bRankingLabel(timeRewindMode)) else it }
+
 private const val PROJECT_REPOSITORY_URL = "https://github.com/SanGeDian123/Phi-Score-Query"
 private const val BACKEND_REPOSITORY_URL = "https://github.com/Sczr0/Next-Phi-Backend"
 private const val EXPERIENCE_SURVEY_URL = "https://wj.qq.com/s2/27522729/6kti/"
 
 private val changelogEntries = listOf(
+    ChangelogEntry(
+        "Pre-0.9.8.0",
+        "",
+        listOf(
+            "“谱面播放与练习”功能新增打击音效调整设置；",
+            "支持Best N图片生成，上限200张谱面；",
+            "新增“时间回溯”模式，开启后，可查看旧定数体系下的RKS及Best 19。",
+            "新增RKS趋势图，在概览页面点击RKS数字即可进入。",
+            "优化了使用体验。",
+        ),
+    ),
     ChangelogEntry(
         "Pre-0.9.7.12",
         "",
@@ -697,6 +721,7 @@ private val changelogEntries = listOf(
 @Composable
 fun PhigrosScoreApp(viewModel: AppViewModel) {
     val state by viewModel.state.collectAsState()
+    val moderationStatus = state.moderationStatus
     val snackbar = remember { SnackbarHostState() }
     val context = LocalContext.current
     val appScope = rememberCoroutineScope()
@@ -743,7 +768,7 @@ fun PhigrosScoreApp(viewModel: AppViewModel) {
             )
         }
     }
-    BackHandler(enabled = state.isLoggedIn) {
+    BackHandler(enabled = state.isLoggedIn && moderationStatus?.accountSuspended != true) {
         if (state.page != AppPage.HOME) {
             lastHomeBackPressAt = SystemClock.elapsedRealtime()
             viewModel.selectPage(AppPage.HOME)
@@ -770,7 +795,17 @@ fun PhigrosScoreApp(viewModel: AppViewModel) {
     }
 
     Box(Modifier.fillMaxSize().background(AppBackground)) {
-        if (!state.isLoggedIn) {
+        if (moderationStatus?.accountSuspended == true) {
+            UserModerationOverlay(
+                status = moderationStatus,
+                isSubmitting = state.isSubmittingModerationAppeal,
+                message = state.moderationMessage,
+                submissionEvent = state.moderationSubmissionEvent,
+                onSubmitAppeal = viewModel::submitModerationAppeal,
+                onLogout = viewModel::logout,
+                onRefresh = viewModel::refreshModerationStatus,
+            )
+        } else if (!state.isLoggedIn) {
             LoginScreen(
                 progress = state.loginProgress,
                 onTokenLogin = viewModel::loginWithToken,
@@ -811,6 +846,7 @@ fun PhigrosScoreApp(viewModel: AppViewModel) {
                 onGenerateSongImage = viewModel::generateSongImage,
                 onGenerateImage = viewModel::generateImage,
                 onGenerateP30Image = viewModel::generateP30Image,
+                onGenerateBestNImage = viewModel::generateBestNImage,
                 onDismissImagePagerGuide = viewModel::dismissImagePagerGuide,
                 onDismissSuggestionSwipeGuide = viewModel::dismissSuggestionSwipeGuide,
                 onClearCache = viewModel::clearCache,
@@ -829,9 +865,30 @@ fun PhigrosScoreApp(viewModel: AppViewModel) {
                 onHideSessionToken = viewModel::hideSessionToken,
                 onLogout = viewModel::logout,
                 onDismissNavigationGuide = viewModel::dismissNavigationGuide,
+                onRefreshRksHistory = { viewModel.refreshRksHistory() },
+                onRksTrendRangeChange = viewModel::setRksTrendRange,
+                onStartTimeRewind = viewModel::requestTimeRewind,
+                onConfirmTimeRewind = viewModel::startTimeRewind,
+                onCancelTimeRewind = viewModel::cancelTimeRewind,
+                onFinishTimeRewind = viewModel::finishTimeRewind,
+                onExitTimeRewind = viewModel::exitTimeRewind,
+                onDismissTimeRewindReminder = viewModel::dismissTimeRewindReminder,
+                moderationNotice = {
+                    if (moderationStatus?.publicHidden == true) {
+                        UserModerationOverlay(
+                            status = moderationStatus,
+                            isSubmitting = state.isSubmittingModerationAppeal,
+                            message = state.moderationMessage,
+                            submissionEvent = state.moderationSubmissionEvent,
+                            onSubmitAppeal = viewModel::submitModerationAppeal,
+                            onLogout = viewModel::logout,
+                        )
+                    }
+                },
             )
         }
         if (!state.isLoggedIn) SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
+        if (moderationStatus?.accountSuspended != true) {
         state.availableAppUpdate?.takeIf { state.announcement == null }?.let { update ->
             AppUpdateDialog(
                 update = update,
@@ -870,8 +927,9 @@ fun PhigrosScoreApp(viewModel: AppViewModel) {
             )
         }
         FeedbackHost(viewModel.repository, state.isLoggedIn)
+        }
     }
-    if (showExperienceSurvey) {
+    if (showExperienceSurvey && moderationStatus?.accountSuspended != true) {
         ExperienceSurveyDialog(onDismiss = { showExperienceSurvey = false })
     }
 }
@@ -1405,6 +1463,33 @@ internal fun LoginScreen(
 ) {
     var tokenDialog by remember { mutableStateOf(false) }
     var token by remember { mutableStateOf("") }
+    val context = LocalContext.current
+    val saveScope = rememberCoroutineScope()
+    var pendingLoginQrSvg by remember { mutableStateOf<ByteArray?>(null) }
+    var isSavingLoginQr by remember { mutableStateOf(false) }
+    val saveLoginQr: (ByteArray) -> Unit = { qrSvg ->
+        saveScope.launch {
+            isSavingLoginQr = true
+            try {
+                withContext(Dispatchers.IO) { saveLoginQrToGallery(context, qrSvg) }
+                Toast.makeText(context, "登录二维码已保存到相册", Toast.LENGTH_SHORT).show()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                Toast.makeText(context, "保存失败，请稍后重试", Toast.LENGTH_SHORT).show()
+            } finally {
+                isSavingLoginQr = false
+            }
+        }
+    }
+    val galleryPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        val qrSvg = pendingLoginQrSvg
+        pendingLoginQrSvg = null
+        if (granted && qrSvg != null) saveLoginQr(qrSvg)
+        else if (!granted) Toast.makeText(context, "需要存储权限才能保存登录二维码", Toast.LENGTH_SHORT).show()
+    }
     BoxWithConstraints(
         Modifier.fillMaxSize().background(AppBackground).padding(WindowInsets.safeDrawing.asPaddingValues()),
         contentAlignment = Alignment.Center,
@@ -1481,8 +1566,44 @@ internal fun LoginScreen(
                             modifier = Modifier.size(if (wide) 300.dp else 250.dp).padding(12.dp),
                         )
                     }
-                    Text(current.status, modifier = Modifier.padding(top = 16.dp), color = AppAccent)
-                    Text("使用另一台设备的 TapTap 扫描", color = AppTextMuted, fontSize = 12.sp)
+                    Spacer(Modifier.height(12.dp))
+                    Button(
+                        onClick = {
+                            if (
+                                Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
+                                ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
+                                PackageManager.PERMISSION_GRANTED
+                            ) {
+                                pendingLoginQrSvg = current.qrSvg
+                                galleryPermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                            } else {
+                                saveLoginQr(current.qrSvg)
+                            }
+                        },
+                        enabled = !isSavingLoginQr,
+                        modifier = Modifier.width(if (wide) 300.dp else 250.dp).height(48.dp),
+                        shape = MaterialTheme.shapes.medium,
+                    ) {
+                        if (isSavingLoginQr) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                strokeWidth = 2.dp,
+                            )
+                        } else {
+                            Icon(Icons.Default.SaveAlt, contentDescription = null)
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (isSavingLoginQr) "正在保存…" else "保存登录二维码")
+                    }
+                    Text(current.status, modifier = Modifier.padding(top = 12.dp), color = AppAccent)
+                    Text(
+                        "保存二维码后前往TapTap扫描，或使用另一台设备扫描二维码",
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        color = AppTextMuted,
+                        fontSize = 12.sp,
+                        textAlign = TextAlign.Center,
+                    )
                     TextButton(onClick = onCancelQr) { Text("取消") }
                 }
             }
@@ -1495,7 +1616,11 @@ internal fun LoginScreen(
             title = { Text("SessionToken 登录") },
             text = {
                 Column {
-                    Text("Token 仅通过 HTTPS 发送，并使用 Android Keystore 加密保存在本机。", color = AppTextMuted)
+                    Text(
+                        "Token 仅通过 HTTPS 发送，并使用 Android Keystore 加密保存在本机。\n\n" +
+                            "对于首次使用的用户，建议使用TapTap扫码登录",
+                        color = AppTextMuted,
+                    )
                     Spacer(Modifier.height(14.dp))
                     OutlinedTextField(
                         value = token,
@@ -1572,6 +1697,7 @@ internal fun MainShell(
     onGenerateSongImage: (SongScoreResult) -> Unit,
     onGenerateImage: () -> Unit,
     onGenerateP30Image: () -> Unit,
+    onGenerateBestNImage: (Int) -> Unit,
     onDismissImagePagerGuide: () -> Unit,
     onDismissSuggestionSwipeGuide: () -> Unit,
     onClearCache: () -> Unit,
@@ -1590,212 +1716,237 @@ internal fun MainShell(
     onHideSessionToken: () -> Unit,
     onLogout: () -> Unit,
     onDismissNavigationGuide: () -> Unit,
+    onRefreshRksHistory: () -> Unit = {},
+    onRksTrendRangeChange: (RksTrendRange) -> Unit = {},
+    onConfirmTimeRewind: () -> Unit = {},
+    onCancelTimeRewind: () -> Unit = {},
+    onFinishTimeRewind: () -> Unit = {},
+    onDismissTimeRewindReminder: () -> Unit = {},
+    moderationNotice: @Composable () -> Unit = {},
+    onStartTimeRewind: () -> Unit = {},
+    onExitTimeRewind: () -> Unit = {},
 ) {
-    val drawerState = rememberDrawerState(DrawerValue.Closed)
-    val scope = rememberCoroutineScope()
-    var showAppDrawer by rememberSaveable { mutableStateOf(false) }
-    val context = LocalContext.current
-    val hasSuggestionUnread by SuggestionNotificationManager.observeInAppUnread(context).collectAsState()
-    val feedbackUnreadCount by FeedbackNotificationManager.observeInAppUnread(context).collectAsState()
-    val unreadPages = remember(hasSuggestionUnread, feedbackUnreadCount) {
-        buildSet<AppPage> {
-            if (hasSuggestionUnread) add(AppPage.MORE)
-            if (feedbackUnreadCount > 0) add(AppPage.SETTINGS)
+    TimeRewindSceneHost(
+        state = state,
+        onConfirm = onConfirmTimeRewind,
+        onDismiss = onCancelTimeRewind,
+        onArrive = onFinishTimeRewind,
+        onReturn = onExitTimeRewind,
+    ) { exitWithAnimation, sceneSettled ->
+        val visibleNavItems = navigationItems(state.timeRewindMode)
+        val drawerState = rememberDrawerState(DrawerValue.Closed)
+        val scope = rememberCoroutineScope()
+        var showAppDrawer by rememberSaveable { mutableStateOf(false) }
+        val context = LocalContext.current
+        val hasSuggestionUnread by SuggestionNotificationManager.observeInAppUnread(context).collectAsState()
+        val feedbackUnreadCount by FeedbackNotificationManager.observeInAppUnread(context).collectAsState()
+        val unreadPages = remember(hasSuggestionUnread, feedbackUnreadCount) {
+            buildSet<AppPage> {
+                if (hasSuggestionUnread) add(AppPage.MORE)
+                if (feedbackUnreadCount > 0) add(AppPage.SETTINGS)
+            }
         }
-    }
-    val keyboardVisible = WindowInsets.isImeVisible
-    val navigationBottomPadding by animateDpAsState(
-        targetValue = if (keyboardVisible) 0.dp else if (state.useSwipeNavigation) 48.dp else 76.dp,
-        animationSpec = appTween(180), label = "navigation-bottom-padding",
-    )
-    val openNavigation: () -> Unit = {
-        if (state.useSwipeNavigation) showAppDrawer = true
-        else scope.launch { drawerState.open() }
-    }
-    LaunchedEffect(state.useSwipeNavigation) {
-        showAppDrawer = false
-        drawerState.close()
-    }
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        gesturesEnabled = !state.useSwipeNavigation,
-        drawerContent = {
-            ModalDrawerSheet(
-                drawerContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                drawerShape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp),
-            ) {
-                Column(
-                    Modifier.fillMaxHeight().width(292.dp).padding(WindowInsets.safeDrawing.asPaddingValues()),
+        val keyboardVisible = WindowInsets.isImeVisible
+        val navigationBottomPadding by animateDpAsState(
+            targetValue = if (keyboardVisible) 0.dp else if (state.useSwipeNavigation) 48.dp else 76.dp,
+            animationSpec = appTween(180), label = "navigation-bottom-padding",
+        )
+        val openNavigation: () -> Unit = {
+            if (state.useSwipeNavigation) showAppDrawer = true
+            else scope.launch { drawerState.open() }
+        }
+        LaunchedEffect(state.useSwipeNavigation) {
+            showAppDrawer = false
+            drawerState.close()
+        }
+        ModalNavigationDrawer(
+            drawerState = drawerState,
+            gesturesEnabled = !state.useSwipeNavigation && state.page != AppPage.IMAGE,
+            drawerContent = {
+                ModalDrawerSheet(
+                    drawerContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                    drawerShape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp),
                 ) {
-                    Row(
-                        Modifier.padding(start = 18.dp, end = 16.dp, top = 20.dp, bottom = 16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(
-                            Modifier.size(38.dp).clip(RoundedCornerShape(12.dp))
-                                .background(AppAccent.copy(alpha = .15f)),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text("Φ", color = AppAccent, fontSize = 20.sp, fontWeight = FontWeight.Black)
-                        }
-                        Column(Modifier.padding(start = 12.dp).weight(1f)) {
-                            Text("Phi Score Query", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                            Text(BuildConfig.VERSION_NAME, color = AppTextMuted, fontSize = 11.sp)
-                        }
-                    }
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .55f))
                     Column(
-                        Modifier
-                            .weight(1f)
-                            .verticalScroll(rememberScrollState())
-                            .padding(vertical = 8.dp),
+                        Modifier.fillMaxHeight().width(292.dp).padding(WindowInsets.safeDrawing.asPaddingValues()),
                     ) {
-                        navItems.forEach { item ->
-                            NavigationDrawerItem(
-                                selected = state.page == item.page,
-                                onClick = {
-                                    onPage(item.page)
-                                    scope.launch { drawerState.close() }
-                                },
-                                icon = { Icon(item.icon, null) },
-                                label = {
-                                    Row(
-                                        Modifier.fillMaxWidth(),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Text(
-                                            item.title,
-                                            modifier = Modifier.weight(1f),
-                                            fontWeight = if (state.page == item.page) FontWeight.SemiBold else FontWeight.Normal,
-                                        )
-                                        if (item.page in unreadPages) {
-                                            InAppUnreadDot()
+                        Row(
+                            Modifier.padding(start = 18.dp, end = 16.dp, top = 20.dp, bottom = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(
+                                Modifier.size(38.dp).clip(RoundedCornerShape(12.dp))
+                                    .background(AppAccent.copy(alpha = .15f)),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text("Φ", color = AppAccent, fontSize = 20.sp, fontWeight = FontWeight.Black)
+                            }
+                            Column(Modifier.padding(start = 12.dp).weight(1f)) {
+                                Text("Phi Score Query", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                                Text(BuildConfig.VERSION_NAME, color = AppTextMuted, fontSize = 11.sp)
+                            }
+                        }
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .55f))
+                        Column(
+                            Modifier
+                                .weight(1f)
+                                .verticalScroll(rememberScrollState())
+                                .padding(vertical = 8.dp),
+                        ) {
+                            visibleNavItems.forEach { item ->
+                                NavigationDrawerItem(
+                                    selected = state.page == item.page,
+                                    onClick = {
+                                        onPage(item.page)
+                                        scope.launch { drawerState.close() }
+                                    },
+                                    icon = { Icon(item.icon, null) },
+                                    label = {
+                                        Row(
+                                            Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Text(
+                                                item.title,
+                                                modifier = Modifier.weight(1f),
+                                                fontWeight = if (state.page == item.page) FontWeight.SemiBold else FontWeight.Normal,
+                                            )
+                                            if (item.page in unreadPages) {
+                                                InAppUnreadDot()
+                                            }
                                         }
-                                    }
-                                },
-                                shape = RoundedCornerShape(12.dp),
-                                colors = androidx.compose.material3.NavigationDrawerItemDefaults.colors(
-                                    selectedContainerColor = AppAccent.copy(alpha = .13f),
-                                    selectedIconColor = AppAccent,
-                                    selectedTextColor = MaterialTheme.colorScheme.onSurface,
-                                    unselectedIconColor = AppTextMuted,
-                                    unselectedTextColor = AppTextMuted,
-                                ),
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 1.dp),
+                                    },
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = androidx.compose.material3.NavigationDrawerItemDefaults.colors(
+                                        selectedContainerColor = AppAccent.copy(alpha = .13f),
+                                        selectedIconColor = AppAccent,
+                                        selectedTextColor = MaterialTheme.colorScheme.onSurface,
+                                        unselectedIconColor = AppTextMuted,
+                                        unselectedTextColor = AppTextMuted,
+                                    ),
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 1.dp),
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                    }
+                }
+            },
+        ) {
+            Scaffold(
+                containerColor = AppBackground,
+                contentWindowInsets = WindowInsets.safeDrawing,
+                topBar = {
+                    if (state.moderationStatus?.publicHidden == true) {
+                        Column(Modifier.windowInsetsPadding(WindowInsets.statusBars)) { moderationNotice() }
+                    }
+                },
+                snackbarHost = { SnackbarHost(snackbar) },
+            ) { padding ->
+                Box(
+                    Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).background(AppBackground),
+                ) {
+                        PageContent(
+                        state = state,
+                        snackbar = snackbar,
+                        onPage = onPage,
+                        onRefresh = onRefresh,
+                        onRefreshLeaderboard = onRefreshLeaderboard,
+                        onLoadRandomSuggestion = onLoadRandomSuggestion,
+                        onLoadOwnSuggestionPosts = onLoadOwnSuggestionPosts,
+                        onOpenSuggestionPost = onOpenSuggestionPost,
+                        onRksCalculatorDraftChange = onRksCalculatorDraftChange,
+                        onSubmitSuggestionPost = onSubmitSuggestionPost,
+                        onSubmitSuggestionComment = onSubmitSuggestionComment,
+                        onDeleteSuggestionPost = onDeleteSuggestionPost,
+                        onDeleteSuggestionComment = onDeleteSuggestionComment,
+                         onSuggestionNotificationsChange = onSuggestionNotificationsChange,
+                          onSearchAchievementSongs = onSearchAchievementSongs,
+                          onLoadAchievementRates = onLoadAchievementRates,
+                          onGenerateCustomRankingImage = onGenerateCustomRankingImage,
+                          onImportCustomRanking = onImportCustomRanking,
+                          onClearCustomRanking = onClearCustomRanking,
+                          onCheckin = onCheckin,
+                          onCheckinRanks = onCheckinRanks,
+                          onStartRksGuess = onStartRksGuess,
+                          onRefreshRksGuess = onRefreshRksGuess,
+                          onSubmitRksGuessAnswer = onSubmitRksGuessAnswer,
+                          onContinueRksGuessRound = onContinueRksGuessRound,
+                          onLeaveRksGuessGame = onLeaveRksGuessGame,
+                          onSearchSong = onSearchSong,
+                        onOpenConstantSong = onOpenConstantSong,
+                        onEnsureSongImage = onEnsureSongImage,
+                        onGenerateSongImage = onGenerateSongImage,
+                        onGenerateImage = onGenerateImage,
+                        onGenerateP30Image = onGenerateP30Image,
+                        onGenerateBestNImage = onGenerateBestNImage,
+                        onOpenDrawer = openNavigation,
+                        onDismissImagePagerGuide = onDismissImagePagerGuide,
+                        onDismissSuggestionSwipeGuide = onDismissSuggestionSwipeGuide,
+                        onClearCache = onClearCache,
+                        onThemeChange = onThemeChange,
+                        onAutoRefreshChange = onAutoRefreshChange,
+                        onAutoUpdateChange = onAutoUpdateChange,
+                        onNavigationHandleVisibilityChange = onNavigationHandleVisibilityChange,
+                        onSwipeNavigationChange = onSwipeNavigationChange,
+                        onB30ImageStyleChange = onB30ImageStyleChange,
+                        onSongScoreImageStyleChange = onSongScoreImageStyleChange,
+                        onOpenSurvey = onOpenSurvey,
+                        onCheckUpdate = onCheckUpdate,
+                        onRefreshAnnouncements = onRefreshAnnouncements,
+                        onRevealSessionToken = onRevealSessionToken,
+                        onHideSessionToken = onHideSessionToken,
+                        onLogout = onLogout,
+                        onStartTimeRewind = onStartTimeRewind,
+                        onExitTimeRewind = exitWithAnimation,
+                        onRefreshRksHistory = onRefreshRksHistory,
+                        onRksTrendRangeChange = onRksTrendRangeChange,
+                        onDismissNavigationGuide = onDismissNavigationGuide,
+                        modifier = Modifier.fillMaxSize().padding(bottom = navigationBottomPadding),
+                    )
+                    AnimatedContent(
+                        targetState = if (keyboardVisible) null else state.useSwipeNavigation,
+                        modifier = Modifier.align(Alignment.BottomCenter),
+                        contentAlignment = Alignment.BottomCenter,
+                        transitionSpec = {
+                            (fadeIn(appTween(160), initialAlpha = 0f) + slideInVertically(appTween(200)) { it }) togetherWith
+                                (fadeOut(appTween(120)) + slideOutVertically(appTween(160)) { it })
+                        },
+                        label = "navigation-mode-transition",
+                    ) { useSwipeNavigation ->
+                        if (useSwipeNavigation == true) {
+                            SwipeNavigationHandle(
+                                onOpen = openNavigation,
+                                hasUnread = unreadPages.isNotEmpty(),
+                            )
+                        } else if (useSwipeNavigation == false) {
+                            BottomNavigationDock(
+                                currentPage = if (state.page == AppPage.RKS_TREND) AppPage.HOME else state.page,
+                                onPage = onPage,
+                                onOpenMenu = openNavigation,
+                                unreadPages = unreadPages,
+                                timeRewindMode = state.timeRewindMode,
                             )
                         }
                     }
-                    Spacer(Modifier.height(8.dp))
-                }
-            }
-        },
-    ) {
-        Scaffold(
-            containerColor = AppBackground,
-            contentWindowInsets = WindowInsets.safeDrawing,
-            snackbarHost = { SnackbarHost(snackbar) },
-        ) { padding ->
-            Box(
-                Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).background(AppBackground),
-            ) {
-                    PageContent(
-                    state = state,
-                    snackbar = snackbar,
-                    onPage = onPage,
-                    onRefresh = onRefresh,
-                    onRefreshLeaderboard = onRefreshLeaderboard,
-                    onLoadRandomSuggestion = onLoadRandomSuggestion,
-                    onLoadOwnSuggestionPosts = onLoadOwnSuggestionPosts,
-                    onOpenSuggestionPost = onOpenSuggestionPost,
-                    onRksCalculatorDraftChange = onRksCalculatorDraftChange,
-                    onSubmitSuggestionPost = onSubmitSuggestionPost,
-                    onSubmitSuggestionComment = onSubmitSuggestionComment,
-                    onDeleteSuggestionPost = onDeleteSuggestionPost,
-                    onDeleteSuggestionComment = onDeleteSuggestionComment,
-                     onSuggestionNotificationsChange = onSuggestionNotificationsChange,
-                      onSearchAchievementSongs = onSearchAchievementSongs,
-                      onLoadAchievementRates = onLoadAchievementRates,
-                      onGenerateCustomRankingImage = onGenerateCustomRankingImage,
-                      onImportCustomRanking = onImportCustomRanking,
-                      onClearCustomRanking = onClearCustomRanking,
-                      onCheckin = onCheckin,
-                      onCheckinRanks = onCheckinRanks,
-                      onStartRksGuess = onStartRksGuess,
-                      onRefreshRksGuess = onRefreshRksGuess,
-                      onSubmitRksGuessAnswer = onSubmitRksGuessAnswer,
-                      onContinueRksGuessRound = onContinueRksGuessRound,
-                      onLeaveRksGuessGame = onLeaveRksGuessGame,
-                      onSearchSong = onSearchSong,
-                    onOpenConstantSong = onOpenConstantSong,
-                    onEnsureSongImage = onEnsureSongImage,
-                    onGenerateSongImage = onGenerateSongImage,
-                    onGenerateImage = onGenerateImage,
-                    onGenerateP30Image = onGenerateP30Image,
-                    onOpenDrawer = openNavigation,
-                    onDismissImagePagerGuide = onDismissImagePagerGuide,
-                    onDismissSuggestionSwipeGuide = onDismissSuggestionSwipeGuide,
-                    onClearCache = onClearCache,
-                    onThemeChange = onThemeChange,
-                    onAutoRefreshChange = onAutoRefreshChange,
-                    onAutoUpdateChange = onAutoUpdateChange,
-                    onNavigationHandleVisibilityChange = onNavigationHandleVisibilityChange,
-                    onSwipeNavigationChange = onSwipeNavigationChange,
-                    onB30ImageStyleChange = onB30ImageStyleChange,
-                    onSongScoreImageStyleChange = onSongScoreImageStyleChange,
-                    onOpenSurvey = onOpenSurvey,
-                    onCheckUpdate = onCheckUpdate,
-                    onRefreshAnnouncements = onRefreshAnnouncements,
-                    onRevealSessionToken = onRevealSessionToken,
-                    onHideSessionToken = onHideSessionToken,
-                    onLogout = onLogout,
-                    modifier = Modifier.fillMaxSize().padding(bottom = navigationBottomPadding),
-                )
-                AnimatedContent(
-                    targetState = if (keyboardVisible) null else state.useSwipeNavigation,
-                    modifier = Modifier.align(Alignment.BottomCenter),
-                    contentAlignment = Alignment.BottomCenter,
-                    transitionSpec = {
-                        (fadeIn(appTween(160), initialAlpha = 0f) + slideInVertically(appTween(200)) { it }) togetherWith
-                            (fadeOut(appTween(120)) + slideOutVertically(appTween(160)) { it })
-                    },
-                    label = "navigation-mode-transition",
-                ) { useSwipeNavigation ->
-                    if (useSwipeNavigation == true) {
-                        SwipeNavigationHandle(
-                            onOpen = openNavigation,
-                            hasUnread = unreadPages.isNotEmpty(),
-                        )
-                    } else if (useSwipeNavigation == false) {
-                        BottomNavigationDock(
-                            currentPage = state.page,
-                            onPage = onPage,
-                            onOpenMenu = openNavigation,
-                            unreadPages = unreadPages,
-                        )
-                    }
                 }
             }
         }
-    }
-    if (state.useSwipeNavigation && showAppDrawer) {
-        SwipeNavigationDrawer(
-            items = navItems,
-            currentPage = state.page,
-            onDismiss = { showAppDrawer = false },
-            onPage = onPage,
-            unreadPages = unreadPages,
-        )
-    }
-    if (state.showNavigationGuide) {
-        AlertDialog(
-            onDismissRequest = onDismissNavigationGuide,
-            icon = { Icon(Icons.Default.Menu, null, tint = AppAccent) },
-            title = { Text("导航方式已更新") },
-            text = { Text(if (state.useSwipeNavigation) "从底部上滑或点击底部入口，展开全部功能。下滑即可收起。" else "常用页面位于底部，点击“菜单”可打开完整导航。也可以从屏幕左侧边缘右滑。") },
-            confirmButton = {
-                Button(onClick = onDismissNavigationGuide) { Text("知道了") }
-            },
-        )
+        if (state.useSwipeNavigation && showAppDrawer) {
+            SwipeNavigationDrawer(
+                items = visibleNavItems,
+                currentPage = state.page,
+                onDismiss = { showAppDrawer = false },
+                onPage = onPage,
+                unreadPages = unreadPages,
+            )
+        }
+        if (sceneSettled && state.showTimeRewindReminder && state.timeRewindStartedAt == null) {
+            AlertDialog(onDismissRequest = onDismissTimeRewindReminder,
+                title = { Text("时间回溯") },
+                text = { Text("可在设置页“清除缓存”上方退出时间回溯模式，重启 APP 也可退出。") },
+                confirmButton = { TextButton(onClick = onDismissTimeRewindReminder) { Text("知道了") } })
+        }
     }
 }
 
@@ -1833,6 +1984,7 @@ private fun PageContent(
     onGenerateSongImage: (SongScoreResult) -> Unit,
     onGenerateImage: () -> Unit,
     onGenerateP30Image: () -> Unit,
+    onGenerateBestNImage: (Int) -> Unit,
     onOpenDrawer: () -> Unit,
     onDismissImagePagerGuide: () -> Unit,
     onDismissSuggestionSwipeGuide: () -> Unit,
@@ -1851,6 +2003,11 @@ private fun PageContent(
     onHideSessionToken: () -> Unit,
     onLogout: () -> Unit,
     modifier: Modifier,
+    onStartTimeRewind: () -> Unit = {},
+    onExitTimeRewind: () -> Unit = {},
+    onRefreshRksHistory: () -> Unit = {},
+    onRksTrendRangeChange: (RksTrendRange) -> Unit = {},
+    onDismissNavigationGuide: () -> Unit = {},
 ) {
     Box(modifier.fillMaxSize()) {
         AnimatedContent(
@@ -1867,8 +2024,12 @@ private fun PageContent(
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
                 Box(Modifier.widthIn(max = AppContentMaxWidth).fillMaxSize()) {
                     when (page) {
-                AppPage.HOME -> HomePage(state, onRefresh, onOpenImage = { onPage(AppPage.IMAGE) })
-                AppPage.B30 -> B30Page(state, onRefresh)
+                AppPage.HOME -> HomePage(state, onRefresh, onOpenImage = { onPage(AppPage.IMAGE) },
+                    onOpenRksTrend = { onPage(AppPage.RKS_TREND) },
+                    onDismissNavigationGuide = onDismissNavigationGuide)
+                AppPage.RKS_TREND -> RksTrendPage(state, onBack = { onPage(AppPage.HOME) },
+                    onRefresh = onRefreshRksHistory, onRangeChange = onRksTrendRangeChange)
+                AppPage.B30 -> B30Page(state, onRefresh, onOpenImagePage = { onPage(AppPage.IMAGE) })
                 AppPage.SONG -> SingleSongPage(
                     state = state,
                     onSearch = onSearchSong,
@@ -1886,6 +2047,7 @@ private fun PageContent(
                     state = state,
                     onGenerateB30Image = onGenerateImage,
                     onGenerateP30Image = onGenerateP30Image,
+                    onGenerateBestNImage = onGenerateBestNImage,
                     onOpenDrawer = onOpenDrawer,
                     onDismissGuide = onDismissImagePagerGuide,
                 )
@@ -1931,6 +2093,8 @@ private fun PageContent(
                     onRevealSessionToken = onRevealSessionToken,
                     onHideSessionToken = onHideSessionToken,
                     onLogout = onLogout,
+                    onStartTimeRewind = onStartTimeRewind,
+                    onExitTimeRewind = onExitTimeRewind,
                 )
                     }
                 }
@@ -1953,6 +2117,7 @@ private fun BottomNavigationDock(
     onPage: (AppPage) -> Unit,
     onOpenMenu: () -> Unit,
     unreadPages: Set<AppPage>,
+    timeRewindMode: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     Card(
@@ -1963,7 +2128,8 @@ private fun BottomNavigationDock(
         border = BorderStroke(.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = .55f)),
     ) {
         Row(Modifier.fillMaxWidth().padding(5.dp), verticalAlignment = Alignment.CenterVertically) {
-            primaryNavItems.forEach { item ->
+            val dockItems = if (timeRewindMode) navigationItems(true) else primaryNavItems
+            dockItems.forEach { item ->
                 BottomNavigationItem(
                     title = item.title,
                     icon = item.icon,
@@ -1973,7 +2139,7 @@ private fun BottomNavigationDock(
                     modifier = Modifier.weight(1f),
                 )
             }
-            BottomNavigationItem(
+            if (!timeRewindMode) BottomNavigationItem(
                 title = "菜单",
                 icon = Icons.Default.Menu,
                 selected = primaryNavItems.none { it.page == currentPage },
@@ -2321,7 +2487,8 @@ private fun PageHeader(
 }
 
 @Composable
-private fun HomePage(state: AppUiState, onRefresh: () -> Unit, onOpenImage: () -> Unit) {
+private fun HomePage(state: AppUiState, onRefresh: () -> Unit, onOpenImage: () -> Unit,
+    onOpenRksTrend: () -> Unit, onDismissNavigationGuide: () -> Unit) {
     val snapshot = state.snapshot
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         PageHeader("概览", if (state.isOffline) "离线缓存" else "TapTap · 大陆版") {
@@ -2333,14 +2500,25 @@ private fun HomePage(state: AppUiState, onRefresh: () -> Unit, onOpenImage: () -
             if (snapshot == null) {
                 EmptyState("暂无成绩", "刷新后显示最新存档", onRefresh)
             } else {
-                PlayerOverviewPanel(snapshot, state.isOffline, state.rksDelta, state.rksDeltaEvent)
+                PlayerOverviewPanel(snapshot, state.isOffline, state.rksDelta, state.rksDeltaEvent, state.timeRewindMode, state.rksAnimationFrom, state.p30AnimationFrom,
+                    onOpenRksTrend = onOpenRksTrend, showRksTrendGuide = state.showRksTrendGuide)
+                if (state.showNavigationGuide && !state.timeRewindMode) {
+                    Surface(shape = RoundedCornerShape(14.dp), color = AppSurface) {
+                        Row(Modifier.fillMaxWidth().padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(if (state.useSwipeNavigation) "从底部上滑，展开全部功能" else "底部切换常用页面，“菜单”内查看全部功能",
+                                color = AppTextMuted, fontSize = 11.sp, modifier = Modifier.weight(1f))
+                            IconButton(onClick = onDismissNavigationGuide) { Icon(Icons.Default.Close, "收起导航提示", modifier = Modifier.size(16.dp)) }
+                        }
+                    }
+                }
                 Spacer(Modifier.height(6.dp))
                 UpdatedScoresOverview(snapshot)
                 GradeOverview(snapshot)
                 HomeB30ImageSection(
+                    label = bRankingLabel(state.timeRewindMode),
                     image = state.imageFile,
                     generatingB30 = state.isGeneratingB30Image,
-                    generatingP30 = state.isGeneratingP30Image,
+                    generatingP30 = !state.timeRewindMode && state.isGeneratingP30Image,
                     b30ElapsedSeconds = state.b30ImageGenerationElapsedSeconds,
                     p30ElapsedSeconds = state.p30ImageGenerationElapsedSeconds,
                     onOpenImage = onOpenImage,
@@ -2353,6 +2531,7 @@ private fun HomePage(state: AppUiState, onRefresh: () -> Unit, onOpenImage: () -
 
 @Composable
 private fun HomeB30ImageSection(
+    label: String,
     image: File?,
     generatingB30: Boolean,
     generatingP30: Boolean,
@@ -2363,16 +2542,16 @@ private fun HomeB30ImageSection(
     val generating = generatingB30 || generatingP30
     if (!generating && image?.exists() != true) return
     val generatingLabel = when {
-        generatingB30 && generatingP30 -> "B30 和 P30"
+        generatingB30 && generatingP30 -> "$label 和 P30"
         generatingP30 -> "P30"
-        else -> "B30"
+        else -> label
     }
     val elapsedSeconds = maxOf(
         b30ElapsedSeconds.takeIf { generatingB30 } ?: 0,
         p30ElapsedSeconds.takeIf { generatingP30 } ?: 0,
     )
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("B30 成绩图", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        Text("$label 成绩图", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         if (generating) {
             Card(colors = CardDefaults.cardColors(containerColor = AppSurface), shape = RoundedCornerShape(10.dp)) {
                 Row(
@@ -2393,7 +2572,7 @@ private fun HomeB30ImageSection(
                     .data(image)
                     .memoryCacheKey("home-b30-${image.lastModified()}-${image.length()}")
                     .build(),
-                contentDescription = "B30 成绩图",
+                contentDescription = "$label 成绩图",
                 modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(AppSurface)
                     .clickable(onClick = onOpenImage),
                 contentScale = ContentScale.FillWidth,
@@ -2570,10 +2749,10 @@ internal fun scoreUpdateText(score: ScoreSnapshotEntry): String = buildList {
 }.joinToString(" · ").ifBlank { "成绩已更新" }
 
 @Composable
-private fun PlayerOverviewPanel(snapshot: B30Snapshot, offline: Boolean, rksDelta: Double?, rksDeltaEvent: Long) {
+private fun PlayerOverviewPanel(snapshot: B30Snapshot, offline: Boolean, rksDelta: Double?, rksDeltaEvent: Long, timeRewindMode: Boolean = false, rksFrom: Double? = null, p30From: Double? = null,
+    onOpenRksTrend: () -> Unit = {}, showRksTrendGuide: Boolean = false) {
     val profile = snapshot.playerProfile
     val playerName = profile?.nickname?.takeIf(String::isNotBlank) ?: "Phigros Player"
-    val p30Rks = remember(snapshot.scoreRecords) { calculateP30Rks(snapshot.scoreRecords) }
     Column(
         Modifier.fillMaxWidth().padding(vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
@@ -2583,7 +2762,7 @@ private fun PlayerOverviewPanel(snapshot: B30Snapshot, offline: Boolean, rksDelt
             Column(Modifier.weight(1f).padding(start = 11.dp)) {
                 Text(playerName, fontSize = 17.sp, fontWeight = FontWeight.Medium,
                     maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(if (offline) "离线数据" else "已同步", color = AppTextMuted, fontSize = 11.sp)
+                Text(if (timeRewindMode) "时间回溯" else if (offline) "离线数据" else "已同步", color = AppTextMuted, fontSize = 11.sp)
             }
         }
         Column {
@@ -2596,9 +2775,24 @@ private fun PlayerOverviewPanel(snapshot: B30Snapshot, offline: Boolean, rksDelt
                     showDelta = false
                 }
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                AnimatedRksNumber(snapshot.totalRks,
-                    color = AppAccent, fontSize = 46.sp, lineHeight = 56.sp, fontWeight = FontWeight.Medium)
+            val rksInteraction = remember { MutableInteractionSource() }
+            Row(Modifier.appPressMotion(rksInteraction)
+                .clickable(interactionSource = rksInteraction, indication = null, enabled = !timeRewindMode,
+                    onClickLabel = "查看 RKS 趋势图", onClick = onOpenRksTrend)
+                .testTag("overview-rks-entry"), verticalAlignment = Alignment.CenterVertically) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(Modifier.rksTrendGlow(showRksTrendGuide && !timeRewindMode)) {
+                        AnimatedRksNumber(snapshot.totalRks, initialValue = rksFrom, animateDecrease = true,
+                            color = AppAccent, fontSize = 46.sp, lineHeight = 56.sp, fontWeight = FontWeight.Medium)
+                    }
+                    if (!timeRewindMode) {
+                        AnimatedVisibility(visible = showRksTrendGuide,
+                            enter = fadeIn(appTween(220)) + expandVertically(appTween(260)),
+                            exit = fadeOut(appTween(160)) + shrinkVertically(appTween(240))) {
+                            RksTrendGuide()
+                        }
+                    }
+                }
                 AnimatedVisibility(
                     visible = showDelta,
                     enter = fadeIn(appTween(220)) + slideInHorizontally(appTween(360)) { it / 2 } + scaleIn(appSpring(), initialScale = .72f),
@@ -2616,9 +2810,10 @@ private fun PlayerOverviewPanel(snapshot: B30Snapshot, offline: Boolean, rksDelt
             }
         }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
+            if (!timeRewindMode) Column(Modifier.weight(1f)) {
                 Text("P30 RKS", color = AppTextMuted, fontSize = 11.sp)
-                AnimatedRksNumber(p30Rks,
+                val p30Rks = remember(snapshot.scoreRecords) { calculateP30Rks(snapshot.scoreRecords) }
+                AnimatedRksNumber(p30Rks, initialValue = p30From, animateDecrease = true,
                     fontSize = 22.sp, lineHeight = 30.sp, fontWeight = FontWeight.Medium)
             }
             Column(horizontalAlignment = Alignment.End) {
@@ -2807,14 +3002,14 @@ private fun GradeMetric(label: String, count: Int, modifier: Modifier = Modifier
 }
 
 @Composable
-private fun B30Page(state: AppUiState, onRefresh: () -> Unit) {
+private fun B30Page(state: AppUiState, onRefresh: () -> Unit, onOpenImagePage: () -> Unit) {
     val snapshot = state.snapshot
-    var selectedTab by rememberSaveable { mutableStateOf(0) }
+    var selectedTab by rememberSaveable(state.timeRewindMode) { mutableStateOf(0) }
     var bestNText by rememberSaveable { mutableStateOf("30") }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     Column(Modifier.fillMaxSize()) {
-        PageHeader("成绩", subtitleContent = {
+        PageHeader(if (state.timeRewindMode) "B19" else "成绩", subtitleContent = {
             snapshot?.let {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("RKS ", color = AppTextMuted, fontSize = 12.sp)
@@ -2824,7 +3019,7 @@ private fun B30Page(state: AppUiState, onRefresh: () -> Unit) {
         }) {
             IconButton(onClick = onRefresh, enabled = !state.isLoading) { RefreshIcon(state.isLoading) }
         }
-        BoxWithConstraints(
+        if (!state.timeRewindMode) BoxWithConstraints(
             Modifier.padding(horizontal = AppPageHorizontalPadding).fillMaxWidth()
                 .clip(RoundedCornerShape(12.dp)).background(AppSurfaceRaised).padding(4.dp),
         ) {
@@ -2848,7 +3043,7 @@ private fun B30Page(state: AppUiState, onRefresh: () -> Unit) {
                 Modifier.fillMaxWidth().selectableGroup(),
                 horizontalArrangement = Arrangement.spacedBy(tabGap),
             ) {
-                listOf("B30", "Best N", "P30").forEachIndexed { index, title ->
+                listOf(bRankingLabel(state.timeRewindMode), "Best N", "P30").forEachIndexed { index, title ->
                     val selected = selectedTab == index
                     val interactionSource = remember { MutableInteractionSource() }
                     val labelColor by animateColorAsState(
@@ -2874,14 +3069,42 @@ private fun B30Page(state: AppUiState, onRefresh: () -> Unit) {
                 }
             }
         }
+        val imageButtonInteraction = remember { MutableInteractionSource() }
+        Button(
+            onClick = onOpenImagePage,
+            modifier = Modifier.padding(horizontal = AppPageHorizontalPadding).fillMaxWidth()
+                .padding(top = 10.dp, bottom = 12.dp)
+                .appPressMotion(imageButtonInteraction, pressedScale = .975f),
+            interactionSource = imageButtonInteraction,
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = AppAccent,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+            ),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 13.dp),
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(if (state.timeRewindMode) "查看 B19 图片" else "查看图片BP30", fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.width(4.dp))
+                Icon(Icons.Default.ChevronRight, contentDescription = null, modifier = Modifier.size(19.dp))
+            }
+        }
         if (snapshot == null) {
             EmptyState("暂无成绩", "刷新后显示最新存档", onRefresh)
         } else {
             val requestedN = bestNText.toIntOrNull()?.coerceAtLeast(0) ?: 0
-            val bestCharts = remember(snapshot.scoreRecords, requestedN) {
-                selectBestCharts(snapshot.scoreRecords, requestedN)
+            val bestCharts = remember(snapshot.scoreRecords, requestedN, state.timeRewindMode) {
+                if (state.timeRewindMode) emptyList() else selectBestCharts(snapshot.scoreRecords, requestedN)
             }
-            val perfectCharts = remember(snapshot.scoreRecords) { selectPerfectCharts(snapshot.scoreRecords) }
+            val perfectCharts = remember(snapshot.scoreRecords, state.timeRewindMode) {
+                if (state.timeRewindMode) emptyList() else selectPerfectCharts(snapshot.scoreRecords)
+            }
             LaunchedEffect(selectedTab) { listState.scrollToItem(0) }
             Box(Modifier.weight(1f)) {
                 LazyColumn(
@@ -2890,13 +3113,13 @@ private fun B30Page(state: AppUiState, onRefresh: () -> Unit) {
                         top = 12.dp, bottom = 64.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    when (selectedTab) {
+                    when (if (state.timeRewindMode) 0 else selectedTab) {
                         0 -> {
                             val ap = snapshot.items.filter { it.section == "AP" }
                             val best = snapshot.items.filter { it.section == "BEST" }
-                            item { SectionLabel("P3") }
+                            item { SectionLabel(if (state.timeRewindMode) "P1" else "P3") }
                             itemsIndexed(ap, key = { i, it -> "ap-$i-${it.songId}" }) { _, item -> B30Row(item) }
-                            item { SectionLabel("Best 27") }
+                            item { SectionLabel(if (state.timeRewindMode) "Best 19" else "Best 27") }
                             itemsIndexed(best, key = { i, it -> "best-$i-${it.songId}" }) { _, item -> B30Row(item) }
                         }
                         1 -> {
@@ -3909,36 +4132,44 @@ private fun pushAccLabel(pushAcc: Double?, pushAccHint: String?): String? = when
 }
 
 @Composable
-private fun ImagePage(
+internal fun ImagePage(
     state: AppUiState,
     onGenerateB30Image: () -> Unit,
     onGenerateP30Image: () -> Unit,
+    onGenerateBestNImage: (Int) -> Unit,
     onOpenDrawer: () -> Unit,
     onDismissGuide: () -> Unit,
 ) {
     val context = LocalContext.current
-    val pagerState = rememberPagerState(pageCount = { 2 })
-    var actionPage by remember { mutableStateOf<Int?>(null) }
-    var zoomPage by remember { mutableStateOf<Int?>(null) }
+    val pagerState = rememberPagerState(pageCount = { if (state.timeRewindMode) 1 else 3 })
+    var actionPage by remember(state.timeRewindMode) { mutableStateOf<Int?>(null) }
+    var zoomPage by remember(state.timeRewindMode) { mutableStateOf<Int?>(null) }
     val actionImage = when (actionPage) {
         0 -> state.imageFile
         1 -> state.p30ImageFile
+        2 -> state.bestNImageFile
         else -> null
     }
-    val actionLabel = if (actionPage == 1) "P30" else "B30"
+    val actionLabel = when (actionPage) {
+        1 -> "P30"
+        2 -> "Best${state.generatedBestNCount}"
+        else -> bRankingLabel(state.timeRewindMode)
+    }
     val saveScope = rememberCoroutineScope()
+    var pendingGalleryImage by remember { mutableStateOf<Pair<File, String>?>(null) }
     val density = LocalDensity.current
     val drawerSwipeThreshold = with(density) { 56.dp.toPx() }
     val drawerEdgeWidth = with(density) { 40.dp.toPx() }
     val saveCurrentImage: () -> Unit = {
-        actionImage?.takeIf(File::exists)?.let { source ->
+        pendingGalleryImage?.let { (source, label) ->
+            pendingGalleryImage = null
             saveScope.launch {
                 val result = withContext(Dispatchers.IO) {
                     runCatching {
                         saveB30ImageToGallery(
                             context,
                             source,
-                            "Phi-$actionLabel-${System.currentTimeMillis()}.png",
+                            "Phi-$label-${System.currentTimeMillis()}.png",
                         )
                     }
                 }
@@ -3954,11 +4185,16 @@ private fun ImagePage(
         contract = ActivityResultContracts.RequestPermission(),
     ) { granted ->
         if (granted) saveCurrentImage()
-        else Toast.makeText(context, "需要存储权限才能保存到相册", Toast.LENGTH_SHORT).show()
+        else {
+            pendingGalleryImage = null
+            Toast.makeText(context, "需要存储权限才能保存到相册", Toast.LENGTH_SHORT).show()
+        }
     }
 
-    LaunchedEffect(state.showImagePagerGuide) {
-        if (state.showImagePagerGuide) {
+    LaunchedEffect(state.showImagePagerGuide, state.timeRewindMode) {
+        if (state.timeRewindMode) {
+            pagerState.scrollToPage(0)
+        } else if (state.showImagePagerGuide) {
             delay(500)
             if (pagerState.currentPage == 0) {
                 pagerState.animateScrollToPage(1, animationSpec = appTween(650))
@@ -3972,9 +4208,13 @@ private fun ImagePage(
 
     Column(Modifier.fillMaxSize()) {
         PageHeader("成绩图片")
+        if (!state.timeRewindMode) RankingImageTabs(pagerState) { page ->
+            saveScope.launch { pagerState.animateScrollToPage(page, animationSpec = appTween(320)) }
+        }
         Box(
             Modifier
                 .weight(1f)
+                .fillMaxWidth()
                 .pointerInput(pagerState, onOpenDrawer, drawerSwipeThreshold, drawerEdgeWidth) {
                     awaitEachGesture {
                         val down = awaitFirstDown(
@@ -3982,13 +4222,15 @@ private fun ImagePage(
                             pass = PointerEventPass.Initial,
                         )
                         val start = down.position
+                        val drawerGesture = pagerState.currentPage == 0 &&
+                            !pagerState.isScrollInProgress && start.x <= drawerEdgeWidth
                         while (true) {
                             val event = awaitPointerEvent(PointerEventPass.Initial)
                             val change = event.changes.firstOrNull { it.id == down.id } ?: break
                             if (!change.pressed) break
                             val delta = change.position - start
                             if (
-                                (pagerState.currentPage == 0 || start.x <= drawerEdgeWidth) &&
+                                drawerGesture &&
                                 delta.x >= drawerSwipeThreshold &&
                                 delta.x > abs(delta.y) * 1.25f
                             ) {
@@ -4002,11 +4244,22 @@ private fun ImagePage(
         ) {
             HorizontalPager(
                 state = pagerState,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().testTag("ranking-image-pager"),
+                userScrollEnabled = !state.timeRewindMode,
             ) { page ->
+                if (state.timeRewindMode && page != 0) return@HorizontalPager
+                if (page == 2) {
+                    BestNImagePanel(
+                        state = state,
+                        onGenerate = onGenerateBestNImage,
+                        onZoom = { zoomPage = page },
+                        onActions = { actionPage = page },
+                    )
+                    return@HorizontalPager
+                }
                 val isP30 = page == 1
                 RankingImagePanel(
-                    label = if (isP30) "P30" else "B30",
+                    label = if (isP30) "P30" else bRankingLabel(state.timeRewindMode),
                     image = if (isP30) state.p30ImageFile else state.imageFile,
                     isGenerating = if (isP30) state.isGeneratingP30Image else state.isGeneratingB30Image,
                     elapsedSeconds = if (isP30) {
@@ -4019,14 +4272,14 @@ private fun ImagePage(
                     onActions = { actionPage = page },
                 )
             }
-            if (state.showImagePagerGuide) {
+            if (state.showImagePagerGuide && !state.timeRewindMode) {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = AppAccent.copy(alpha = .94f)),
                     shape = RoundedCornerShape(20.dp),
                     modifier = Modifier.align(Alignment.TopCenter),
                 ) {
                     Text(
-                        "滑动切换 B30 / P30",
+                        "滑动切换 B30 / P30 / Best N",
                         color = Color.White,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
@@ -4034,11 +4287,11 @@ private fun ImagePage(
                 }
             }
         }
-        Row(
+        if (!state.timeRewindMode) Row(
             modifier = Modifier.fillMaxWidth().padding(bottom = 14.dp),
             horizontalArrangement = Arrangement.Center,
         ) {
-            repeat(2) { page ->
+            repeat(pagerState.pageCount) { page ->
                 Box(
                     Modifier
                         .padding(horizontal = 4.dp)
@@ -4057,6 +4310,7 @@ private fun ImagePage(
             confirmButton = {
                 Button(
                     onClick = {
+                        pendingGalleryImage = actionImage to actionLabel
                         actionPage = null
                         if (
                             Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
@@ -4080,9 +4334,17 @@ private fun ImagePage(
             },
         )
     }
-    val zoomImage = if (zoomPage == 1) state.p30ImageFile else state.imageFile
+    val zoomImage = when (zoomPage) {
+        1 -> state.p30ImageFile
+        2 -> state.bestNImageFile
+        else -> state.imageFile
+    }
     if (zoomPage != null && zoomImage?.exists() == true) {
-        val zoomLabel = if (zoomPage == 1) "P30" else "B30"
+        val zoomLabel = when (zoomPage) {
+            1 -> "P30"
+            2 -> "Best ${state.generatedBestNCount}"
+            else -> bRankingLabel(state.timeRewindMode)
+        }
         ZoomableB30ImageDialog(
             image = zoomImage,
             onDismiss = { zoomPage = null },
@@ -4341,7 +4603,7 @@ private fun ExperienceSurveyDialog(onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun SettingsPage(
+internal fun SettingsPage(
     state: AppUiState,
     onClearCache: () -> Unit,
     onThemeChange: (Boolean) -> Unit,
@@ -4357,6 +4619,8 @@ private fun SettingsPage(
     onRevealSessionToken: () -> Unit,
     onHideSessionToken: () -> Unit,
     onLogout: () -> Unit,
+    onStartTimeRewind: () -> Unit = {},
+    onExitTimeRewind: () -> Unit = {},
 ) {
     var confirmLogout by remember { mutableStateOf(false) }
     var confirmRevealSessionToken by rememberSaveable { mutableStateOf(false) }
@@ -4365,8 +4629,6 @@ private fun SettingsPage(
     var showAbout by remember { mutableStateOf(false) }
     var showPracticeResources by remember { mutableStateOf(false) }
     val context = LocalContext.current
-    val noiseSettings = remember(context) { PracticeNoiseSettings(context) }
-    var noiseCompatibilityMode by remember { mutableStateOf(noiseSettings.compatibilityMode) }
     val feedbackUnread by FeedbackNotificationManager.observeInAppUnread(context).collectAsState()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         PageHeader("设置", BuildConfig.VERSION_NAME)
@@ -4393,20 +4655,14 @@ private fun SettingsPage(
                 onEnabledChange = onAutoUpdateChange,
                 onCheckUpdate = onCheckUpdate,
             )
-            SettingCard(
+            if (!state.timeRewindMode) SettingCard(
                 Icons.Default.FolderOpen,
                 "谱面资源管理",
                 "查看与删除已下载的谱面",
                 onClick = { showPracticeResources = true },
             )
             }
-            SettingsSectionLabel("谱面播放")
-            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(AppSurface)) {
-                NoiseCompatibilitySetting(noiseCompatibilityMode) { enabled ->
-                    noiseSettings.setCompatibilityMode(enabled)
-                    noiseCompatibilityMode = enabled
-                }
-            }
+            if (!state.timeRewindMode) {
             SettingsSectionLabel("反馈")
             Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(AppSurface)) {
                 SettingCard(Icons.Default.RateReview, "提交反馈", "问题与建议", onClick = { FeedbackNavigation.destination.value = "create" })
@@ -4417,6 +4673,7 @@ private fun SettingsPage(
                     onClick = { FeedbackNavigation.destination.value = "mine" },
                     hasUnread = feedbackUnread > 0,
                 )
+            }
             }
             SettingsSectionLabel("账户与信息")
             Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(AppSurface)) {
@@ -4451,12 +4708,20 @@ private fun SettingsPage(
                 "开源许可与项目源码",
                 onClick = { showAbout = true },
             )
-            SettingCard(
+            if (!state.timeRewindMode) SettingCard(
                 Icons.Default.RateReview,
                 "体验问卷",
                 null,
                 onClick = onOpenSurvey,
             )
+            }
+            OutlinedButton(
+                onClick = if (state.timeRewindMode) onExitTimeRewind else onStartTimeRewind,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Default.History, null)
+                Spacer(Modifier.width(8.dp))
+                Text(if (state.timeRewindMode) "退出时间回溯" else "时间回溯")
             }
             OutlinedButton(onClick = onClearCache, modifier = Modifier.fillMaxWidth()) {
                 Icon(Icons.Default.Cached, null)
@@ -4479,6 +4744,7 @@ private fun SettingsPage(
                 modifier = Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 20.dp),
                 textAlign = TextAlign.Center,
             )
+
         }
     }
     if (showChangelog) {
@@ -4563,7 +4829,7 @@ private fun SettingsPage(
         AlertDialog(
             onDismissRequest = { confirmLogout = false },
             title = { Text("确认退出登录？") },
-            text = { Text("本机保存的安全会话、B30 数据和图片缓存都会被删除。") },
+            text = { Text("本机保存的安全会话、${bRankingLabel(state.timeRewindMode)} 数据和图片缓存都会被删除。") },
             confirmButton = {
                 Button(
                     onClick = { confirmLogout = false; onLogout() },
@@ -4622,7 +4888,7 @@ private fun B30ImageStyleSetting(
 ) {
     var expanded by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth()) {
-        CompactSettingRow("B30 / P30 样式") {
+        CompactSettingRow("成绩图片样式") {
             TextButton(onClick = { expanded = !expanded }, modifier = Modifier.fillMaxWidth()) {
                 Text(b30ImageStyleLabel(style), modifier = Modifier.weight(1f), textAlign = TextAlign.End, fontSize = 13.sp)
                 Icon(Icons.Default.ExpandMore, "展开样式列表", modifier = Modifier.padding(start = 8.dp).size(18.dp))
@@ -4681,7 +4947,7 @@ private fun constantDifficultyBit(difficulty: String): Int = when (difficulty.up
     else -> 0
 }
 
-private fun b30ImageStyleLabel(style: B30ImageStyle): String = when (style) {
+internal fun b30ImageStyleLabel(style: B30ImageStyle): String = when (style) {
     B30ImageStyle.CLASSIC -> "经典"
     B30ImageStyle.MINIMAL -> "简约"
     B30ImageStyle.PHI_PLUGIN -> "Phi-Plugin"
@@ -4733,20 +4999,6 @@ private fun AutoRefreshSetting(enabled: Boolean, onEnabledChange: (Boolean) -> U
                 modifier = Modifier.padding(start = 12.dp),
             )
         }
-    }
-}
-
-@Composable
-private fun NoiseCompatibilitySetting(enabled: Boolean, onEnabledChange: (Boolean) -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text("噪域兼容模式", fontWeight = FontWeight.Medium, fontSize = 14.sp)
-            Text("使用旧版噪域样式", color = AppTextMuted, fontSize = 12.sp)
-        }
-        Switch(checked = enabled, onCheckedChange = onEnabledChange, modifier = Modifier.padding(start = 12.dp))
     }
 }
 
@@ -5430,6 +5682,56 @@ internal fun shareImage(
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
     context.startActivity(Intent.createChooser(intent, chooserTitle))
+}
+
+private suspend fun saveLoginQrToGallery(context: Context, qrSvg: ByteArray) {
+    withContext(Dispatchers.IO) {
+        val bitmapSize = 1_024
+        val imageLoader = ImageLoader.Builder(context.applicationContext)
+            .components { add(SvgDecoder.Factory()) }
+            .build()
+        val bitmap = try {
+            val request = ImageRequest.Builder(context.applicationContext)
+                .data(qrSvg)
+                .size(bitmapSize, bitmapSize)
+                .allowHardware(false)
+                .build()
+            val result = imageLoader.execute(request)
+            val drawable = (result as? SuccessResult)?.drawable ?: error("无法解析登录二维码")
+            val rendered = Bitmap.createBitmap(bitmapSize, bitmapSize, Bitmap.Config.ARGB_8888)
+            try {
+                val canvas = AndroidCanvas(rendered)
+                canvas.drawColor(android.graphics.Color.WHITE)
+                val sourceWidth = drawable.intrinsicWidth.coerceAtLeast(1)
+                val sourceHeight = drawable.intrinsicHeight.coerceAtLeast(1)
+                val scale = minOf(bitmapSize.toFloat() / sourceWidth, bitmapSize.toFloat() / sourceHeight)
+                val drawWidth = (sourceWidth * scale).roundToInt().coerceAtLeast(1)
+                val drawHeight = (sourceHeight * scale).roundToInt().coerceAtLeast(1)
+                val left = (bitmapSize - drawWidth) / 2
+                val top = (bitmapSize - drawHeight) / 2
+                drawable.setBounds(left, top, left + drawWidth, top + drawHeight)
+                drawable.draw(canvas)
+                rendered
+            } catch (error: Throwable) {
+                rendered.recycle()
+                throw error
+            }
+        } finally {
+            imageLoader.shutdown()
+        }
+
+        val fileName = "Phi-TapTap-Login-${System.currentTimeMillis()}.png"
+        val temporaryFile = File(context.cacheDir, fileName)
+        try {
+            temporaryFile.outputStream().buffered().use { output ->
+                check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) { "无法生成登录二维码图片" }
+            }
+            saveB30ImageToGallery(context, temporaryFile, fileName)
+        } finally {
+            bitmap.recycle()
+            temporaryFile.delete()
+        }
+    }
 }
 
 @Suppress("DEPRECATION")

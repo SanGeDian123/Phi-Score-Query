@@ -92,6 +92,9 @@ pub async fn render_bn_user(
 
     let (mut req, bearer_state) =
         crate::session_auth::parse_json_with_bearer_state::<RenderUserBnRequest>(request).await?;
+    if req.scores.len() > super::super::types::MAX_BEST_N as usize {
+        return Err(AppError::Validation(format!("scores 条数超过上限: {} > 200", req.scores.len())));
+    }
     crate::session_auth::merge_auth_from_bearer_if_missing(
         state.stats_storage.as_ref(),
         &bearer_state,
@@ -247,12 +250,12 @@ pub async fn render_bn_user(
     let fmt_code = output.fmt_code;
     let public_illustration_base_url = output.public_illustration_base_url;
     // 等待许可与渲染分段计时
-    let _render_permit = acquire_render_permit(&state).await?;
+    let render_permit = acquire_render_permit(&state).await?;
 
     // SVG 生成会触发磁盘 IO/图片解码/目录索引等阻塞操作，必须移出 tokio worker。
     let svg_options = SvgRenderOptions::from_query(public_illustration_base_url, &q);
     let records_for_sig = records.clone();
-    let svg = spawn_blocking_svg_generation(move || {
+    let svg = spawn_blocking_svg_generation(&render_permit, move || {
         renderer::generate_svg_string(
             &records,
             &stats,
@@ -301,7 +304,7 @@ pub async fn render_bn_user(
         (signed, line)
     };
 
-    let (bytes, content_type) = render_svg_output_bytes(signed_svg, fmt_code, implicit, &q).await?;
+    let (bytes, content_type) = render_svg_output_bytes(signed_svg, fmt_code, implicit, &q, &render_permit).await?;
 
     // 统计：用户自报 BestN 图片生成
     if let Some(stats_handle) = state.stats.as_ref() {

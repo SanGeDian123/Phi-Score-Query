@@ -36,6 +36,9 @@ pub(super) fn generate_svg_string<S>(
 where
     S: std::hash::BuildHasher,
 {
+    if template_id == Some("phi-plugin") && stats.custom_footer_text.as_deref().is_some_and(|f| f.ends_with("时间回溯模式，仅供娱乐")) {
+        return super::phi_plugin_legacy::generate(scores, stats, push_acc_map, *theme, embed_images, public_illustration_base_url);
+    }
     if template_id == Some("phi-plugin") {
         return phi_plugin::generate_phi_plugin_svg(
             scores,
@@ -77,7 +80,12 @@ where
         total_height,
         palette.normal_card_stroke_color.clone(),
     );
-    let background_image_href = background.image_href;
+    let prepared_background = if total_height > 2048 {
+        background.source_path.as_deref().and_then(|path|
+            super::resource_scaled::get_blurred_background_data_uri(path, width, total_height, 10.0))
+    } else { None };
+    let background_is_blurred = prepared_background.is_some();
+    let background_image_href = prepared_background.or(background.image_href);
     let normal_card_stroke_color = background.normal_card_stroke_color;
 
     write_svg_open(&mut svg, width, total_height)?;
@@ -94,6 +102,7 @@ where
         svg: &mut svg,
         theme,
         background_image_href,
+        background_is_blurred,
     })?;
 
     write_header(BnHeaderRenderContext {

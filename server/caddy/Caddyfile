@@ -179,7 +179,9 @@ api.plc-liangpi-cup.xyz {
  /api/v2/leaderboard/rks/by-rank \
  /api/v2/leaderboard/rks/me \
  /api/v2/save \
+ /api/v2/rks/history \
   /api/v2/image/bn \
+  /api/v2/image/bestn \
   /api/v2/image/p30 \
   /api/v2/image/bn/user
 	handle @allowed {

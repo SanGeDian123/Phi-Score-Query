@@ -82,6 +82,7 @@ impl Modify for ApiServers {
         crate::features::song::handler::get_song_catalog,
         crate::features::song::handler::get_chart_achievement_rates,
         crate::features::image::handler::bn::render_bn,
+        crate::features::image::handler::bn::render_bestn,
         crate::features::image::handler::p30::render_p30,
         crate::features::image::handler::song::render_song,
         crate::features::image::handler::user_bn::render_bn_user,

@@ -50,12 +50,12 @@ class SongScoreImageRenderer(context: Context) {
         )
     }
 
-    fun cachedFile(songId: String, style: SongScoreImageStyle): File = File(
-        File(appContext.filesDir, SONG_IMAGE_DIR),
+    fun cachedFile(songId: String, style: SongScoreImageStyle, timeRewind: Boolean = false): File = File(
+        File(appContext.filesDir, if (timeRewind) "$SONG_IMAGE_DIR/time-rewind" else SONG_IMAGE_DIR),
         "song-$CACHE_RENDER_VERSION-${style.preferenceValue}-${stableKey(songId)}.png",
     )
 
-    suspend fun render(song: SongScoreResult, style: SongScoreImageStyle): File = withContext(Dispatchers.IO) {
+    suspend fun render(song: SongScoreResult, style: SongScoreImageStyle, timeRewind: Boolean = false): File = withContext(Dispatchers.IO) {
         val artwork = loadBitmap(
             urls = listOf(illustrationUrl(song.songId), fallbackIllustrationUrl(song.songId)),
             memoryCacheKey = "song-score-art-${song.songId}",
@@ -72,7 +72,7 @@ class SongScoreImageRenderer(context: Context) {
         }
         val canvas = Canvas(image)
         if (style == SongScoreImageStyle.DEFAULT) {
-            drawModernDesign(canvas, song, artwork)
+            drawModernDesign(canvas, song, artwork, timeRewind)
         } else {
             drawBackground(canvas, artwork)
             canvas.save()
@@ -83,11 +83,11 @@ class SongScoreImageRenderer(context: Context) {
             drawDesignArtwork(canvas, artwork)
             drawDesignDifficultyRows(canvas, song)
             canvas.restore()
-            drawWatermark(canvas)
+            drawWatermark(canvas, timeRewind)
         }
         chapterArtwork?.recycle()
 
-        val target = cachedFile(song.songId, style)
+        val target = cachedFile(song.songId, style, timeRewind)
         target.parentFile?.mkdirs()
         val temporary = File(target.parentFile, "${target.name}.tmp")
         FileOutputStream(temporary).use { output ->
@@ -134,7 +134,7 @@ class SongScoreImageRenderer(context: Context) {
         return null
     }
 
-    private fun drawModernDesign(canvas: Canvas, song: SongScoreResult, artwork: Bitmap?) {
+    private fun drawModernDesign(canvas: Canvas, song: SongScoreResult, artwork: Bitmap?, timeRewind: Boolean) {
         canvas.drawColor(Color.rgb(25, 25, 28))
         if (artwork != null) {
             drawCover(
@@ -149,7 +149,7 @@ class SongScoreImageRenderer(context: Context) {
         drawModernSongInfo(canvas, song)
         drawModernScoreCards(canvas, song)
         canvas.drawText(
-            "Phi Score Query · ${BuildConfig.VERSION_NAME}",
+            "Phi Score Query · ${BuildConfig.VERSION_NAME}" + if (timeRewind) " · 时间回溯模式，仅供娱乐" else "",
             2_490f,
             1_425f,
             textPaint(Color.argb(185, 255, 255, 255), 19f).apply { textAlign = Paint.Align.RIGHT },
@@ -562,9 +562,9 @@ class SongScoreImageRenderer(context: Context) {
         }
     }
 
-    private fun drawWatermark(canvas: Canvas) {
+    private fun drawWatermark(canvas: Canvas, timeRewind: Boolean) {
         canvas.drawText(
-            "Phi Score Query · ${BuildConfig.VERSION_NAME}",
+            "Phi Score Query · ${BuildConfig.VERSION_NAME}" + if (timeRewind) " · 时间回溯模式，仅供娱乐" else "",
             1_970f,
             943f,
             textPaint(Color.argb(175, 28, 41, 50), 15f).apply { textAlign = Paint.Align.RIGHT },

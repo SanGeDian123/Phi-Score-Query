@@ -17,11 +17,14 @@ use super::bn_background::select_random_background;
 use super::bn_card_acc::{pre_calculated_push_acc_for_score, resolve_push_acc_hint};
 use super::bn_card_cover::resolve_card_cover_href;
 use super::resources::get_scaled_image_data_uri;
+use super::resource_fonts::PHI_PLUGIN_FONT_NAME;
 use super::score::to_engine_record;
 use super::svg_error::svg_fmt_error;
 use super::template_shared::truncate_with_ellipsis;
 use super::text::escape_xml;
 use super::{MAIN_FONT_NAME, PlayerStats, RenderRecord};
+
+mod histogram;
 
 // The upstream Phi-Plugin HTML is authored on a 1200 px canvas. These values
 // intentionally mirror b19.css instead of sharing the dimensions of the other
@@ -48,14 +51,17 @@ where
     S: std::hash::BuildHasher,
 {
     let is_p30 = stats.image_title.eq_ignore_ascii_case("P30");
+    let is_best_n = stats.image_title.starts_with("Best ");
     let custom_p30 = is_p30 && stats.is_user_generated && !stats.ap_top_3_scores.is_empty();
-    let has_ap_section = if is_p30 && !custom_p30 {
+    let has_ap_section = if is_best_n {
+        false
+    } else if is_p30 && !custom_p30 {
         !scores.is_empty()
     } else {
         !stats.ap_top_3_scores.is_empty()
     };
     let main_y = if has_ap_section { 300.0 } else { 175.0 };
-    let core_count = scores.len().min(27);
+    let core_count = if is_best_n { scores.len() } else { scores.len().min(27) };
     let overflow_count = scores.len().saturating_sub(core_count);
     let core_rows = core_count.div_ceil(3);
     let overflow_rows = overflow_count.div_ceil(3);
@@ -67,7 +73,11 @@ where
     } else {
         main_y + core_rows as f64 * CARD_STEP_Y
     };
-    let total_height = (content_bottom + 45.0).ceil().max(520.0) as u32;
+    let histogram = (!is_p30 && !is_best_n)
+        .then(|| histogram::RksHistogram::new(&stats.ap_top_3_scores, scores))
+        .flatten();
+    let analysis_height = histogram.as_ref().map_or(0.0, |_| histogram::HEIGHT + 45.0);
+    let total_height = (content_bottom + analysis_height + 45.0).ceil().max(520.0) as u32;
     let palette = rank_palette(
         stats
             .challenge_rank
@@ -84,6 +94,12 @@ where
         total_height,
         "#ffffff".to_string(),
     );
+    let prepared_background = if total_height > 2048 {
+        background.source_path.as_deref().and_then(|path| {
+            super::resource_scaled::get_blurred_background_data_uri(path, 1440,
+                (f64::from(total_height) * 1.2).round() as u32, 20.0)
+        })
+    } else { None };
 
     let mut svg = String::with_capacity(260_000);
     writeln!(
@@ -92,8 +108,12 @@ where
     )
     .map_err(svg_fmt_error)?;
     write_defs(&mut svg)?;
-    write_background(&mut svg, background.image_href.as_deref(), total_height)?;
+    write_background(&mut svg, prepared_background.as_deref().or(background.image_href.as_deref()), total_height, prepared_background.is_some())?;
     write_header(&mut svg, stats, palette)?;
+    if is_best_n {
+        writeln!(svg, r##"<text x="1120" y="167" text-anchor="end" class="data-text">{}</text>"##,
+            escape_xml(&stats.image_title)).map_err(svg_fmt_error)?;
+    }
 
     if has_ap_section {
         let perfect_top = if is_p30 && !custom_p30 {
@@ -137,7 +157,7 @@ where
     }
 
     if overflow_count > 0 {
-        write_overflow_divider(&mut svg, divider_y)?;
+        write_section_divider(&mut svg, divider_y, "OVER FLOW")?;
         for (offset, score) in scores.iter().skip(core_count).enumerate() {
             let col = offset % 3;
             let row = offset / 3;
@@ -155,6 +175,11 @@ where
                 public_illustration_base_url,
             )?;
         }
+    }
+
+    if let Some(histogram) = histogram {
+        write_section_divider(&mut svg, content_bottom - 20.0, "B30 数据分析")?;
+        histogram.write_svg(&mut svg, content_bottom + 45.0)?;
     }
 
     let footer = stats
@@ -177,34 +202,13 @@ fn write_defs(svg: &mut String) -> Result<(), AppError> {
         svg,
         r##"<defs>
 <linearGradient id="phi-bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#111822"/><stop offset=".52" stop-color="#202a34"/><stop offset="1" stop-color="#0a1118"/></linearGradient>
-<linearGradient id="image-veil" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#030609" stop-opacity=".38"/><stop offset=".5" stop-color="#071017" stop-opacity=".16"/><stop offset="1" stop-color="#020407" stop-opacity=".34"/></linearGradient>
 <linearGradient id="cover-placeholder" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#39464d"/><stop offset=".5" stop-color="#12191d"/><stop offset="1" stop-color="#050708"/></linearGradient>
-<filter id="background-blur" x="-15%" y="-10%" width="130%" height="120%"><feGaussianBlur stdDeviation="24"/></filter>
-<filter id="card-shadow" x="-30%" y="-35%" width="165%" height="180%"><feDropShadow dx="2" dy="4" stdDeviation="5" flood-color="#000" flood-opacity=".5"/></filter>
-<filter id="card-edge-halo" x="-40%" y="-85%" width="190%" height="270%" color-interpolation-filters="sRGB">
-  <feMorphology in="SourceAlpha" operator="dilate" radius=".8" result="halo-edge"/>
-  <feGaussianBlur in="halo-edge" stdDeviation="5.5" result="halo-near-blur"/>
-  <feGaussianBlur in="halo-edge" stdDeviation="14" result="halo-wide-blur"/>
-  <feFlood flood-color="#fff" flood-opacity=".55" result="halo-near-color"/>
-  <feFlood flood-color="#fff" flood-opacity=".34" result="halo-wide-color"/>
-  <feComposite in="halo-near-color" in2="halo-near-blur" operator="in" result="halo-near"/>
-  <feComposite in="halo-wide-color" in2="halo-wide-blur" operator="in" result="halo-wide"/>
-  <feMerge result="halo-merged"><feMergeNode in="halo-wide"/><feMergeNode in="halo-near"/></feMerge>
-  <feComposite in="halo-merged" in2="SourceAlpha" operator="out"/>
-</filter>
-<filter id="card-edge-halo-gold" x="-40%" y="-85%" width="190%" height="270%" color-interpolation-filters="sRGB">
-  <feMorphology in="SourceAlpha" operator="dilate" radius=".8" result="halo-edge-gold"/>
-  <feGaussianBlur in="halo-edge-gold" stdDeviation="5.5" result="halo-near-blur-gold"/>
-  <feGaussianBlur in="halo-edge-gold" stdDeviation="14" result="halo-wide-blur-gold"/>
-  <feFlood flood-color="#ffd700" flood-opacity=".55" result="halo-near-color-gold"/>
-  <feFlood flood-color="#ffd700" flood-opacity=".34" result="halo-wide-color-gold"/>
-  <feComposite in="halo-near-color-gold" in2="halo-near-blur-gold" operator="in" result="halo-near-gold"/>
-  <feComposite in="halo-wide-color-gold" in2="halo-wide-blur-gold" operator="in" result="halo-wide-gold"/>
-  <feMerge result="halo-merged-gold"><feMergeNode in="halo-wide-gold"/><feMergeNode in="halo-near-gold"/></feMerge>
-  <feComposite in="halo-merged-gold" in2="SourceAlpha" operator="out"/>
-</filter>
-<filter id="icon-glow" x="-70%" y="-70%" width="240%" height="240%"><feDropShadow dx="0" dy="0" stdDeviation="4" flood-color="#fff" flood-opacity=".78"/></filter>
-<filter id="ap-icon-glow" x="-70%" y="-70%" width="240%" height="240%"><feDropShadow dx="0" dy="0" stdDeviation="4" flood-color="#fff700" flood-opacity=".72"/></filter>
+<filter id="background-blur" x="-15%" y="-10%" width="130%" height="120%"><feGaussianBlur stdDeviation="20"/></filter>
+<filter id="card-shadow" x="-35%" y="-50%" width="170%" height="200%" color-interpolation-filters="sRGB"><feDropShadow dx="2" dy="4" stdDeviation="10" flood-color="#000" flood-opacity=".333333"/></filter>
+<filter id="card-edge-halo" filterUnits="userSpaceOnUse" x="101" y="-35" width="285" height="170" color-interpolation-filters="sRGB"><feDropShadow dx="0" dy="0" stdDeviation="10" flood-color="#fff" flood-opacity=".666667"/></filter>
+<filter id="card-edge-halo-gold" filterUnits="userSpaceOnUse" x="101" y="-35" width="285" height="170" color-interpolation-filters="sRGB"><feDropShadow dx="0" dy="0" stdDeviation="10" flood-color="#ffd700" flood-opacity=".666667"/></filter>
+<filter id="section-glow" filterUnits="userSpaceOnUse" x="-35" y="-30" width="1270" height="110" color-interpolation-filters="sRGB"><feDropShadow dx="0" dy="0" stdDeviation="10" flood-color="#fff" flood-opacity=".666667"/></filter>
+<filter id="icon-glow" x="-100%" y="-100%" width="300%" height="300%" color-interpolation-filters="sRGB"><feDropShadow dx="0" dy="0" stdDeviation="10" flood-color="#fff" flood-opacity=".733333"/></filter>
 <style>
 text{{font-family:'{}','Microsoft YaHei',sans-serif;fill:#fff}} .player-name{{font-size:30px}} .meta{{font-size:14px}} .table{{font-size:15px;text-anchor:middle}} .challenge-level{{font-size:27px;text-anchor:middle}} .header-rks{{font-size:20px;fill:#111;text-anchor:middle}} .data-text{{font-size:13px}} .card-title{{font-size:15px;text-anchor:middle}} .score{{font-size:24px;text-anchor:middle}} .acc{{font-size:16px;text-anchor:middle}} .suggest{{font-family:'{}','Microsoft YaHei',sans-serif;font-size:12.5px;font-weight:400;text-anchor:middle}} .rank-tag{{font-size:12px;fill:#111;text-anchor:middle}} .diff-org{{font-size:12px;text-anchor:middle}} .diff-rks{{font-size:13px;text-anchor:middle}} .footer{{font-size:12px;fill:#c8ced1;text-anchor:end}} .overflow{{font-family:'Aldrich','{}',sans-serif;font-size:25px;font-style:italic;letter-spacing:2px;text-anchor:middle}}
 </style></defs>"##,
@@ -219,6 +223,7 @@ fn write_background(
     svg: &mut String,
     image_href: Option<&str>,
     total_height: u32,
+    already_blurred: bool,
 ) -> Result<(), AppError> {
     writeln!(
         svg,
@@ -226,17 +231,19 @@ fn write_background(
     )
     .map_err(svg_fmt_error)?;
     if let Some(href) = image_href {
+        let filter = if already_blurred { "" } else { " filter=\"url(#background-blur)\"" };
         writeln!(
             svg,
-            r##"<image href="{}" x="-60" y="-60" width="1320" height="{}" preserveAspectRatio="xMidYMid slice" filter="url(#background-blur)" opacity=".72"/>"##,
+            r##"<image href="{}" x="-120" y="{:.1}" width="1440" height="{:.1}" preserveAspectRatio="xMidYMid slice"{filter}/>"##,
             escape_xml(href),
-            total_height + 120,
+            -f64::from(total_height) * 0.1,
+            f64::from(total_height) * 1.2,
         )
         .map_err(svg_fmt_error)?;
     }
     writeln!(
         svg,
-        r##"<rect width="100%" height="100%" fill="#030609" opacity=".34"/><rect width="100%" height="100%" fill="url(#image-veil)"/>"##,
+        r##"<rect width="100%" height="100%" fill="#000" opacity=".5"/>"##,
     )
     .map_err(svg_fmt_error)
 }
@@ -254,7 +261,10 @@ fn write_header(
     let level = stats
         .challenge_rank
         .as_ref()
-        .map_or("--", |(_, level)| level.as_str());
+        .map_or("--", |(_, level)| {
+            let level = level.trim_start_matches('0');
+            if level.is_empty() { "0" } else { level }
+        });
     let data = stats
         .data_string
         .as_deref()
@@ -420,7 +430,7 @@ where
         _ => "#ff0000",
     };
     let (info_fill, info_border) = if difficulty == "AT" {
-        ("#ff6670", "#ff3347")
+        ("#f00000", "#ff0000")
     } else {
         ("#00b7f0", "#00b7f0")
     };
@@ -455,34 +465,21 @@ where
         95.0,
     );
     let clip_id = format!("phi-cover-{}-{}", if is_ap_card { "p" } else { "b" }, index);
-    let icon_filter = if grade == "AP" {
-        "ap-icon-glow"
-    } else {
-        "icon-glow"
-    };
     let card_halo_filter = if is_ap_card {
         "card-edge-halo-gold"
-    } else {
+    } else if index < 27 {
         "card-edge-halo"
+    } else {
+        "card-shadow"
     };
 
     writeln!(svg, r##"<g transform="translate({x:.1} {y:.1})">"##).map_err(svg_fmt_error)?;
-
-    // Render the edge glow from a dedicated card silhouette. P1-P3 use the
-    // gold variant; both filters share the same bounds, blur and opacity.
-    // SourceAlpha is removed so no glow is painted inside the score panel or
-    // over its text and icons.
-    writeln!(
-        svg,
-        r##"<g filter="url(#{card_halo_filter})"><path d="M28.476 2.54 H180 L151.524 97.46 H0 Z" fill="#fff"/><rect x="141" y="5" width="204.6" height="90" fill="#fff"/></g>"##
-    )
-    .map_err(svg_fmt_error)?;
 
     // The score panel is the translucent rectangular layer from b19.css. It
     // deliberately overlaps the illustration and has only a right accent line.
     writeln!(
         svg,
-        r##"<g filter="url(#card-shadow)"><rect x="141" y="5" width="204.6" height="90" fill="{info_fill}" fill-opacity=".30"/><path d="M345.6 5 V95" stroke="{info_border}" stroke-width="3"/>"##,
+        r##"<g class="phi-info-panel" filter="url(#{card_halo_filter})"><rect x="141" y="5" width="204.6" height="90" fill="{info_fill}" fill-opacity=".30"/><path d="M345.6 5 V95" stroke="{info_border}" stroke-width="3"/>"##,
     )
     .map_err(svg_fmt_error)?;
     let title_line_gap = title_font_size + 1.0;
@@ -503,7 +500,7 @@ where
     if let Some(icon) = grade_icon_data_uri(grade) {
         writeln!(
             svg,
-            r##"<image href="{}" x="166" y="35" width="40" height="44" preserveAspectRatio="xMidYMid meet" filter="url(#{icon_filter})"/>"##,
+            r##"<image href="{}" x="166.2" y="36.94" width="35.28" height="63" preserveAspectRatio="xMinYMin meet" filter="url(#icon-glow)"/>"##,
             escape_xml(icon),
         )
         .map_err(svg_fmt_error)?;
@@ -528,7 +525,7 @@ where
     // .clip-box: both the left and right edges slope by height*0.3.
     writeln!(
         svg,
-        r##"<path d="M28.476 2.54 H180 L151.524 97.46 H0 Z" fill="url(#cover-placeholder)" filter="url(#card-shadow)"/><clipPath id="{clip_id}"><path d="M28.476 2.54 H180 L151.524 97.46 H0 Z"/></clipPath>"##,
+        r##"<g class="phi-illustration" filter="url(#card-shadow)"><path d="M28.476 2.54 H180 L151.524 97.46 H0 Z" fill="url(#cover-placeholder)"/><clipPath id="{clip_id}"><path d="M28.476 2.54 H180 L151.524 97.46 H0 Z"/></clipPath>"##,
     )
     .map_err(svg_fmt_error)?;
     if let Some(href) = cover_href {
@@ -544,7 +541,7 @@ where
     // parallelograms; their negative margin mirrors the HTML positioning.
     writeln!(
         svg,
-        r##"<path d="M1.08 0 H28.8 L24.12 15.6 H-3.6 Z" fill="#fff"/><text x="12.6" y="12" class="rank-tag">{}</text><path d="M-14.004 68.68 H36 L26.604 100 H-23.4 Z" fill="{difficulty_fill}"/><text x="6.3" y="82.5" class="diff-org">{} {:.1}</text><text x="6.3" y="97" class="diff-rks">{:.2}</text></g>"##,
+        r##"<path d="M1.08 0 H28.8 L24.12 15.6 H-3.6 Z" fill="#fff"/><text x="12.6" y="12" class="rank-tag">{}</text><path d="M-14.004 68.68 H36 L26.604 100 H-23.4 Z" fill="{difficulty_fill}"/><text x="6.3" y="82.5" class="diff-org">{} {:.1}</text><text x="6.3" y="97" class="diff-rks">{:.2}</text></g></g>"##,
         escape_xml(&rank_label),
         escape_xml(&difficulty),
         score.difficulty_value,
@@ -553,40 +550,34 @@ where
     .map_err(svg_fmt_error)
 }
 
-fn write_overflow_divider(svg: &mut String, y: f64) -> Result<(), AppError> {
-    writeln!(svg, r##"<g transform="translate(0 {y:.1})">"##).map_err(svg_fmt_error)?;
+fn write_section_divider(svg: &mut String, y: f64, title: &str) -> Result<(), AppError> {
+    // Browser measurements of the original 1200 px flex row: 456 px side boxes,
+    // space-evenly gaps, 15 px stripes centered in a 30 px row and 5.5 px bevels.
+    let analysis = title == "B30 数据分析";
+    let title_width = if analysis { 159.78125 } else { 154.0 };
+    let gap = (f64::from(WIDTH) - 912.0 - title_width) / 4.0;
+    let inset = (456.0 - 448.875) / 2.0;
+    writeln!(svg, r##"<g class="phi-section-divider" transform="translate(0 {y:.1})" filter="url(#section-glow)">"##).map_err(svg_fmt_error)?;
     let widths = [228.0, 114.0, 57.0, 28.5, 14.25, 7.125];
-    let mut left_x = 36.0;
-    for width in widths {
-        writeln!(
-            svg,
-            r##"<path d="M{:.3} 22 H{:.3} L{:.3} 37 H{:.3} Z" fill="#fff"/>"##,
-            left_x + 4.5,
-            left_x + width,
-            left_x + width - 4.5,
-            left_x,
-        )
-        .map_err(svg_fmt_error)?;
-        left_x += width;
+    for (start, reverse) in [(gap + inset, false), (3.0 * gap + 456.0 + title_width + inset, true)] {
+        let mut x = start;
+        for index in 0..6 {
+            let width = widths[if reverse { 5 - index } else { index }];
+            writeln!(svg, r##"<path d="M{:.3} 22 H{:.3} L{:.3} 37 H{:.3} Z" fill="#fff"/>"##,
+                x + 5.5, x + width, x + width - 5.5, x).map_err(svg_fmt_error)?;
+            x += width;
+        }
     }
-    let mut right_x = 714.875;
-    for width in widths.into_iter().rev() {
-        writeln!(
-            svg,
-            r##"<path d="M{:.3} 22 H{:.3} L{:.3} 37 H{:.3} Z" fill="#fff"/>"##,
-            right_x + 4.5,
-            right_x + width,
-            right_x + width - 4.5,
-            right_x,
-        )
-        .map_err(svg_fmt_error)?;
-        right_x += width;
+    // Original baselines are 23/24 px below the row top (14.5 here).
+    // Synthesize the browser's italic shear explicitly; resvg does not do it.
+    if analysis {
+        writeln!(svg, r##"<g class="phi-analysis-heading" transform="matrix(1 0 -.25 1 600 38.5)">
+<text x="-79.889" y="0" font-size="25" style="font-family:Aldrich;font-style:normal;text-anchor:start;letter-spacing:0">B30</text>
+<text x="-20.111" y="0" font-size="25" style="font-family:{PHI_PLUGIN_FONT_NAME};font-style:normal;text-anchor:start;letter-spacing:0">数据分析</text></g></g>"##).map_err(svg_fmt_error)
+    } else {
+        writeln!(svg, r##"<text x="-77" y="0" class="overflow" transform="matrix(1 0 -.25 1 600 37.5)" style="font-family:Aldrich;font-style:normal;text-anchor:start;letter-spacing:0">{}</text></g>"##,
+            escape_xml(title)).map_err(svg_fmt_error)
     }
-    writeln!(
-        svg,
-        r##"<text x="600" y="42" class="overflow">OVER FLOW</text></g>"##,
-    )
-    .map_err(svg_fmt_error)
 }
 
 fn push_acc_text(hint: Option<engine::PushAccHint>) -> String {
@@ -689,7 +680,7 @@ fn push_acc_fill(hint: Option<engine::PushAccHint>) -> &'static str {
     }
 }
 
-fn grade_for(score: &RenderRecord) -> &'static str {
+pub(super) fn grade_for(score: &RenderRecord) -> &'static str {
     let value = score.score.unwrap_or_default();
     if value >= 1_000_000.0 || score.acc >= 100.0 {
         "AP"
@@ -780,7 +771,7 @@ fn phi_plugin_asset_data_uri(file: &str) -> Option<&'static str> {
         .map(String::as_str)
 }
 
-fn grade_icon_data_uri(grade: &str) -> Option<&'static str> {
+pub(super) fn grade_icon_data_uri(grade: &str) -> Option<&'static str> {
     let file = match grade {
         "AP" => "grade_ap.png",
         "FC" => "grade_fc.png",
@@ -795,7 +786,7 @@ fn grade_icon_data_uri(grade: &str) -> Option<&'static str> {
     phi_plugin_asset_data_uri(file)
 }
 
-fn challenge_plate_data_uri(rank_color: Option<&str>) -> Option<&'static str> {
+pub(super) fn challenge_plate_data_uri(rank_color: Option<&str>) -> Option<&'static str> {
     let file = match rank_color? {
         "Green" => "challenge_green.png",
         "Blue" => "challenge_blue.png",

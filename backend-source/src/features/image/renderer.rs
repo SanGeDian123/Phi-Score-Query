@@ -26,6 +26,7 @@ mod bn_theme;
 mod leaderboard;
 mod math;
 mod phi_plugin;
+mod phi_plugin_legacy;
 mod raster_jpeg;
 mod raster_options;
 mod raster_png;

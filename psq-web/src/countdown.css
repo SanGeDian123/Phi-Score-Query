@@ -1,0 +1,32 @@
+@font-face { font-family: 'Countdown Sans'; src: url('/fonts/countdown-manrope-variable.woff2') format('woff2'); font-weight: 200 800; font-style: normal; font-display: swap; }
+html:has(.psq-countdown), html:has(.psq-countdown) body { margin: 0; background: #ecf2fc; color-scheme: light; }
+.psq-countdown, .psq-countdown * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Countdown Sans', sans-serif; }
+.psq-countdown { position: relative; isolation: isolate; display: grid; place-items: center; min-height: 100svh; padding: max(32px, env(safe-area-inset-top)) max(28px, env(safe-area-inset-right)) max(32px, env(safe-area-inset-bottom)) max(28px, env(safe-area-inset-left)); overflow: hidden; background: #ecf2fc; color: #1c3765; }
+.countdown-atmosphere { position: absolute; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; }
+.countdown-aurora { position: absolute; inset: -16%; background: radial-gradient(ellipse at 83% 86%, #6594ed8a 0%, #b4cffe5e 27%, transparent 55%), radial-gradient(ellipse at 12% 12%, #82adf866, transparent 49%), radial-gradient(ellipse at 44% 46%, #ffffffeb 0%, #ffffff44 36%, transparent 65%); animation: countdown-drift 20s ease-in-out infinite alternate; }
+.countdown-bloom { position: absolute; inset: -12%; background: radial-gradient(ellipse at 22% 72%, #abc5f558, transparent 49%), radial-gradient(ellipse at 78% 32%, #d2defa7a, transparent 46%); animation: countdown-bloom 25s ease-in-out infinite alternate; }
+.countdown-horizon { position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 50%, #ffffff77, transparent 58%); }
+.countdown-panel { position: relative; width: min(1250px, 100%); display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 48px; padding: 28px 0 54px; transform: translateY(-2svh); animation: countdown-enter .75s cubic-bezier(.22, 1, .36, 1) both; }
+.countdown-panel::after { content: ''; position: absolute; bottom: 0; left: 5%; right: 5%; height: 1px; background: linear-gradient(90deg, transparent, #577bb638 15%, #577bb638 85%, transparent); }
+.countdown-unit { position: relative; text-align: center; min-width: 0; }
+.countdown-unit + .countdown-unit::before { content: ''; position: absolute; top: 39%; left: -28px; width: 4px; height: 4px; border-radius: 50%; background: #7492c24d; box-shadow: 0 15px #7492c24d; }
+.countdown-number { display: flex; justify-content: center; gap: .015em; min-width: 0; font-size: clamp(86px, 12vw, 184px); font-weight: 500; font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; letter-spacing: -.04em; line-height: 1; }
+.countdown-unit:last-child .countdown-number { color: #3266e9; }
+.countdown-digit { display: block; position: relative; width: .65em; height: 1.17em; overflow: hidden; }
+.countdown-digit-static, .countdown-digit-track > span { display: flex; justify-content: center; align-items: center; height: 1.17em; padding-right: .04em; }
+.countdown-digit-track { display: block; height: 2.34em; animation: countdown-roll .5s cubic-bezier(.22, 1, .36, 1) both; }
+.countdown-label { display: block; margin-top: 22px; color: #637b9f; font-size: 11px; font-weight: 600; letter-spacing: .28em; padding-left: .28em; }
+.psq-countdown[data-visible='false'] *, .psq-countdown[data-visible='false'] *::before { animation-play-state: paused; }
+@keyframes countdown-drift { from { transform: translate3d(-2%, -1%, 0) scale(1); } to { transform: translate3d(3%, 2%, 0) scale(1.04); } }
+@keyframes countdown-bloom { from { transform: translate3d(2%, -2%, 0) scale(1); } to { transform: translate3d(-3%, 3%, 0) scale(1.06); } }
+@keyframes countdown-enter { from { opacity: 0; transform: translateY(0); } to { opacity: 1; transform: translateY(-2svh); } }
+@keyframes countdown-roll { from { transform: translateY(0); } to { transform: translateY(-50%); } }
+@media (max-width: 800px), (pointer: coarse) { .countdown-bloom { animation: none; } }
+@media (max-width: 600px) {
+  .psq-countdown { padding-inline: 20px; }
+  .countdown-panel { width: min(260px, 100%); grid-template-columns: minmax(0, 1fr); gap: clamp(18px, 3svh, 26px); padding-block: 12px; }
+  .countdown-panel::after, .countdown-unit + .countdown-unit::before { display: none; }
+  .countdown-number { font-size: clamp(42px, min(19vw, 10svh), 78px); font-weight: 500; }
+  .countdown-label { font-size: 9px; margin-top: 10px; letter-spacing: .22em; }
+}
+@media (prefers-reduced-motion: reduce) { .psq-countdown *, .psq-countdown *::before, .psq-countdown *::after { animation: none !important; } .countdown-digit-track { transform: translateY(-50%); } }

@@ -45,9 +45,16 @@ class AppRepository(
 
     val hasSession: Boolean get() = sessionStore.hasSession()
     val hasStoredSessionToken: Boolean get() = sessionStore.hasStoredSessionToken()
+    val moderationRefreshRequests get() = api.moderationRefreshRequests
     val unknownTrackIds: Set<String> get() = activeUnknownSongIds
     fun isSongVisible(songId: String): Boolean = songCatalog.isVisible(songId)
-    fun sanitizeSnapshot(snapshot: B30Snapshot): B30Snapshot = snapshot.withCatalogFallbacks()
+    val timeRewindMode: Boolean get() = songCatalog.timeRewindMode
+    fun setTimeRewindMode(enabled: Boolean) { songCatalog.timeRewindMode = enabled }
+    val shouldShowTimeRewindReminder: Boolean get() = !preferences.getBoolean("time_rewind_exit_reminder_shown", false)
+    fun markTimeRewindReminderShown() { preferences.edit().putBoolean("time_rewind_exit_reminder_shown", true).apply() }
+    fun sanitizeSnapshot(snapshot: B30Snapshot): B30Snapshot = snapshot.withCatalogFallbacks().let {
+        if (timeRewindMode) songCatalog.rewindConstants.snapshot(it) { id -> songCatalog[id] } else it
+    }
     fun isRksGuessStatusVisible(status: RksGuessStatus): Boolean =
         (status.clues + status.clueHistory.flatMap { it.clues }).all { songCatalog.isVisible(it.songId) }
     val isDarkTheme: Boolean get() = preferences.getBoolean("dark_theme", false)
@@ -64,10 +71,14 @@ class AppRepository(
     val shouldGenerateInitialImagePair: Boolean
         get() = !preferences.getBoolean("initial_image_pair_pre0976_p30v2_generated", false)
     val shouldShowNavigationGuide: Boolean get() = !preferences.getBoolean("navigation_drawer_guide_shown", false)
+    val shouldShowRksTrendGuide: Boolean get() = !preferences.getBoolean("rks_trend_guide_shown", false)
+    fun markRksTrendGuideShown() { preferences.edit().putBoolean("rks_trend_guide_shown", true).apply() }
+    suspend fun fetchRksHistory(cursor: String? = null): RksHistoryResponse =
+        authenticatedCall { token -> api.fetchRksHistory(token, cursor) }
     val shouldShowExperienceSurveyPrompt: Boolean
         get() = !preferences.getBoolean("experience_survey_prompt_pre0975_shown", false)
-    val cachedImage: File get() = cacheStore.imageFile
-    val cachedP30Image: File get() = cacheStore.p30ImageFile
+    val cachedImage: File get() = if (timeRewindMode) cacheStore.rewindImageFile else cacheStore.imageFile
+    val cachedP30Image: File get() = if (timeRewindMode) cacheStore.rewindP30ImageFile else cacheStore.p30ImageFile
     val cachedCustomB30Image: File get() = cacheStore.customB30ImageFile
     val cachedCustomP30Image: File get() = cacheStore.customP30ImageFile
     val shouldShowImagePagerGuide: Boolean
@@ -239,7 +250,7 @@ class AppRepository(
 
     fun storedSessionToken(): String? = sessionStore.readSessionToken()
 
-    suspend fun cachedSnapshot(): B30Snapshot? = cacheStore.readSnapshot()?.withCatalogFallbacks()
+    suspend fun cachedSnapshot(): B30Snapshot? = cacheStore.readSnapshot()?.let(::sanitizeSnapshot)
 
     suspend fun checkAppUpdate(currentVersionCode: Int): AppUpdateManifest? {
         val update = api.fetchAppUpdate()
@@ -268,8 +279,40 @@ class AppRepository(
     suspend fun loginWithSessionToken(rawToken: String) {
         val token = rawToken.trim()
         require(token.isNotEmpty()) { "SessionToken 不能为空" }
-        val response = api.exchangeSession(token)
+        val response = try {
+            api.exchangeSession(token)
+        } catch (error: ApiException) {
+            if (error.statusCode == 403) sessionStore.saveSessionTokenForAppeal(token)
+            throw error
+        }
         saveSession(response, sessionToken = token)
+    }
+
+    fun rememberSessionTokenForAppeal(token: String) {
+        if (token.isNotBlank()) sessionStore.saveSessionTokenForAppeal(token)
+    }
+
+    suspend fun userModerationStatus(sessionToken: String? = sessionStore.readSessionToken()): UserModerationStatus {
+        val token = sessionToken?.trim().orEmpty()
+        require(token.isNotEmpty()) { "未找到可用于查询限制状态的 SessionToken" }
+        return api.userModerationStatus(token)
+    }
+
+    suspend fun submitModerationAppeal(
+        restrictionType: String,
+        body: String,
+        images: List<ByteArray>,
+    ): ModerationAppealReceipt {
+        val token = sessionStore.readSessionToken()?.trim().orEmpty()
+        require(token.isNotEmpty()) { "未找到可用于提交申诉的 SessionToken" }
+        return api.submitModerationAppeal(
+            ModerationAppealDraft(
+                sessionToken = token,
+                restrictionType = restrictionType,
+                body = body.trim(),
+                images = images.map { Base64.encodeToString(it, Base64.NO_WRAP) },
+            ),
+        )
     }
 
     suspend fun createQr(): QrCodeCreateResponse = api.createQrCode()
@@ -404,45 +447,60 @@ class AppRepository(
         }
     }
 
-    suspend fun fetchLeaderboard(snapshot: B30Snapshot?): LeaderboardSnapshot = authenticatedCall { token ->
-        var playerProfile = snapshot?.playerProfile
-        val snapshotAgeMs = snapshot?.let { System.currentTimeMillis() - it.cachedAtEpochMs } ?: Long.MAX_VALUE
-        if (snapshotAgeMs > 15_000L) {
-            val refreshedSave = api.fetchB30(token)
-            activateUnknownTrackIds(refreshedSave.unknownSongIds)
-            playerProfile = refreshedSave.toPlayerProfile()
-            // 排行榜写入在后端异步完成，给同一次刷新留下一个很短的落盘窗口。
-            delay(350)
+    suspend fun fetchLeaderboard(snapshot: B30Snapshot? = null): LeaderboardSnapshot {
+        // 只有同一次个人成绩刷新可复用快照；手动刷新排行榜始终读取当前存档并更新缓存。
+        val currentSnapshot = snapshot ?: fetchB30()
+        return authenticatedCall { token ->
+            fetchConsistentLeaderboard(
+                snapshot = currentSnapshot,
+                fetchTop = { api.fetchLeaderboard(token) },
+                fetchMe = { api.fetchLeaderboardMe(token) },
+            )
         }
-        val response = api.fetchLeaderboard(token)
-        val me = api.fetchLeaderboardMe(token)
-        LeaderboardSnapshot(
-            entries = response.items,
-            me = me,
-            playerProfile = playerProfile,
-        )
     }
 
     suspend fun renderB30(
         style: B30ImageStyle,
         isDarkTheme: Boolean,
         width: Int = 1440,
-    ): File = authenticatedCall { token ->
-        cacheStore.saveImage(
-            api.renderB30(token, width.coerceIn(900, 2400), style, isDarkTheme),
-            RankingImageKind.B30,
-        )
+    ): File {
+        val rewind = timeRewindMode
+        return authenticatedCall { token ->
+            cacheStore.saveImage(
+                api.renderB30(token, width.coerceIn(900, 2400), style, isDarkTheme, rewind),
+                RankingImageKind.B30, rewind,
+            )
+        }
+    }
+
+    suspend fun renderBestN(
+        n: Int,
+        style: B30ImageStyle,
+        isDarkTheme: Boolean,
+        width: Int = 1440,
+    ): File {
+        check(!timeRewindMode) { "时间回溯模式不支持 Best N 图片" }
+        requireBestNImageCount(n)
+        return authenticatedCall { token ->
+            cacheStore.saveBestNImage(
+                api.renderBestN(token, n, width.coerceIn(900, 2400), style, isDarkTheme),
+            )
+        }
     }
 
     suspend fun renderP30(
         style: B30ImageStyle,
         isDarkTheme: Boolean,
         width: Int = 1440,
-    ): File = authenticatedCall { token ->
-        cacheStore.saveImage(
-            api.renderP30(token, width.coerceIn(900, 2400), style, isDarkTheme),
-            RankingImageKind.P30,
-        )
+    ): File {
+        check(!timeRewindMode) { "时间回溯模式不支持 P30" }
+        val rewind = timeRewindMode
+        return authenticatedCall { token ->
+            cacheStore.saveImage(
+                api.renderP30(token, width.coerceIn(900, 2400), style, isDarkTheme, rewind),
+                RankingImageKind.P30, rewind,
+            )
+        }
     }
 
     suspend fun renderCustomRankingImage(
@@ -469,11 +527,11 @@ class AppRepository(
     }
 
     fun cachedSongImage(songId: String, style: SongScoreImageStyle): File =
-        songScoreImageRenderer.cachedFile(songId, style)
+        songScoreImageRenderer.cachedFile(songId, style, timeRewindMode)
 
     suspend fun renderSongScoreImage(song: SongScoreResult, style: SongScoreImageStyle): File {
         require(songCatalog.isVisible(song.songId)) { "这首曲目尚未被后端曲库收录" }
-        return songScoreImageRenderer.render(song, style)
+        return songScoreImageRenderer.render(song, style, timeRewindMode)
     }
 
     suspend fun deleteCachedSongImages() {
@@ -689,7 +747,7 @@ class AppRepository(
         val items = rks.b30Charts.mapIndexed { index, ranked ->
             val record = save.gameRecord[ranked.songId]
                 ?.firstOrNull { it.difficulty.equals(ranked.difficulty, ignoreCase = true) }
-            val song = songCatalog[ranked.songId]
+            val song = songCatalog.normalSong(ranked.songId)
             val chartConstant = record?.chartConstant
                 ?: song?.chartConstants?.get(ranked.difficulty.uppercase())
             val isBest = index < 27
@@ -733,7 +791,7 @@ class AppRepository(
     private fun B30Snapshot.withCatalogFallbacks(): B30Snapshot {
         val hiddenIds = (unknownSongIds + activeUnknownSongIds).map(String::lowercase).toSet()
         fun ScoreSnapshotEntry.withFallback(): ScoreSnapshotEntry {
-            val song = songCatalog[songId]
+            val song = songCatalog.normalSong(songId)
             val fallback = song?.chartConstants?.get(difficulty.uppercase())
             val resolvedConstant = chartConstant ?: fallback
             val resolvedName = song?.name?.takeIf(String::isNotBlank)
@@ -754,7 +812,7 @@ class AppRepository(
         return copy(
             totalRks = if (hiddenIds.isEmpty()) totalRks else calculateCompositeRks(visibleRecords),
             items = items.filterNot { it.songId.lowercase() in hiddenIds }.map { item ->
-                val song = songCatalog[item.songId]
+                val song = songCatalog.normalSong(item.songId)
                 val resolvedName = song?.name?.takeIf(String::isNotBlank)
                     ?: item.songName.takeIf(String::isNotBlank)
                     ?: item.songId
@@ -771,7 +829,7 @@ class AppRepository(
     private fun SaveAndRksResponse.toScoreSnapshot(): List<ScoreSnapshotEntry> =
         save.gameRecord.flatMap { (songId, records) ->
             if (songId in unknownSongIds) return@flatMap emptyList()
-            val song = songCatalog[songId]
+            val song = songCatalog.normalSong(songId)
             records.map { record ->
                 val chartConstant = record.chartConstant
                     ?: song?.chartConstants?.get(record.difficulty.uppercase())

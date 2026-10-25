@@ -18,6 +18,7 @@ struct ScaledImageKey {
     path: PathBuf,
     w: u32,
     h: u32,
+    blur_milli: u32,
 }
 
 static SCALED_IMAGE_CACHE: OnceLock<std::sync::Mutex<LruCache<ScaledImageKey, Arc<str>>>> =
@@ -38,6 +39,19 @@ pub(super) fn get_scaled_image_data_uri(
     target_w: u32,
     target_h: u32,
 ) -> Option<String> {
+    get_prepared_image_data_uri(path, target_w, target_h, 0.0)
+}
+
+/// Prepare a full-height background at a bounded resolution before SVG filters
+/// can expand a landscape source across a portrait Best N canvas.
+pub(super) fn get_blurred_background_data_uri(path: &Path, width: u32, height: u32, sigma: f32) -> Option<String> {
+    let scale = (512.0 / width as f32).min(2048.0 / height as f32).min(1.0);
+    let w = (width as f32 * scale).round().max(1.0) as u32;
+    let h = (height as f32 * scale).round().max(1.0) as u32;
+    get_prepared_image_data_uri(path, w, h, sigma * scale)
+}
+
+fn get_prepared_image_data_uri(path: &Path, target_w: u32, target_h: u32, blur: f32) -> Option<String> {
     if target_w == 0 || target_h == 0 {
         return None;
     }
@@ -45,6 +59,7 @@ pub(super) fn get_scaled_image_data_uri(
         path: path.to_path_buf(),
         w: target_w,
         h: target_h,
+        blur_milli: (blur * 1000.0).round() as u32,
     };
     // 缓存值用 Arc，命中时锁内只复制引用计数，避免持锁复制大 Data URI 字符串。
     let cached_uri = if let Ok(mut cache) = get_scaled_image_cache().lock() {
@@ -63,7 +78,8 @@ pub(super) fn get_scaled_image_data_uri(
         FilterType::Lanczos3
     };
     let img = image::open(path).ok()?;
-    let rgb = img.resize_to_fill(target_w, target_h, filter).to_rgb8();
+    let resized = img.resize_to_fill(target_w, target_h, filter);
+    let rgb = if blur > 0.0 { resized.blur(blur).to_rgb8() } else { resized.to_rgb8() };
 
     let mut out = Vec::new();
     let mut enc = JpegEncoder::new_with_quality(&mut out, 85);

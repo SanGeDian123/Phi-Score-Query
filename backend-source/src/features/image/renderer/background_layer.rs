@@ -12,6 +12,7 @@ pub(super) const BACKGROUND_FALLBACK_GRADIENT: &str = "url(#bg-gradient)";
 pub(super) struct SvgBackgroundLayerRenderContext<'a> {
     pub(super) svg: &'a mut String,
     pub(super) background_image_href: Option<String>,
+    pub(super) background_is_blurred: bool,
     pub(super) overlay_fill: &'a str,
     pub(super) fallback_fill: &'a str,
 }
@@ -22,15 +23,17 @@ pub(super) fn write_svg_background_layer(
     let SvgBackgroundLayerRenderContext {
         svg,
         background_image_href,
+        background_is_blurred,
         overlay_fill,
         fallback_fill,
     } = ctx;
 
     if let Some(href) = background_image_href {
         let href_xml = escape_xml(&href);
+        let filter = if background_is_blurred { "" } else { " filter=\"url(#bg-blur)\"" };
         writeln!(
             svg,
-            r#"<image href="{href_xml}" x="0" y="0" width="100%" height="100%" preserveAspectRatio="xMidYMid slice" filter="url(#bg-blur)" />"#
+            r#"<image href="{href_xml}" x="0" y="0" width="100%" height="100%" preserveAspectRatio="xMidYMid slice"{filter} />"#
         )
         .map_err(svg_fmt_error)?;
         writeln!(

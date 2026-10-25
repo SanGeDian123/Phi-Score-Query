@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#f3f4f6" />
+    <meta name="color-scheme" content="light" />
+    <meta name="description" content="Phi Score Query：查看 Phigros 成绩、查询定数、生成成绩图，使用 Android 客户端与网页版。" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Phi Score Query" />
+    <meta property="og:description" content="Phi Score Query：查看 Phigros 成绩、查询定数、生成成绩图，使用 Android 客户端与网页版。" />
+    <meta property="og:url" content="https://phiscorequery.top/" />
+    <meta property="og:image" content="https://phiscorequery.top/icons/icon-512.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="PSQ" />
+    <link rel="icon" href="/icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <link rel="canonical" href="https://phiscorequery.top/" />
+    <link rel="stylesheet" href="/startup.css" />
+    <script src="/startup.js"></script>
+    <title>Phi Score Query</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <main id="psq-startup" class="psq-startup" hidden>
+      <section class="psq-startup-card" aria-labelledby="psq-startup-title">
+        <img src="/icons/icon-192.png" width="64" height="64" alt="" />
+        <h1 id="psq-startup-title">正在打开 PSQ…</h1>
+        <p id="psq-startup-message">请稍候。</p>
+        <div id="psq-startup-help" hidden>
+          <p>请检查网络，并确认浏览器或内容拦截器允许本站运行脚本。若仍无法打开，请更新浏览器后重试。</p>
+          <a href="">重新加载</a>
+        </div>
+      </section>
+    </main>
+    <noscript>
+      <main class="psq-startup" role="alert">
+        <section class="psq-startup-card" aria-labelledby="psq-noscript-title">
+          <img src="/icons/icon-192.png" width="64" height="64" alt="" />
+          <h1 id="psq-noscript-title">启用 JavaScript 后继续</h1>
+          <p>PSQ 需要 JavaScript 才能显示页面。</p>
+          <details open>
+            <summary>iPhone / iPad 的 Safari 设置</summary>
+            <ol>
+              <li>打开系统“设置”，找到“Safari”（也可在设置中搜索）。</li>
+              <li>进入“高级”，打开“JavaScript”。</li>
+              <li>回到本页，重新加载。</li>
+            </ol>
+          </details>
+          <p>其他浏览器请在网站设置中允许 JavaScript。</p>
+          <a href="">我已启用，重新加载</a>
+        </section>
+      </main>
+    </noscript>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

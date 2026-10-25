@@ -1,0 +1,27 @@
+{
+  "name": "psq-web",
+  "private": true,
+  "version": "0.9.8-0",
+  "type": "module",
+  "engines": { "node": ">=22.13.0" },
+  "scripts": {
+    "dev": "node server/index.mjs --dev",
+    "build": "node scripts/check-version.mjs && node scripts/licenses.mjs && tsc -b && vite build",
+    "start": "node server/index.mjs",
+    "verify": "node --test tests/*.test.mjs",
+    "package": "node scripts/package-release.mjs"
+  },
+  "dependencies": {
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
+    "lucide-react": "1.31.0",
+    "qrcode": "1.5.4"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.2",
+    "typescript": "5.9.3",
+    "vite": "8.0.13"
+  }
+}

@@ -9,6 +9,7 @@ use tokio::sync::Semaphore;
 #[test]
 fn supports_svg_format_code_and_content_type() {
     let q = ImageQueryOpts {
+        time_rewind: false,
         format: Some("svg".to_string()),
         template: None,
         width: None,
@@ -28,6 +29,7 @@ fn output_cache_spec_normalizes_webp_cache_dimensions() {
     let _ = crate::config::AppConfig::init_global();
 
     let q = ImageQueryOpts {
+        time_rewind: false,
         format: Some("webp".to_string()),
         template: Some("custom".to_string()),
         width: Some(720),
@@ -68,6 +70,7 @@ fn output_cache_spec_forces_svg_cache_dimensions() {
     let _ = crate::config::AppConfig::init_global();
 
     let q = ImageQueryOpts {
+        time_rewind: false,
         format: Some("svg".to_string()),
         template: None,
         width: Some(720),
@@ -494,6 +497,49 @@ fn bn_cache_key_is_isolated_by_ranking_mode() {
 
     assert_ne!(b30, p30);
     assert!(p30.contains(":p30:"));
+    let bestn = spec.bn_cache_key(
+        "u", 27, crate::features::image::BnMode::BestN, "updated",
+        crate::features::image::Theme::Black, None,
+    );
+    assert_ne!(bestn, b30);
+    assert_ne!(bestn, p30);
+}
+
+#[tokio::test]
+async fn bestn_rejects_out_of_range_n_before_auth_or_save_access() {
+    for n in [0, 201, u32::MAX] {
+        for legacy in [false, true] {
+            let request = axum::http::Request::builder()
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(format!(r#"{{"n":{n}}}"#)))
+                .unwrap();
+            let result = if legacy {
+                super::bn::render_bn(State(dummy_state()), Query(ImageQueryOpts::default()), request).await
+            } else {
+                super::bn::render_bestn(State(dummy_state()), Query(ImageQueryOpts::default()), request).await
+            };
+            assert!(matches!(result, Err(crate::error::AppError::Validation(message)) if message.contains("1–200")));
+        }
+    }
+    for n in [1, 30, 200] {
+        crate::features::image::types::validate_best_n(n).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn time_rewind_rejects_bestn_and_p30_before_auth_or_save_access() {
+    for p30 in [false, true] {
+        let request = axum::http::Request::builder()
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(if p30 { r#"{}"# } else { r#"{"n":30}"# })).unwrap();
+        let query = ImageQueryOpts { time_rewind: true, ..Default::default() };
+        let result = if p30 {
+            super::p30::render_p30(State(dummy_state()), Query(query), request).await
+        } else {
+            super::bn::render_bestn(State(dummy_state()), Query(query), request).await
+        };
+        assert!(matches!(result, Err(crate::error::AppError::Validation(message)) if message.contains("不支持 Best N 或 P30")));
+    }
 }
 
 #[test]

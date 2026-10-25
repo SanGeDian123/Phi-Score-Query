@@ -1,0 +1,18 @@
+[Unit]
+Description=PSQ PWA
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=psq
+WorkingDirectory=/opt/psq-web
+ExecStart=/usr/bin/node /opt/psq-web/server/index.mjs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -78,6 +78,7 @@ class UiPreviewActivity : ComponentActivity() {
                         onGenerateSongImage = { _ -> },
                         onGenerateImage = {},
                         onGenerateP30Image = {},
+                        onGenerateBestNImage = {},
                         onDismissImagePagerGuide = {},
                         onDismissSuggestionSwipeGuide = {},
                         onClearCache = {},
@@ -202,6 +203,7 @@ private fun AppUiState.previewFor(page: AppPage): AppUiState {
         ),
         me = LeaderboardMe(rank = 3, score = 15.8476, total = 1_284, percentile = 99.77),
         playerProfile = snapshot.playerProfile,
+        scoreSnapshot = snapshot,
     )
     return copy(
         isLoggedIn = true,

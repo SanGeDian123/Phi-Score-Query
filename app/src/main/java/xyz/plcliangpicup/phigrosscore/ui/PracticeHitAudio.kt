@@ -21,7 +21,9 @@ internal class PracticeHitAudio private constructor(
     private val thread = android.os.HandlerThread("PracticeHits", android.os.Process.THREAD_PRIORITY_AUDIO).apply { start() }
     private val handler = Handler(thread.looper)
     private val gate = PracticeHitGate()
-    private val voices = PracticeHitVoices(64, { pool.play(it, .8f, .8f, 1, 0, 1f) }, { pool.stop(it) })
+    @Volatile var volume: Float = 1f
+        set(value) { field = value.coerceIn(0f, 1f) }
+    private val voices = PracticeHitVoices(64, { pool.play(it, .8f * volume, .8f * volume, 1, 0, 1f) }, { pool.stop(it) })
     @Volatile private var released = false
     @Volatile var scheduledAutoPlay = false
         set(value) { field = value; gate.setAutomatic(value) }

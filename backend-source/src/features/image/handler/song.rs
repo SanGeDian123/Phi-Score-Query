@@ -213,7 +213,7 @@ pub async fn render_song(
     let t_render2 = Instant::now();
     // SVG 生成会触发磁盘 IO/图片解码/目录索引等阻塞操作，必须移出 tokio worker。
     let svg_options = SvgRenderOptions::from_query(public_illustration_base_url, &q);
-    let svg = spawn_blocking_svg_generation(move || {
+    let svg = spawn_blocking_svg_generation(&render_permit, move || {
         renderer::generate_song_svg_string(
             &render_data,
             embed_images_effective,
@@ -238,7 +238,7 @@ pub async fn render_song(
         }
     };
 
-    let (bytes, content_type) = render_svg_output_bytes(signed_svg, fmt_code, false, &q).await?;
+    let (bytes, content_type) = render_svg_output_bytes(signed_svg, fmt_code, false, &q, &render_permit).await?;
     let render_ms2 = duration_ms_i64(t_render2.elapsed());
     // 统计：单曲查询图片生成（带用户去敏哈希 + song_id + 用户凭证类型）
     if let Some(stats) = state.stats.as_ref() {

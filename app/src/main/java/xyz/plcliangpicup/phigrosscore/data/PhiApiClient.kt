@@ -3,6 +3,8 @@ package xyz.plcliangpicup.phigrosscore.data
 import xyz.plcliangpicup.phigrosscore.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -26,15 +28,38 @@ class PhiApiClient(
     private val baseUrl: String,
     private val json: Json,
 ) {
+    private val moderationRefreshEvents = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val moderationRefreshRequests = moderationRefreshEvents.asSharedFlow()
     private val client = ResourceHttp.builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
         .callTimeout(90, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
+        .addInterceptor { chain ->
+            val request = chain.request()
+            val moderatedRequest = if (request.url.host == baseUrl.toHttpUrlOrNull()?.host) {
+                request.newBuilder().header("X-PSQ-Moderation", "1").build()
+            } else {
+                request
+            }
+            chain.proceed(moderatedRequest)
+        }
         .build()
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+
+    suspend fun fetchRksHistory(accessToken: String, cursor: String? = null): RksHistoryResponse = executeJson(
+        Request.Builder()
+            .url(url("api/v2/rks/history"))
+            .header("Authorization", "Bearer $accessToken")
+            .post(buildJsonObject {
+                put("auth", buildJsonObject {})
+                put("limit", 200)
+                cursor?.let { put("cursor", it) }
+            }.toString().toRequestBody(jsonMediaType))
+            .build(),
+    )
 
     suspend fun exchangeSession(sessionToken: String): SessionExchangeResponse {
         val body = buildJsonObject {
@@ -48,6 +73,20 @@ class PhiApiClient(
                 .build(),
         )
     }
+
+    suspend fun userModerationStatus(sessionToken: String): UserModerationStatus = executeJson(
+        Request.Builder()
+            .url(url("api/v2/users/me/moderation/status"))
+            .post(buildJsonObject { put("sessionToken", sessionToken) }.toString().toRequestBody(jsonMediaType))
+            .build(),
+    )
+
+    suspend fun submitModerationAppeal(draft: ModerationAppealDraft): ModerationAppealReceipt = executeJson(
+        Request.Builder()
+            .url(url("api/v2/users/me/moderation/appeals"))
+            .post(json.encodeToString(draft).toRequestBody(jsonMediaType))
+            .build(),
+    )
 
     suspend fun refreshSession(accessToken: String): SessionExchangeResponse = executeJson(
         Request.Builder()
@@ -266,9 +305,10 @@ class PhiApiClient(
         width: Int,
         style: B30ImageStyle,
         isDarkTheme: Boolean,
+        timeRewind: Boolean = false,
     ): ByteArray {
         val requestBody = buildJsonObject {
-            put("n", if (style == B30ImageStyle.PHI_PLUGIN) 33 else 27)
+            put("n", if (timeRewind) { if (style == B30ImageStyle.PHI_PLUGIN) 21 else 19 } else if (style == B30ImageStyle.PHI_PLUGIN) 33 else 27)
             put("theme", if (isDarkTheme) "black" else "white")
             // 栅格图可直接读取服务端本地曲绘，避免把 30 张大图先转成 Base64 再解码。
             put("embedImages", false)
@@ -281,7 +321,35 @@ class PhiApiClient(
         }
         return executeBytes(
             Request.Builder()
-                .url(url("api/v2/image/bn?format=png&width=$width$templateQuery"))
+                .url(url("api/v2/image/bn?format=png&width=$width$templateQuery${if (timeRewind) "&time_rewind=true" else ""}"))
+                .header("Authorization", "Bearer $accessToken")
+                .post(requestBody.toRequestBody(jsonMediaType))
+                .build(),
+        )
+    }
+
+    suspend fun renderBestN(
+        accessToken: String,
+        n: Int,
+        width: Int,
+        style: B30ImageStyle,
+        isDarkTheme: Boolean,
+    ): ByteArray {
+        requireBestNImageCount(n)
+        val requestBody = buildJsonObject {
+            put("n", n)
+            put("theme", if (isDarkTheme) "black" else "white")
+            put("embedImages", false)
+            put("appVersion", BuildConfig.VERSION_NAME)
+        }.toString()
+        val templateQuery = when (style) {
+            B30ImageStyle.CLASSIC -> ""
+            B30ImageStyle.MINIMAL -> "&template=minimal"
+            B30ImageStyle.PHI_PLUGIN -> "&template=phi-plugin"
+        }
+        return executeBytes(
+            Request.Builder()
+                .url(url("api/v2/image/bestn?format=png&width=$width$templateQuery"))
                 .header("Authorization", "Bearer $accessToken")
                 .post(requestBody.toRequestBody(jsonMediaType))
                 .build(),
@@ -293,7 +361,9 @@ class PhiApiClient(
         width: Int,
         style: B30ImageStyle,
         isDarkTheme: Boolean,
+        timeRewind: Boolean = false,
     ): ByteArray {
+        check(!timeRewind) { "时间回溯模式不支持 P30" }
         val requestBody = buildJsonObject {
             put("theme", if (isDarkTheme) "black" else "white")
             put("embedImages", false)
@@ -306,7 +376,7 @@ class PhiApiClient(
         }
         return executeBytes(
             Request.Builder()
-                .url(url("api/v2/image/p30?format=png&width=$width$templateQuery"))
+                .url(url("api/v2/image/p30?format=png&width=$width$templateQuery${if (timeRewind) "&time_rewind=true" else ""}"))
                 .header("Authorization", "Bearer $accessToken")
                 .post(requestBody.toRequestBody(jsonMediaType))
                 .build(),
@@ -665,7 +735,13 @@ class PhiApiClient(
                             }.getOrNull()
                             val message = detail?.detail ?: detail?.message ?: detail?.title
                                 ?: "服务器返回 HTTP ${response.code}"
+                            if (response.code == 403) moderationRefreshEvents.tryEmit(Unit)
                             throw ApiException(response.code, message)
+                        }
+                        if (request.url.queryParameter("time_rewind") == "true" &&
+                            (response.header("X-PSQ-Time-Rewind") != "20250214" ||
+                                response.header("X-PSQ-Time-Rewind-Rules") != TIME_REWIND_P1_RULES)) {
+                            throw ApiException(409, "请先更新服务端，以统一时间回溯 P1 选择规则")
                         }
                         return@withContext bytes
                     }

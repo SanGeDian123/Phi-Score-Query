@@ -43,7 +43,7 @@
 
   {% if ap.cards | length > 0 %}
   <g id="p3-section" transform="translate(0, {{ ap.section_y }})">
-    <text x="{{ layout.card_gap }}" y="30" class="text section-title">P3</text>
+    <text x="{{ layout.card_gap }}" y="30" class="text section-title">{% if header.title_xml == "B19" %}P1{% else %}P3{% endif %}</text>
     <line x1="72" y1="24" x2="{{ page.width - layout.card_gap }}" y2="24"
           stroke="{{ colors.card_stroke }}" stroke-width="1" />
     {% for c in ap.cards %}
@@ -88,8 +88,8 @@
   {% endif %}
 
   <g id="b27-section">
-    <text x="{{ layout.card_gap }}" y="{{ main_section_y + 30 }}" class="text section-title">B27</text>
-    <line x1="82" y1="{{ main_section_y + 24 }}" x2="{{ page.width - layout.card_gap }}" y2="{{ main_section_y + 24 }}"
+    <text x="{{ layout.card_gap }}" y="{{ main_section_y + 30 }}" class="text section-title">{{ main_section_label_xml }}</text>
+    <line x1="{% if main_section_label_xml == 'B27' %}82{% else %}{{ layout.card_gap + 140 }}{% endif %}" y1="{{ main_section_y + 24 }}" x2="{{ page.width - layout.card_gap }}" y2="{{ main_section_y + 24 }}"
           stroke="{{ colors.card_stroke }}" stroke-width="1" />
     {% for c in cards %}
       <g transform="translate({{ c.x }}, {{ c.y }})">

@@ -27,6 +27,8 @@ import xyz.plcliangpicup.phigrosscore.data.ConstantTableEntry
 import xyz.plcliangpicup.phigrosscore.data.CustomChartDraft
 import xyz.plcliangpicup.phigrosscore.data.LoginProgress
 import xyz.plcliangpicup.phigrosscore.data.LeaderboardSnapshot
+import xyz.plcliangpicup.phigrosscore.data.UserModerationStatus
+import xyz.plcliangpicup.phigrosscore.data.ApiException
 import xyz.plcliangpicup.phigrosscore.data.QrCodeCreateResponse
 import xyz.plcliangpicup.phigrosscore.data.RankingImageKind
 import xyz.plcliangpicup.phigrosscore.data.RksCalculatorDraft
@@ -41,10 +43,27 @@ import xyz.plcliangpicup.phigrosscore.data.calculateChartRks
 import xyz.plcliangpicup.phigrosscore.data.customRankingScores
 import xyz.plcliangpicup.phigrosscore.data.importOwnRanking
 import java.io.File
+import xyz.plcliangpicup.phigrosscore.data.RksHistoryResponse
+import xyz.plcliangpicup.phigrosscore.data.RksTrendRange
+import xyz.plcliangpicup.phigrosscore.data.loadRksHistoryRange
 
-enum class AppPage { HOME, B30, SONG, CONSTANT_TABLE, LEADERBOARD, IMAGE, MORE, SETTINGS }
+enum class AppPage { HOME, B30, SONG, CONSTANT_TABLE, LEADERBOARD, IMAGE, MORE, SETTINGS, RKS_TREND }
 
 data class AppUiState(
+    val rksHistory: RksHistoryResponse? = null,
+    val rksTrendRange: RksTrendRange = RksTrendRange.MONTH,
+    val rksHistoryWindowEndEpochMs: Long = 0L,
+    val rksHistoryLoadedCount: Int = 0,
+    val isRksHistoryLoading: Boolean = false,
+    val rksHistoryError: String? = null,
+    val showRksTrendGuide: Boolean = false,
+    val timeRewindConfirmation: Boolean = false,
+    val timeRewindMode: Boolean = false,
+    val timeRewindStartedAt: Long? = null,
+    val timeRewindEpoch: Long = 0,
+    val showTimeRewindReminder: Boolean = false,
+    val rksAnimationFrom: Double? = null,
+    val p30AnimationFrom: Double? = null,
     val isLoggedIn: Boolean = false,
     val isDarkTheme: Boolean = false,
     val autoRefreshOnLaunch: Boolean = true,
@@ -66,6 +85,9 @@ data class AppUiState(
     val rksDeltaEvent: Long = 0L,
     val imageFile: File? = null,
     val p30ImageFile: File? = null,
+    val bestNImageFile: File? = null,
+    val generatedBestNCount: Int = 30,
+    val generatedBestNStyle: B30ImageStyle = B30ImageStyle.CLASSIC,
     val customB30ImageFile: File? = null,
     val customP30ImageFile: File? = null,
     val songQuery: String = "",
@@ -102,6 +124,8 @@ data class AppUiState(
     val b30ImageGenerationElapsedSeconds: Int = 0,
     val isGeneratingP30Image: Boolean = false,
     val p30ImageGenerationElapsedSeconds: Int = 0,
+    val isGeneratingBestNImage: Boolean = false,
+    val bestNImageGenerationElapsedSeconds: Int = 0,
     val isGeneratingCustomRankingImage: Boolean = false,
     val isImportingCustomRanking: Boolean = false,
     val showImagePagerGuide: Boolean = true,
@@ -121,11 +145,16 @@ data class AppUiState(
     val appUpdateTotalBytes: Long = 0L,
     val downloadedAppUpdate: File? = null,
     val message: String? = null,
+    val moderationStatus: UserModerationStatus? = null,
+    val isSubmittingModerationAppeal: Boolean = false,
+    val moderationMessage: String? = null,
+    val moderationSubmissionEvent: Long = 0L,
 )
 
 class AppViewModel(internal val repository: AppRepository) : ViewModel() {
     private companion object {
         const val SONG_CATALOG_SYNC_INTERVAL_MS = 15_000L
+        const val USER_MODERATION_POLL_INTERVAL_MS = 45_000L
     }
 
     private val _state = MutableStateFlow(
@@ -142,6 +171,7 @@ class AppViewModel(internal val repository: AppRepository) : ViewModel() {
             hasStoredSessionToken = repository.hasStoredSessionToken,
             unknownTrackIds = repository.unknownTrackIds.toList(),
             showNavigationGuide = repository.shouldShowNavigationGuide,
+            showRksTrendGuide = repository.shouldShowRksTrendGuide,
             showExperienceSurveyPrompt = repository.shouldShowExperienceSurveyPrompt,
             showImagePagerGuide = repository.shouldShowImagePagerGuide,
             showSuggestionSwipeGuide = repository.shouldShowSuggestionSwipeGuide,
@@ -156,18 +186,28 @@ class AppViewModel(internal val repository: AppRepository) : ViewModel() {
     private var firstLoginImageJob: Job? = null
     private var imageTimerJob: Job? = null
     private var p30ImageTimerJob: Job? = null
+    private var bestNImageJob: Job? = null
     private var songImageJob: Job? = null
     private var songImageTimerJob: Job? = null
     private var achievementSearchJob: Job? = null
     private var rksGuessRefreshJob: Job? = null
     private var rksGuessLeaderboardJob: Job? = null
     private var songCatalogSyncJob: Job? = null
+    private var moderationStatusJob: Job? = null
     private val songCatalogSyncMutex = Mutex()
+    private val scoreRefreshMutex = Mutex()
+    private var b30RefreshJob: Job? = null
+    private var leaderboardRefreshJob: Job? = null
+    private var rksHistoryJob: Job? = null
     private var latestAchievementSearchQuery = ""
     private var generateImagePairAfterNextRefresh = false
 
     init {
         if (repository.autoCheckAppUpdates) checkAppUpdate(silent = true)
+        ensureModerationPolling()
+        viewModelScope.launch {
+            repository.moderationRefreshRequests.collect { refreshModerationStatus() }
+        }
         viewModelScope.launch {
             runCatching { repository.fetchPendingAnnouncement() }
                 .onSuccess { announcement ->
@@ -212,14 +252,117 @@ class AppViewModel(internal val repository: AppRepository) : ViewModel() {
                 generateInitialImagePair()
             }
             if (repository.hasSession && repository.autoRefreshOnLaunch) {
-                refreshB30(showLoading = cached == null)
+                refreshB30(showLoading = cached == null, preserveMessage = true)
             }
         }
     }
 
+    fun requestTimeRewind() {
+        if (!_state.value.timeRewindMode && _state.value.timeRewindStartedAt == null)
+            _state.update { it.copy(timeRewindConfirmation = true) }
+    }
+    fun cancelTimeRewind() { _state.update { it.copy(timeRewindConfirmation = false) } }
+
+    fun startTimeRewind() {
+        if (_state.value.timeRewindMode || _state.value.timeRewindStartedAt != null) return
+        _state.update { it.copy(timeRewindConfirmation = false, timeRewindStartedAt = System.currentTimeMillis()) }
+    }
+
+    fun finishTimeRewind() {
+        if (_state.value.timeRewindStartedAt == null) return
+        changeTimeRewindMode(true)
+    }
+
+    fun exitTimeRewind() { if (_state.value.timeRewindMode) changeTimeRewindMode(false) }
+
+    fun dismissTimeRewindReminder() {
+        repository.markTimeRewindReminderShown()
+        _state.update { it.copy(showTimeRewindReminder = false) }
+    }
+
+    private fun changeTimeRewindMode(enabled: Boolean) {
+        rksHistoryJob?.cancel()
+        val previous = _state.value.snapshot
+        firstLoginImageJob?.cancel()
+        bestNImageJob?.cancel()
+        songImageJob?.cancel()
+        imageTimerJob?.cancel()
+        p30ImageTimerJob?.cancel()
+        songImageTimerJob?.cancel()
+        repository.setTimeRewindMode(enabled)
+        // Bump the epoch before any suspension: late image completions cannot enter this session.
+        _state.update { it.copy(timeRewindMode = enabled, timeRewindEpoch = it.timeRewindEpoch + 1, isRksHistoryLoading = false,
+            timeRewindStartedAt = null, page = AppPage.HOME,
+            imageFile = null, p30ImageFile = null, bestNImageFile = null,
+            customB30ImageFile = null, customP30ImageFile = null, songImageFile = null,
+            songResults = emptyList(), isGeneratingB30Image = false, isGeneratingP30Image = false,
+            isGeneratingBestNImage = false, isGeneratingSongImage = false,
+            showTimeRewindReminder = enabled && repository.shouldShowTimeRewindReminder) }
+        viewModelScope.launch {
+            val source = if (enabled) previous else repository.cachedSnapshot()
+            val snapshot = source?.let(repository::sanitizeSnapshot)
+            _state.update { it.copy(snapshot = snapshot, constantTableEntries = repository.constantTableEntries(),
+                rksAnimationFrom = previous?.totalRks, p30AnimationFrom = null,
+                rksDelta = snapshot?.let { next -> previous?.let { next.totalRks - it.totalRks } },
+                rksDeltaEvent = it.rksDeltaEvent + 1,
+                imageFile = repository.cachedImage.takeIf(File::exists),
+                p30ImageFile = if (enabled) null else repository.cachedP30Image.takeIf(File::exists)) }
+            if (snapshot == null) refreshB30()
+            val animationEpoch = _state.value.timeRewindEpoch
+            delay(1_200)
+            _state.update { if (it.timeRewindEpoch == animationEpoch) it.copy(rksAnimationFrom = null, p30AnimationFrom = null) else it }
+        }
+    }
+
     fun selectPage(page: AppPage) {
+        if (_state.value.timeRewindStartedAt != null || _state.value.timeRewindConfirmation) return
+        if (_state.value.timeRewindMode && page !in timeRewindPages) return
         _state.update { it.copy(page = page) }
         if (page == AppPage.LEADERBOARD && _state.value.leaderboard == null) refreshLeaderboard()
+        if (page == AppPage.RKS_TREND) {
+            dismissRksTrendGuide()
+            refreshRksHistory()
+        }
+    }
+
+    fun dismissRksTrendGuide() {
+        repository.markRksTrendGuideShown()
+        _state.update { it.copy(showRksTrendGuide = false) }
+    }
+
+    fun refreshRksHistory() = loadRksHistory(refresh = true)
+
+    fun setRksTrendRange(range: RksTrendRange) {
+        if (range == _state.value.rksTrendRange) return
+        _state.update { it.copy(rksTrendRange = range) }
+        loadRksHistory(refresh = false)
+    }
+
+    private fun loadRksHistory(refresh: Boolean) {
+        val current = _state.value
+        if (!repository.hasSession || current.timeRewindMode) return
+        rksHistoryJob?.cancel()
+        val previous = current.rksHistory.takeUnless { refresh }
+        val now = current.rksHistoryWindowEndEpochMs.takeIf { !refresh && previous != null && it > 0L }
+            ?: System.currentTimeMillis()
+        rksHistoryJob = viewModelScope.launch {
+            var partial = previous
+            _state.update { it.copy(isRksHistoryLoading = true, rksHistoryError = null,
+                rksHistoryWindowEndEpochMs = now, rksHistoryLoadedCount = previous?.items?.size ?: 0) }
+            try {
+                val next = loadRksHistoryRange(current.rksTrendRange, now, previous,
+                    fetchPage = { repository.fetchRksHistory(it) },
+                    onProgress = { loaded ->
+                        partial = loaded
+                        _state.update { it.copy(rksHistoryLoadedCount = loaded.items.size) }
+                    })
+                _state.update { it.copy(rksHistory = next, isRksHistoryLoading = false) }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                _state.update { it.copy(rksHistory = partial ?: it.rksHistory,
+                    isRksHistoryLoading = false, rksHistoryError = readableError(error)) }
+            }
+        }
     }
 
     fun setRksCalculatorDraft(draft: RksCalculatorDraft) {
@@ -497,27 +640,140 @@ class AppViewModel(internal val repository: AppRepository) : ViewModel() {
 
     fun hideSessionToken() = _state.update { it.copy(revealedSessionToken = null) }
 
+    private suspend fun restrictedStatusAfterLoginFailure(sessionToken: String?): UserModerationStatus? {
+        sessionToken?.takeIf(String::isNotBlank)?.let(repository::rememberSessionTokenForAppeal)
+        return try {
+            repository.userModerationStatus(sessionToken)
+                .takeIf { it.accountSuspended || it.publicHidden }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun ensureModerationPolling() {
+        if (!repository.hasStoredSessionToken || moderationStatusJob?.isActive == true) return
+        moderationStatusJob = viewModelScope.launch {
+            while (isActive) {
+                try {
+                    applyModerationStatus(repository.userModerationStatus())
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    // Keep app use available when the status endpoint is temporarily offline.
+                }
+                delay(USER_MODERATION_POLL_INTERVAL_MS)
+            }
+        }
+    }
+
+    fun refreshModerationStatus() {
+        if (!repository.hasStoredSessionToken) return
+        viewModelScope.launch {
+            try {
+                val status = repository.userModerationStatus()
+                applyModerationStatus(status)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                // An unavailable moderation request should not interrupt normal use.
+            }
+        }
+    }
+
+    private fun applyModerationStatus(status: UserModerationStatus, notifyPublic: Boolean = false) {
+        _state.update { current ->
+            val released = when {
+                status.publicHidden && !status.accountSuspended &&
+                    (notifyPublic || current.moderationStatus?.publicHidden != true) -> {
+                    buildString {
+                        append("当前账号已禁止公开展示，成绩已停止公开展示，无法发布求建议或建议评论。")
+                        status.publicReason?.takeIf(String::isNotBlank)?.let { append("原因：$it。") }
+                        append("可通过顶部限制提醒查看详情并提交申诉。")
+                    }
+                }
+                current.moderationStatus?.accountSuspended == true && !status.accountSuspended -> "账户暂停已解除，可以继续登录使用。"
+                current.moderationStatus?.publicHidden == true && !status.publicHidden -> "公开展示限制已解除。"
+                else -> current.message
+            }
+            current.copy(moderationStatus = status, message = released)
+        }
+    }
+
+    private suspend fun completeLogin() {
+        // Read the initial restriction before opening the functional home screen.
+        try {
+            applyModerationStatus(repository.userModerationStatus(), notifyPublic = true)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            // The polling task retries when this request is temporarily unavailable.
+        }
+        _state.update {
+            it.copy(
+                isLoggedIn = true,
+                hasStoredSessionToken = true,
+                loginProgress = LoginProgress.Idle,
+            )
+        }
+        generateImagePairAfterNextRefresh = repository.shouldGenerateInitialImagePair
+        ensureModerationPolling()
+        refreshB30(showLoading = true, preserveMessage = true)
+    }
+
+    fun submitModerationAppeal(restrictionType: String, body: String, images: List<ByteArray>) {
+        if (_state.value.isSubmittingModerationAppeal) return
+        _state.update { it.copy(isSubmittingModerationAppeal = true, moderationMessage = null) }
+        viewModelScope.launch {
+            try {
+                repository.submitModerationAppeal(restrictionType, body, images)
+                val refreshed = try {
+                    repository.userModerationStatus()
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    null
+                }
+                _state.update { current ->
+                    current.copy(
+                        moderationStatus = refreshed ?: current.moderationStatus?.let { status ->
+                            if (restrictionType == "account_suspended") status.copy(accountAppealStatus = "pending")
+                            else status.copy(publicAppealStatus = "pending")
+                        },
+                        isSubmittingModerationAppeal = false,
+                        moderationMessage = "申诉材料已提交，处理结果会在此页面更新。",
+                        moderationSubmissionEvent = current.moderationSubmissionEvent + 1,
+                    )
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                _state.update { it.copy(isSubmittingModerationAppeal = false, moderationMessage = readableError(error)) }
+            }
+        }
+    }
+
     fun loginWithToken(token: String) {
         qrJob?.cancel()
         viewModelScope.launch {
             _state.update { it.copy(loginProgress = LoginProgress.Exchanging, message = null) }
-            runCatching { repository.loginWithSessionToken(token) }
-                .onSuccess {
-                    _state.update {
-                        it.copy(
-                            isLoggedIn = true,
-                            hasStoredSessionToken = true,
-                            loginProgress = LoginProgress.Idle,
-                        )
-                    }
-                    generateImagePairAfterNextRefresh = repository.shouldGenerateInitialImagePair
-                    refreshB30(showLoading = true)
+            try {
+                repository.loginWithSessionToken(token)
+                completeLogin()
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                val restriction = if (error is ApiException && error.statusCode == 403) {
+                    restrictedStatusAfterLoginFailure(token)
+                } else null
+                ensureModerationPolling()
+                _state.update { current ->
+                    current.copy(
+                        loginProgress = LoginProgress.Failed(readableError(error)),
+                        moderationStatus = restriction ?: current.moderationStatus,
+                    )
                 }
-                .onFailure { error ->
-                    _state.update {
-                        it.copy(loginProgress = LoginProgress.Failed(readableError(error)))
-                    }
-                }
+            }
         }
     }
 
@@ -533,6 +789,7 @@ class AppViewModel(internal val repository: AppRepository) : ViewModel() {
                     }
                 } catch (localError: Throwable) {
                     if (localError is CancellationException) throw localError
+                    if (localError is ApiException && localError.statusCode == 403) throw localError
                     _state.update {
                         it.copy(
                             loginProgress = LoginProgress.CreatingQr,
@@ -544,19 +801,18 @@ class AppViewModel(internal val repository: AppRepository) : ViewModel() {
                         repository.awaitQrConfirmation(serverQr, onStatus)
                     }
                 }
-                _state.update {
-                    it.copy(
-                        isLoggedIn = true,
-                        hasStoredSessionToken = true,
-                        loginProgress = LoginProgress.Idle,
-                    )
-                }
-                generateImagePairAfterNextRefresh = repository.shouldGenerateInitialImagePair
-                refreshB30(showLoading = true)
+                completeLogin()
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
-                _state.update {
-                    it.copy(loginProgress = LoginProgress.Failed(readableError(error)))
+                val restriction = if (error is ApiException && error.statusCode == 403) {
+                    restrictedStatusAfterLoginFailure(repository.storedSessionToken())
+                } else null
+                ensureModerationPolling()
+                _state.update { current ->
+                    current.copy(
+                        loginProgress = LoginProgress.Failed(readableError(error)),
+                        moderationStatus = restriction ?: current.moderationStatus,
+                    )
                 }
             }
         }
@@ -590,70 +846,87 @@ class AppViewModel(internal val repository: AppRepository) : ViewModel() {
         _state.update { it.copy(loginProgress = LoginProgress.Idle) }
     }
 
-    fun refreshB30(showLoading: Boolean = true) {
-        viewModelScope.launch {
-            if (showLoading) _state.update { it.copy(isLoading = true, message = null) }
-            runCatching { repository.fetchB30() }
-                .onSuccess { snapshot ->
-                    val newlyUnknownSongIds = repository.newlyUnknownSongIds(snapshot.unknownSongIds)
-                    val hasUnknownTracks = repository.unknownTrackIds.isNotEmpty()
-                    if (hasUnknownTracks) songImageJob?.cancel()
-                    _state.update { current ->
-                        val previousRks = current.snapshot?.totalRks
-                        val delta = previousRks?.let { snapshot.totalRks - it }
-                            ?.takeIf { kotlin.math.abs(it) >= 0.00005 }
-                            ?.takeIf { !hasUnknownTracks }
-                        current.copy(
-                            snapshot = snapshot,
-                            unknownTrackIds = repository.unknownTrackIds.toList(),
-                            unknownTrackNoticeIds = if (newlyUnknownSongIds.isNotEmpty()) {
-                                newlyUnknownSongIds
-                            } else {
-                                current.unknownTrackNoticeIds
-                            },
-                            rksDelta = if (hasUnknownTracks) null else delta ?: current.rksDelta,
-                            rksDeltaEvent = if (delta != null) current.rksDeltaEvent + 1 else current.rksDeltaEvent,
-                            imageFile = if (hasUnknownTracks) null else repository.cachedImage.takeIf(File::exists),
-                            p30ImageFile = if (hasUnknownTracks) null else repository.cachedP30Image.takeIf(File::exists),
-                            customB30ImageFile = if (hasUnknownTracks) null else repository.cachedCustomB30Image.takeIf(File::exists),
-                            customP30ImageFile = if (hasUnknownTracks) null else repository.cachedCustomP30Image.takeIf(File::exists),
-                            songResults = current.songResults.filter { repository.isSongVisible(it.songId) },
-                            achievementSongResults = current.achievementSongResults.filter { repository.isSongVisible(it.id) },
-                            achievementRates = current.achievementRates?.takeIf { repository.isSongVisible(it.songId) },
-                            checkin = current.checkin?.let { status ->
-                                status.copy(today = status.today?.let { record ->
-                                    record.copy(chart = record.chart?.takeIf { repository.isSongVisible(it.songId) })
-                                })
-                            },
-                            rksGuessGame = current.rksGuessGame?.takeIf(repository::isRksGuessStatusVisible),
-                            rksCalculatorDraft = repository.rksCalculatorDraft,
-                            constantTableEntries = repository.constantTableEntries(),
-                            songImageSongId = current.songImageSongId?.takeIf(repository::isSongVisible),
-                            songImageFile = current.songImageSongId?.takeIf(repository::isSongVisible)
-                                ?.let { current.songImageFile },
-                            isGeneratingSongImage = current.isGeneratingSongImage &&
-                                current.songImageSongId?.let(repository::isSongVisible) == true,
-                            isLoading = false,
-                            isOffline = false,
-                        )
-                    }
-                    if (!hasUnknownTracks && repository.shouldGenerateInitialImagePair) generateInitialImagePair()
-                    if (generateImagePairAfterNextRefresh && !hasUnknownTracks) generateInitialImagePair()
+    fun refreshB30(showLoading: Boolean = true, preserveMessage: Boolean = false) {
+        if (b30RefreshJob?.isActive == true) return
+        b30RefreshJob = viewModelScope.launch {
+            scoreRefreshMutex.withLock {
+                if (showLoading) _state.update {
+                    it.copy(isLoading = true, message = if (preserveMessage) it.message else null)
                 }
-                .onFailure { error ->
-                    val cached = repository.cachedSnapshot()
-                    val expired = error.message?.contains("重新登录") == true
-                    _state.update {
-                        it.copy(
-                            isLoggedIn = if (expired) false else it.isLoggedIn,
-                            isLoading = false,
-                            isOffline = cached != null,
-                            snapshot = cached ?: it.snapshot,
-                            message = readableError(error),
-                        )
+                runCatching { repository.fetchB30() }
+                    .onSuccess { snapshot ->
+                        val reloadBoard = _state.value.leaderboard != null || _state.value.page == AppPage.LEADERBOARD
+                        applyScoreSnapshot(snapshot)
+                        if (reloadBoard) loadLeaderboard(snapshot)
                     }
-                }
+                    .onFailure { error ->
+                        if (error is CancellationException) throw error
+                        val cached = repository.cachedSnapshot()
+                        val expired = error.message?.contains("重新登录") == true
+                        _state.update {
+                            it.copy(
+                                isLoggedIn = if (expired) false else it.isLoggedIn,
+                                isLoading = false,
+                                isOffline = cached != null,
+                                snapshot = cached ?: it.snapshot,
+                                leaderboard = null,
+                                message = readableError(error),
+                            )
+                        }
+                    }
+            }
         }
+    }
+
+    private fun applyScoreSnapshot(rawSnapshot: B30Snapshot, leaderboard: LeaderboardSnapshot? = null) {
+        val snapshot = repository.sanitizeSnapshot(rawSnapshot)
+        val newlyUnknownSongIds = repository.newlyUnknownSongIds(snapshot.unknownSongIds)
+        val hasUnknownTracks = repository.unknownTrackIds.isNotEmpty()
+        if (hasUnknownTracks) songImageJob?.cancel()
+        _state.update { current ->
+            val previousRks = current.snapshot?.totalRks
+            val delta = previousRks?.let { snapshot.totalRks - it }
+                ?.takeIf { kotlin.math.abs(it) >= 0.00005 }
+                ?.takeIf { !hasUnknownTracks }
+            current.copy(
+                snapshot = snapshot,
+                leaderboard = leaderboard,
+                isLeaderboardLoading = false,
+                unknownTrackIds = repository.unknownTrackIds.toList(),
+                unknownTrackNoticeIds = if (newlyUnknownSongIds.isNotEmpty()) {
+                    newlyUnknownSongIds
+                } else {
+                    current.unknownTrackNoticeIds
+                },
+                rksDelta = if (hasUnknownTracks) null else delta ?: current.rksDelta,
+                rksDeltaEvent = if (delta != null) current.rksDeltaEvent + 1 else current.rksDeltaEvent,
+                imageFile = if (hasUnknownTracks) null else repository.cachedImage.takeIf(File::exists),
+                p30ImageFile = if (hasUnknownTracks) null else repository.cachedP30Image.takeIf(File::exists),
+                customB30ImageFile = if (hasUnknownTracks) null else repository.cachedCustomB30Image.takeIf(File::exists),
+                customP30ImageFile = if (hasUnknownTracks) null else repository.cachedCustomP30Image.takeIf(File::exists),
+                songResults = current.songResults.filter { repository.isSongVisible(it.songId) },
+                achievementSongResults = current.achievementSongResults.filter { repository.isSongVisible(it.id) },
+                achievementRates = current.achievementRates?.takeIf { repository.isSongVisible(it.songId) },
+                checkin = current.checkin?.let { status ->
+                    status.copy(today = status.today?.let { record ->
+                        record.copy(chart = record.chart?.takeIf { repository.isSongVisible(it.songId) })
+                    })
+                },
+                rksGuessGame = current.rksGuessGame?.takeIf(repository::isRksGuessStatusVisible),
+                rksCalculatorDraft = repository.rksCalculatorDraft,
+                constantTableEntries = repository.constantTableEntries(),
+                songImageSongId = current.songImageSongId?.takeIf(repository::isSongVisible),
+                songImageFile = current.songImageSongId?.takeIf(repository::isSongVisible)
+                    ?.let { current.songImageFile },
+                isGeneratingSongImage = current.isGeneratingSongImage &&
+                    current.songImageSongId?.let(repository::isSongVisible) == true,
+                isLoading = false,
+                isOffline = false,
+            )
+        }
+        if (!hasUnknownTracks && repository.shouldGenerateInitialImagePair) generateInitialImagePair()
+        if (generateImagePairAfterNextRefresh && !hasUnknownTracks) generateInitialImagePair()
+
     }
 
     fun dismissUnknownTrackNotice() {
@@ -790,32 +1063,32 @@ class AppViewModel(internal val repository: AppRepository) : ViewModel() {
     }
 
     fun refreshLeaderboard() {
-        if (_state.value.isLeaderboardLoading) return
-        viewModelScope.launch {
-            val previousUnknownIds = repository.unknownTrackIds
-            _state.update { it.copy(isLeaderboardLoading = true, message = null) }
-            runCatching { repository.fetchLeaderboard(_state.value.snapshot) }
-                .onSuccess { leaderboard ->
-                    val unknownStateChanged = previousUnknownIds != repository.unknownTrackIds
-                    _state.update {
-                        it.copy(
-                            leaderboard = leaderboard,
-                            isLeaderboardLoading = false,
-                            isOffline = false,
-                        )
-                    }
-                    if (unknownStateChanged) refreshB30(showLoading = false)
-                }
-                .onFailure { error ->
-                    val expired = error.message?.contains("重新登录") == true
-                    _state.update {
-                        it.copy(
-                            isLoggedIn = if (expired) false else it.isLoggedIn,
-                            isLeaderboardLoading = false,
-                            message = readableError(error),
-                        )
-                    }
-                }
+        if (leaderboardRefreshJob?.isActive == true) return
+        leaderboardRefreshJob = viewModelScope.launch {
+            scoreRefreshMutex.withLock { loadLeaderboard() }
+        }
+    }
+
+    private suspend fun loadLeaderboard(snapshot: B30Snapshot? = null) {
+        _state.update { it.copy(isLeaderboardLoading = true, message = null) }
+        try {
+            val leaderboard = repository.fetchLeaderboard(snapshot)
+            applyScoreSnapshot(leaderboard.scoreSnapshot, leaderboard)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            val cached = repository.cachedSnapshot()
+            if (cached != null && cached.cachedAtEpochMs != _state.value.snapshot?.cachedAtEpochMs) {
+                applyScoreSnapshot(cached)
+            }
+            val expired = error.message?.contains("重新登录") == true
+            _state.update {
+                it.copy(
+                    isLoggedIn = if (expired) false else it.isLoggedIn,
+                    isLeaderboardLoading = false,
+                    message = readableError(error),
+                )
+            }
         }
     }
 
@@ -1064,9 +1337,52 @@ class AppViewModel(internal val repository: AppRepository) : ViewModel() {
     }
 
     fun generateP30Image() {
+        if (_state.value.timeRewindMode || _state.value.timeRewindStartedAt != null) return
         if (_state.value.isGeneratingP30Image) return
         viewModelScope.launch {
             renderRankingImage(RankingImageKind.P30, reportError = true)
+        }
+    }
+
+    fun generateBestNImage(n: Int) {
+        if (_state.value.timeRewindMode || _state.value.timeRewindStartedAt != null) return
+        if (_state.value.isGeneratingBestNImage) return
+        if (n !in 1..xyz.plcliangpicup.phigrosscore.data.MAX_BEST_N_IMAGE_COUNT) {
+            _state.update { it.copy(message = "N 必须在 1–200 之间") }
+            return
+        }
+        val requestState = _state.value
+        _state.update {
+            it.copy(isGeneratingBestNImage = true, bestNImageGenerationElapsedSeconds = 0, message = null)
+        }
+        bestNImageJob = viewModelScope.launch {
+            val startedAt = SystemClock.elapsedRealtime()
+            val timer = launch {
+                while (isActive) {
+                    _state.update {
+                        it.copy(bestNImageGenerationElapsedSeconds = ((SystemClock.elapsedRealtime() - startedAt) / 1_000L).toInt())
+                    }
+                    delay(250)
+                }
+            }
+            try {
+                val file = repository.renderBestN(n, requestState.b30ImageStyle, requestState.isDarkTheme)
+                _state.update {
+                    it.copy(
+                        bestNImageFile = file,
+                        generatedBestNCount = n,
+                        generatedBestNStyle = requestState.b30ImageStyle,
+                        isOffline = false,
+                        message = "Best $n 图片已生成",
+                    )
+                }
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                _state.update { it.copy(message = readableError(error)) }
+            } finally {
+                timer.cancel()
+                _state.update { it.copy(isGeneratingBestNImage = false) }
+            }
         }
     }
 
@@ -1112,6 +1428,7 @@ class AppViewModel(internal val repository: AppRepository) : ViewModel() {
     }
 
     private fun generateInitialImagePair() {
+        if (_state.value.timeRewindMode || _state.value.timeRewindStartedAt != null) return
         if (!repository.shouldGenerateInitialImagePair || firstLoginImageJob?.isActive == true) return
         firstLoginImageJob = viewModelScope.launch {
             val results = listOf(
@@ -1126,6 +1443,9 @@ class AppViewModel(internal val repository: AppRepository) : ViewModel() {
     }
 
     private suspend fun renderRankingImage(kind: RankingImageKind, reportError: Boolean): Boolean {
+        if (_state.value.timeRewindStartedAt != null ||
+            (_state.value.timeRewindMode && kind == RankingImageKind.P30)) return false
+        val renderEpoch = _state.value.timeRewindEpoch
         beginImageGeneration(kind)
         return try {
             val state = _state.value
@@ -1133,6 +1453,7 @@ class AppViewModel(internal val repository: AppRepository) : ViewModel() {
                 RankingImageKind.B30 -> repository.renderB30(state.b30ImageStyle, state.isDarkTheme)
                 RankingImageKind.P30 -> repository.renderP30(state.b30ImageStyle, state.isDarkTheme)
             }
+            if (_state.value.timeRewindEpoch != renderEpoch) return false
             _state.update {
                 if (kind == RankingImageKind.B30) it.copy(imageFile = file, isOffline = false)
                 else it.copy(p30ImageFile = file, isOffline = false)
@@ -1140,6 +1461,7 @@ class AppViewModel(internal val repository: AppRepository) : ViewModel() {
             true
         } catch (error: Throwable) {
             if (error is CancellationException) throw error
+            if (_state.value.timeRewindEpoch != renderEpoch) return false
             _state.update {
                 if (kind == RankingImageKind.B30) {
                     it.copy(
@@ -1155,7 +1477,7 @@ class AppViewModel(internal val repository: AppRepository) : ViewModel() {
             }
             false
         } finally {
-            finishImageGeneration(kind)
+            if (_state.value.timeRewindEpoch == renderEpoch) finishImageGeneration(kind)
         }
     }
 
@@ -1339,6 +1661,7 @@ class AppViewModel(internal val repository: AppRepository) : ViewModel() {
     }
 
     fun clearCache() {
+        bestNImageJob?.cancel()
         viewModelScope.launch {
             repository.clearCache()
             _state.update {
@@ -1346,6 +1669,8 @@ class AppViewModel(internal val repository: AppRepository) : ViewModel() {
                     snapshot = null,
                     imageFile = null,
                     p30ImageFile = null,
+                    bestNImageFile = null,
+                    isGeneratingBestNImage = false,
                     customB30ImageFile = null,
                     customP30ImageFile = null,
                     isGeneratingB30Image = false,
@@ -1386,6 +1711,12 @@ class AppViewModel(internal val repository: AppRepository) : ViewModel() {
     }
 
     fun logout() {
+        rksHistoryJob?.cancel()
+        repository.setTimeRewindMode(false)
+        b30RefreshJob?.cancel()
+        leaderboardRefreshJob?.cancel()
+        moderationStatusJob?.cancel()
+        moderationStatusJob = null
         rksGuessLeaderboardJob?.cancel()
         checkinJob?.cancel()
         qrJob?.cancel()
@@ -1393,6 +1724,7 @@ class AppViewModel(internal val repository: AppRepository) : ViewModel() {
         firstLoginImageJob?.cancel()
         imageTimerJob?.cancel()
         p30ImageTimerJob?.cancel()
+        bestNImageJob?.cancel()
         songImageJob?.cancel()
         songImageTimerJob?.cancel()
         viewModelScope.launch {
@@ -1409,6 +1741,7 @@ class AppViewModel(internal val repository: AppRepository) : ViewModel() {
                 customP30ImageFile = null,
                 navigationHandlePosition = repository.navigationHandlePosition,
                 showNavigationGuide = repository.shouldShowNavigationGuide,
+                showRksTrendGuide = repository.shouldShowRksTrendGuide,
                 showExperienceSurveyPrompt = repository.shouldShowExperienceSurveyPrompt,
                 showImagePagerGuide = repository.shouldShowImagePagerGuide,
                 showSuggestionSwipeGuide = repository.shouldShowSuggestionSwipeGuide,

@@ -104,6 +104,7 @@ struct BnTemplateCtx {
     header: HeaderCtx,
     ap: ApSectionCtx,
     main_section_y: u32,
+    main_section_label_xml: String,
     cards: Vec<CardCtx>,
     footer: FooterCtx,
 }
@@ -379,6 +380,11 @@ where
             cards: ap_cards,
         },
         main_section_y: main_content_start_y,
+        main_section_label_xml: escape_xml(if stats.image_title == "B19" { "Best 19" } else if stats.image_title.starts_with("Best ") {
+            &stats.image_title
+        } else {
+            "B27"
+        }),
         cards,
         footer: FooterCtx {
             y: footer_y,

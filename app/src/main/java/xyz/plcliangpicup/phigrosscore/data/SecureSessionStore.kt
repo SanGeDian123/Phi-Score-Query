@@ -27,6 +27,10 @@ class SecureSessionStore(context: Context) {
         }
     }
 
+    fun saveSessionTokenForAppeal(sessionToken: String) {
+        preferences.edit { putString(KEY_SESSION_TOKEN, encrypt(sessionToken.trim())) }
+    }
+
     fun read(): StoredSession? {
         val encoded = preferences.getString(KEY_TOKEN, null) ?: return null
         return runCatching {

@@ -915,7 +915,7 @@ pub struct ImageRenderConfig {
     /// 缓存 TTI（秒）
     #[serde(default = "ImageRenderConfig::default_cache_tti")]
     pub cache_tti_secs: u64,
-    /// 并发渲染许可数（0=自动，取 CPU 核心数）
+    /// 并发渲染许可数（0=内存安全默认值 1，最多 2）
     #[serde(default)]
     pub max_parallel: u32,
     /// 用户自报成绩 BN：scores 条数硬上限（0=不限制，不建议）
@@ -927,6 +927,9 @@ pub struct ImageRenderConfig {
 }
 
 impl ImageRenderConfig {
+    pub fn render_parallelism(&self) -> usize {
+        self.max_parallel.clamp(1, 2) as usize
+    }
     fn default_cache_enabled() -> bool {
         true
     }

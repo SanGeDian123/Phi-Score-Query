@@ -9,6 +9,8 @@ use crate::features::image::Theme;
 /// 图片输出选项（通过 Query 传入，避免破坏现有 JSON 请求体）
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ImageQueryOpts {
+    #[serde(default)]
+    pub(super) time_rewind: bool,
     /// 输出格式：png、jpeg、webp 或 svg（默认 png）
     #[serde(default)]
     pub(super) format: Option<String>,
@@ -70,6 +72,9 @@ pub(super) fn content_type_from_fmt_code(code: &str) -> &'static str {
 }
 
 pub(super) fn validate_image_query_opts(q: &ImageQueryOpts) -> Result<(), AppError> {
+    if q.width.is_some_and(|width| width == 0 || width > 2048) {
+        return Err(AppError::Validation("图片宽度须在 1–2048 之间".into()));
+    }
     if let Some(quality) = q.webp_quality
         && quality > 100
     {
@@ -180,6 +185,7 @@ impl ImageOutputCacheSpec {
             match mode {
                 crate::features::image::BnMode::B30 => "b30",
                 crate::features::image::BnMode::P30 => "p30",
+                crate::features::image::BnMode::BestN => "bestn-v1",
             },
             updated,
             theme_cache_code(theme),
@@ -255,6 +261,7 @@ pub(super) async fn render_svg_output_bytes(
     fmt_code: &str,
     is_user_generated: bool,
     q: &ImageQueryOpts,
+    permit: &super::runtime::RenderPermitTiming,
 ) -> Result<(Bytes, &'static str), AppError> {
     // SVG 直接返回文本字节；其他格式进入统一栅格化与编码入口。
     if fmt_code == "svg" {
@@ -264,14 +271,27 @@ pub(super) async fn render_svg_output_bytes(
         ));
     }
 
-    let (bytes, content_type) = renderer::render_svg_unified_async(
-        svg,
-        is_user_generated,
-        q.format.as_deref(),
-        q.width,
-        q.webp_quality,
-        q.webp_lossless,
-    )
+    let q = q.clone();
+    let (bytes, content_type) = super::runtime::spawn_blocking_with_permit(permit, move || {
+        renderer::render_svg_unified(&svg, is_user_generated, q.format.as_deref(), q.width, q.webp_quality, q.webp_lossless)
+    })
     .await?;
     Ok((Bytes::from(bytes), content_type))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn image_width_limit_is_checked_before_save_or_render() {
+        for width in [0, 2049, u32::MAX] {
+            let q = ImageQueryOpts { width: Some(width), ..Default::default() };
+            assert!(matches!(validate_image_query_opts(&q), Err(AppError::Validation(_))));
+        }
+        for width in [1, 1440, 2048] {
+            let q = ImageQueryOpts { width: Some(width), ..Default::default() };
+            assert!(validate_image_query_opts(&q).is_ok());
+        }
+    }
 }

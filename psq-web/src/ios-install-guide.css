@@ -1,0 +1,10 @@
+.ios-install-guide { display: grid; gap: 12px; text-align: left; }
+.ios-install-guide p { margin: 0; line-height: 1.65; }
+.ios-install-guide-steps { display: grid; gap: 14px; padding: 0; margin: 0; list-style: none; }
+.ios-install-guide-steps li { display: flex; align-items: flex-start; gap: 12px; }
+.ios-install-guide-steps li > span { width: 28px; height: 28px; flex: 0 0 28px; display: grid; place-items: center; border-radius: 9px; color: var(--site-blue, var(--accent, #356ae6)); background: color-mix(in srgb, var(--site-blue, var(--accent, #356ae6)) 10%, transparent); font-size: 13px; }
+.ios-install-guide-steps li > div { min-width: 0; }
+.ios-install-guide-steps strong { font-size: 14px; font-weight: 600; }
+.ios-install-guide-steps p, .ios-install-guide-note { font-size: 13px; color: var(--site-muted, var(--muted, #626f83)); }
+.ios-install-guide-steps p { margin-top: 4px; }
+.ios-install-guide-steps strong svg { display: inline; vertical-align: text-bottom; color: var(--site-blue, var(--accent, #356ae6)); }

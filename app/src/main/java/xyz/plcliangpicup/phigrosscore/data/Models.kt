@@ -57,6 +57,12 @@ enum class B30ImageStyle(val preferenceValue: String) {
     }
 }
 
+const val MAX_BEST_N_IMAGE_COUNT = 200
+
+internal fun requireBestNImageCount(n: Int) {
+    require(n in 1..MAX_BEST_N_IMAGE_COUNT) { "N 必须在 1–$MAX_BEST_N_IMAGE_COUNT 之间" }
+}
+
 enum class RankingImageKind {
     B30,
     P30,
@@ -398,6 +404,7 @@ data class LeaderboardSnapshot(
     val entries: List<LeaderboardEntry>,
     val me: LeaderboardMe,
     val playerProfile: PlayerProfile?,
+    val scoreSnapshot: B30Snapshot,
 )
 
 data class SongDifficultyScore(

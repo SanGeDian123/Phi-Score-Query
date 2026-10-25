@@ -101,6 +101,7 @@ pub(super) fn write_song_background_layer(
     } = ctx;
 
     write_svg_background_layer(SvgBackgroundLayerRenderContext {
+        background_is_blurred: false,
         svg,
         background_image_href,
         overlay_fill: BACKGROUND_OVERLAY_DARK,

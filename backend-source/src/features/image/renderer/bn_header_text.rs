@@ -12,14 +12,18 @@ pub(super) fn build_bn_header_text(stats: &PlayerStats) -> BnHeaderText {
     let real_rks = stats.real_rks.unwrap_or(0.0);
     let player_title = format!("{} · {player_name}({real_rks:.6})", stats.image_title);
 
+    let legacy = stats.image_title == "B19";
+    let ap_label = if legacy { "Phi" } else { "AP Top 3 Avg" };
     let ap_text = stats.ap_top_3_avg.map_or_else(
-        || "AP Top 3 Avg: N/A".to_string(),
-        |avg| format!("AP Top 3 Avg: {avg:.4}"),
+        || format!("{ap_label}: N/A"),
+        |avg| format!("{ap_label}: {avg:.4}"),
     );
-    let average_label = if stats.image_title == "P30" {
-        "P30 Avg"
+    let average_label = if legacy { "Best 19 Avg".to_string() } else if stats.image_title.starts_with("Best ") {
+        format!("{} Avg", stats.image_title)
+    } else if stats.image_title == "P30" {
+        "P30 Avg".to_string()
     } else {
-        "Best 27 Avg"
+        "Best 27 Avg".to_string()
     };
     let bn_text = stats.best_27_avg.map_or_else(
         || format!("{average_label}: N/A"),

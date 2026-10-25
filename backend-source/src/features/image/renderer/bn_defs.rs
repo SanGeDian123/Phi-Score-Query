@@ -27,6 +27,7 @@ pub(super) struct BnBackgroundLayerRenderContext<'a> {
     pub(super) svg: &'a mut String,
     pub(super) theme: &'a Theme,
     pub(super) background_image_href: Option<String>,
+    pub(super) background_is_blurred: bool,
 }
 
 pub(super) fn write_svg_open(
@@ -187,6 +188,7 @@ pub(super) fn write_background_layer(
         svg,
         theme,
         background_image_href,
+        background_is_blurred,
     } = ctx;
 
     let overlay_fill = match theme {
@@ -197,6 +199,7 @@ pub(super) fn write_background_layer(
     write_svg_background_layer(SvgBackgroundLayerRenderContext {
         svg,
         background_image_href,
+        background_is_blurred,
         overlay_fill,
         fallback_fill: BACKGROUND_FALLBACK_GRADIENT,
     })
@@ -214,6 +217,7 @@ mod tests {
             svg: &mut svg,
             theme: &Theme::Black,
             background_image_href: Some("https://example.com/bg?a=1&b=<x>\"".to_string()),
+            background_is_blurred: false,
         })
         .expect("write bn background layer");
 

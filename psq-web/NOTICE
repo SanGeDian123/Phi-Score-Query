@@ -1,0 +1,13 @@
+Phi Score Query
+Copyright 2026 SanGeDian123
+
+The Android client and original project materials not otherwise marked are
+licensed under the Apache License, Version 2.0.
+
+This repository also contains a modified version of Next-Phi-Backend,
+originally published by Sczr0 under the GNU Affero General Public License,
+Version 3. The backend remains governed by that license. See
+backend-source/LICENSE and backend-source/MODIFICATIONS.md.
+
+Third-party names and assets remain the property of their respective owners.
+See THIRD_PARTY_NOTICES.md and ASSETS.md before redistributing the repository.

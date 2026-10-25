@@ -8,6 +8,7 @@ use super::resources::{
 use super::urls::get_image_href;
 
 pub(super) struct BnBackgroundSelection {
+    pub(super) source_path: Option<std::path::PathBuf>,
     pub(super) image_href: Option<String>,
     pub(super) normal_card_stroke_color: String,
 }
@@ -22,6 +23,7 @@ pub(super) fn select_random_background(
     normal_card_stroke_color: String,
 ) -> BnBackgroundSelection {
     let mut selection = BnBackgroundSelection {
+        source_path: None,
         image_href: None,
         normal_card_stroke_color,
     };
@@ -55,6 +57,7 @@ pub(super) fn select_random_background(
     };
 
     selection.image_href = Some(image_href);
+    selection.source_path = Some(random_path.clone());
     if embed_images
         && let Some(ref href_str) = selection.image_href
         && !href_str.starts_with("data:")

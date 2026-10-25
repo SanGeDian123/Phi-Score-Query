@@ -209,10 +209,7 @@ async fn main() {
         qrcode_service,
         stats: stats_handle_opt.clone(),
         stats_storage: stats_storage_opt.clone(),
-        render_semaphore: Arc::new(Semaphore::new({
-            let m = config.image.max_parallel as usize;
-            if m == 0 { num_cpus::get() } else { m }
-        })),
+        render_semaphore: Arc::new(Semaphore::new(config.image.render_parallelism())),
         bn_image_cache,
         song_image_cache,
     };

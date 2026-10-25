@@ -534,6 +534,7 @@ pub async fn get_qrcode_status(
                         | AppError::Search(_)
                         | AppError::SaveHandlerError(_)
                         | AppError::ImageRendererError(_)
+                        | AppError::RenderBusy(_)
                         | AppError::AuthPending(_) => ("INTERNAL_ERROR", "服务器内部错误"),
                     };
                     log_total("error");

@@ -3,7 +3,7 @@ package xyz.plcliangpicup.phigrosscore.ui
 import android.content.Context
 
 internal const val PRACTICE_NOISE_COMPATIBILITY_NOTICE =
-    "检测到您的设备Android版本小于或等于13，本谱面中含有噪域，相关内容显示可能出现问题，建议您前往设置，打开“噪域兼容模式”。"
+    "检测到您的设备Android版本小于或等于13，本谱面中含有噪域，相关内容显示可能出现问题，建议您前往谱面播放设置，打开“噪域兼容模式”。"
 
 internal fun practiceNoiseShouldShowCompatibilityNotice(sdk: Int, hasNoise: Boolean, seen: Boolean): Boolean =
     sdk <= 33 && hasNoise && !seen

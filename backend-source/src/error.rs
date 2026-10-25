@@ -40,6 +40,9 @@ pub enum AppError {
     #[error("图像渲染错误: {0}")]
     ImageRendererError(String),
 
+    #[error("图片生成繁忙: {0}")]
+    RenderBusy(String),
+
     /// 参数校验错误
     #[error("参数校验错误: {0}")]
     Validation(String),
@@ -221,6 +224,7 @@ impl AppError {
             AppError::AuthPending(_) => StatusCode::ACCEPTED,
             AppError::Network(_) => StatusCode::BAD_GATEWAY,
             AppError::Timeout(_) => StatusCode::GATEWAY_TIMEOUT,
+            AppError::RenderBusy(_) => StatusCode::SERVICE_UNAVAILABLE,
             AppError::Json(_) | AppError::SaveHandlerError(_) => StatusCode::BAD_REQUEST,
             AppError::Auth(_) => StatusCode::UNAUTHORIZED,
             AppError::Forbidden(_) => StatusCode::FORBIDDEN,
@@ -255,6 +259,7 @@ impl AppError {
             AppError::Forbidden(_) => "FORBIDDEN",
             AppError::SaveHandlerError(_) => "SAVE_BAD_REQUEST",
             AppError::ImageRendererError(_) => "IMAGE_RENDER_FAILED",
+            AppError::RenderBusy(_) => "IMAGE_RENDER_BUSY",
             AppError::Validation(_) => "VALIDATION_FAILED",
             AppError::Conflict(_) => "CONFLICT",
             AppError::NotFound(_) => "NOT_FOUND",
@@ -293,6 +298,7 @@ impl AppError {
             StatusCode::UNPROCESSABLE_ENTITY => "Validation Failed",
             StatusCode::BAD_GATEWAY => "Bad Gateway",
             StatusCode::GATEWAY_TIMEOUT => "Gateway Timeout",
+            StatusCode::SERVICE_UNAVAILABLE => "Service Unavailable",
             StatusCode::INTERNAL_SERVER_ERROR => "Internal Server Error",
             StatusCode::ACCEPTED => "Accepted",
             _ => "Error",
@@ -333,6 +339,9 @@ impl IntoResponse for AppError {
             header::CONTENT_TYPE,
             HeaderValue::from_static("application/problem+json"),
         );
+        if status == StatusCode::SERVICE_UNAVAILABLE {
+            res.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from_static("3"));
+        }
         res
     }
 }

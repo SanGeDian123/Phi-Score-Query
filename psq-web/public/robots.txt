@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /app
+Disallow: /preview
+Disallow: /api/
+
+Sitemap: https://phiscorequery.top/sitemap.xml

@@ -57,7 +57,10 @@ internal fun AnimatedRksNumber(
     fontWeight: FontWeight? = null,
     fractionDigits: Int = 4,
     animateDecrease: Boolean = false,
+    initialValue: Double? = null,
 ) {
+    var displayValue by remember { mutableDoubleStateOf(initialValue ?: value) }
+    LaunchedEffect(value) { displayValue = value }
     val formatted = remember(value, fractionDigits) { String.format(Locale.US, "%.${fractionDigits}f", value) }
     val style = LocalTextStyle.current.merge(TextStyle(
         fontFamily = AppNumericFont, fontSize = fontSize, lineHeight = lineHeight, fontWeight = fontWeight,
@@ -82,7 +85,7 @@ internal fun AnimatedRksNumber(
         for (position in slots - 1 downTo 0) {
             key(position) {
                 val emphasis = remember { Animatable(0f) }
-                var previousValue by remember { mutableDoubleStateOf(value) }
+                var previousValue by remember { mutableDoubleStateOf(initialValue ?: value) }
                 val stagger = (slots - 1 - position) * 22
                 LaunchedEffect(value) {
                     val previous = previousValue
@@ -97,7 +100,7 @@ internal fun AnimatedRksNumber(
                     }
                 }
                 AnimatedContent(
-                    targetState = value,
+                    targetState = displayValue,
                     contentKey = { number -> rksDigit(number, position, fractionDigits) },
                     modifier = Modifier.clipToBounds(),
                     transitionSpec = {

@@ -8,6 +8,11 @@ class SongCatalog(context: Context) {
         val version: String?,
     )
 
+    val rewindConstants = TimeRewindConstants(context)
+    @Volatile var timeRewindMode: Boolean = false
+    private fun viewed(song: SongInfo): SongInfo = if (timeRewindMode) rewindConstants.song(song) else song
+    fun normalSong(id: String): SongInfo? = if (isVisible(id)) snapshot.songs[id] else null
+
     private val details = context.assets.open("song_details.csv")
         .bufferedReader(Charsets.UTF_8)
         .useLines { lines ->
@@ -48,7 +53,7 @@ class SongCatalog(context: Context) {
     val version: String?
         get() = snapshot.version
 
-    operator fun get(id: String): SongInfo? = if (isVisible(id)) snapshot.songs[id] else null
+    operator fun get(id: String): SongInfo? = normalSong(id)?.let(::viewed)
 
     fun setHiddenSongIds(songIds: Collection<String>) {
         hiddenSongIds = songIds.asSequence()
@@ -60,12 +65,12 @@ class SongCatalog(context: Context) {
     fun isVisible(songId: String): Boolean = songId.lowercase() !in hiddenSongIds
 
     fun constantTableEntries(): List<ConstantTableEntry> =
-        buildConstantTableEntries(snapshot.songs.values.filter { isVisible(it.id) })
+        buildConstantTableEntries(snapshot.songs.values.filter { isVisible(it.id) }.map(::viewed))
 
     fun applyRemoteCatalog(catalog: RemoteSongCatalog) {
         if (catalog.version.isBlank() || catalog.items.isEmpty()) return
         val songs = catalog.items.associate { remote ->
-            remote.id to resolveRemote(remote)
+            remote.id to mergeRemoteSong(remote, bundledSongs[remote.id])
         }.filterKeys(::isVisible)
         snapshot = CatalogSnapshot(songs, catalog.version)
     }
@@ -76,7 +81,7 @@ class SongCatalog(context: Context) {
 
     fun resolveRemote(remote: RemoteSongInfo): SongInfo {
         val bundled = bundledSongs[remote.id]
-        return mergeRemoteSong(remote, bundled)
+        return viewed(mergeRemoteSong(remote, bundled))
     }
 
     fun search(query: String, limit: Int = 30): List<SongInfo> {
@@ -102,7 +107,7 @@ class SongCatalog(context: Context) {
             }
             .sortedWith(compareBy<Pair<Int, SongInfo>> { it.first }.thenBy { it.second.name })
             .take(limit)
-            .map { it.second }
+            .map { viewed(it.second) }
             .toList()
     }
 
